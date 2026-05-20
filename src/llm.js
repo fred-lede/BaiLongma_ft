@@ -64,12 +64,16 @@ async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens,
   let thinkDone = false
   let streamStarted = false
   let usageTokens = 0
+  let cacheHitTokens = 0
+  let cacheMissTokens = 0
 
   try {
   for await (const chunk of stream) {
     if (signal?.aborted) break
     if (chunk.usage?.total_tokens) {
       usageTokens = chunk.usage.total_tokens
+      cacheHitTokens = chunk.usage.prompt_cache_hit_tokens || 0
+      cacheMissTokens = chunk.usage.prompt_cache_miss_tokens || 0
     }
     const choice = chunk.choices?.[0]
     if (!choice) continue
@@ -173,7 +177,11 @@ async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens,
   if (streamStarted) onStream?.({ event: 'end' })
   if (usageTokens > 0) {
     recordUsage(usageTokens)
-    console.log(`[配额] 本轮 tokens: ${usageTokens}`)
+    const promptTotal = cacheHitTokens + cacheMissTokens
+    const cacheStr = promptTotal > 0
+      ? ` (prompt cache: ${cacheHitTokens}/${promptTotal} = ${(cacheHitTokens/promptTotal*100).toFixed(1)}%)`
+      : ''
+    console.log(`[配额] 本轮 tokens: ${usageTokens}${cacheStr}`)
   }
 
   return {

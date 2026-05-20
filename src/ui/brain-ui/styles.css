@@ -238,6 +238,115 @@ body {
   margin-bottom: 14px;
 }
 
+/* ── 专注帧观察面板 (focus stack) ─────────────────────────────── */
+.focus-block {
+  padding-bottom: 14px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.focus-block[data-state="empty"] .focus-stack {
+  opacity: 0.55;
+}
+
+.focus-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.focus-label {
+  font-size: 9px;
+  color: var(--dim);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+}
+
+.focus-depth {
+  font-size: 9px;
+  color: var(--dim);
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  letter-spacing: 0.1em;
+}
+
+.focus-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.focus-empty {
+  font-size: 11px;
+  color: var(--dim);
+  font-style: italic;
+  letter-spacing: 0.04em;
+}
+
+.focus-frame {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  line-height: 1.4;
+}
+
+.focus-frame-topic {
+  font-size: 11px;
+  color: var(--ink2);
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  letter-spacing: 0.02em;
+  word-break: break-word;
+}
+
+.focus-frame.top .focus-frame-topic {
+  font-size: 14px;
+  color: var(--cool);
+  font-weight: 600;
+}
+
+.focus-frame-meta {
+  font-size: 9px;
+  color: var(--dim);
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  letter-spacing: 0.06em;
+}
+
+.focus-frame-conclusion {
+  font-size: 10px;
+  color: var(--dim);
+  line-height: 1.45;
+  word-break: break-word;
+  padding-left: 8px;
+  border-left: 1px solid var(--line);
+}
+
+.focus-frame.top .focus-frame-conclusion {
+  color: var(--ink2);
+  font-size: 11px;
+}
+
+.focus-frame-conclusion.just-added {
+  animation: focus-conclusion-in 0.6s ease-out;
+}
+
+@keyframes focus-conclusion-in {
+  0% { opacity: 0; transform: translateY(-4px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+.focus-compress-pulse {
+  animation: focus-pulse 0.8s ease-out;
+}
+
+@keyframes focus-pulse {
+  0% { background: color-mix(in srgb, var(--warm) 14%, transparent); }
+  100% { background: transparent; }
+}
+
 .update-card {
   display: flex;
   align-items: center;

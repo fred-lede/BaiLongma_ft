@@ -96,6 +96,16 @@ const createSecondaryPanel = () => `
     </div>
   </header>
 
+  <section class="focus-block" id="focus-block" data-state="empty">
+    <div class="focus-head">
+      <span class="focus-label">专注帧</span>
+      <span class="focus-depth" id="focus-depth">0</span>
+    </div>
+    <div class="focus-stack" id="focus-stack">
+      <div class="focus-empty" id="focus-empty">无专注</div>
+    </div>
+  </section>
+
   <section class="update-card hidden" id="update-card">
     <div class="update-copy">
       <div class="update-title">桌面更新</div>

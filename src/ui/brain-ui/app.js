@@ -43,6 +43,9 @@ const ignoreVersionBtn = document.getElementById("ignore-version-btn");
 const updateStatusEl = document.getElementById("update-status");
 const updateCardEl = document.getElementById("update-card");
 const updateCloseBtn = document.getElementById("update-close-btn");
+const focusBlockEl = document.getElementById("focus-block");
+const focusStackEl = document.getElementById("focus-stack");
+const focusDepthEl = document.getElementById("focus-depth");
 
 const IGNORED_VERSION_KEY = "bailongma_ignored_update_version";
 const SUPPRESS_UPDATES_KEY = "bailongma_suppress_update_notifications";
@@ -1163,6 +1166,87 @@ function bumpTokens(text) {
   }
 }
 
+// ── 专注帧观察面板 (focus stack) ────────────────────────────────
+// 设计文档 7.5：用户必须看得见 Agent 此刻在专注什么。
+// 纯事件驱动：focus_frame → 全量重渲染；focus_compressed → 在栈顶尾部追加 conclusion 并淡入。
+
+function escapeFocusText(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function truncateConclusion(text, max = 60) {
+  const s = String(text || "").trim();
+  if (s.length <= max) return s;
+  return s.slice(0, max - 1).trim() + "…";
+}
+
+function formatFocusTopic(topic) {
+  if (!Array.isArray(topic) || topic.length === 0) return "—";
+  return topic.join(" · ");
+}
+
+function renderFocusFrame(frame, { isTop }) {
+  const topic = formatFocusTopic(frame?.topic);
+  const hits = Number(frame?.hitCount || 0);
+  const conclusions = Array.isArray(frame?.conclusions) ? frame.conclusions : [];
+
+  const conclusionsHTML = conclusions.map((c) =>
+    `<div class="focus-frame-conclusion">${escapeFocusText(truncateConclusion(c, isTop ? 120 : 60))}</div>`
+  ).join("");
+
+  const meta = isTop
+    ? `命中 ${hits} · 深度 1`
+    : `命中 ${hits}`;
+
+  return (
+    `<div class="focus-frame${isTop ? " top" : ""}">` +
+      `<div class="focus-frame-topic">${escapeFocusText(topic)}</div>` +
+      `<div class="focus-frame-meta">${escapeFocusText(meta)}</div>` +
+      conclusionsHTML +
+    `</div>`
+  );
+}
+
+function renderFocusStack(stack) {
+  if (!focusStackEl || !focusBlockEl) return;
+  const list = Array.isArray(stack) ? stack : [];
+  if (focusDepthEl) focusDepthEl.textContent = String(list.length);
+
+  if (list.length === 0) {
+    focusBlockEl.dataset.state = "empty";
+    focusStackEl.innerHTML = `<div class="focus-empty">无专注</div>`;
+    return;
+  }
+
+  focusBlockEl.dataset.state = "active";
+  // 栈底 → 栈顶；视觉上栈顶在最下（最近一次最强），跟终端 / 思考流方向一致。
+  const html = list.map((frame, i) =>
+    renderFocusFrame(frame, { isTop: i === list.length - 1 })
+  ).join("");
+  focusStackEl.innerHTML = html;
+}
+
+function flashFocusCompressed() {
+  if (!focusBlockEl) return;
+  // 让栈顶帧最后一条 conclusion 走淡入动画；同时整块做一次柔和高光。
+  focusBlockEl.classList.remove("focus-compress-pulse");
+  // 强制 reflow 让动画重启
+  void focusBlockEl.offsetWidth;
+  focusBlockEl.classList.add("focus-compress-pulse");
+
+  const topFrame = focusStackEl?.querySelector(".focus-frame.top");
+  const conclusions = topFrame?.querySelectorAll(".focus-frame-conclusion");
+  if (conclusions && conclusions.length > 0) {
+    const last = conclusions[conclusions.length - 1];
+    last.classList.remove("just-added");
+    void last.offsetWidth;
+    last.classList.add("just-added");
+  }
+}
+
 function connectSSE() {
   setConnectionState("connecting", true);
   const es = new EventSource(`${API}/events`);
@@ -1251,6 +1335,25 @@ function handle({ type, data = {} }) {
     case "injector_result": {
       const nids = [...extractNids(data.matchedMemories), ...extractNids(data.recallMemories)];
       if (nids.length) highlightNodes(nids, 10000);
+      break;
+    }
+    case "focus_frame": {
+      renderFocusStack(data.focusStack);
+      break;
+    }
+    case "focus_compressed": {
+      // 后端 emit 顺序：先 focus_frame（栈已 pop 完）→ 异步压缩完再 focus_compressed。
+      // 触发时栈顶帧的 conclusions 数组在后端已被追加，但前端 DOM 里还是旧的。
+      // 这里做最简处理：把 conclusion 追加到栈顶尾部 DOM + 走淡入动画。
+      // 下一次 focus_frame 事件会带最新 conclusions 全量覆盖，所以即使错位也很快收敛。
+      const topFrame = focusStackEl?.querySelector(".focus-frame.top");
+      if (topFrame && data.conclusion) {
+        const div = document.createElement("div");
+        div.className = "focus-frame-conclusion just-added";
+        div.textContent = truncateConclusion(data.conclusion, 120);
+        topFrame.appendChild(div);
+      }
+      flashFocusCompressed();
       break;
     }
     case "memories_written":

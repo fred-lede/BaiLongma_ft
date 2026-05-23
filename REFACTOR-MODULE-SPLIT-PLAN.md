@@ -2,14 +2,15 @@
 
 目标：把超大文件拆成更细粒度、职责清晰、可测试、可继续扩展的功能模块，同时保持现有行为不变。
 
-核心原则：
+当前分支：`refactor/module-split`
+
+## 核心原则
+
 - 只做结构拆分，不改产品行为、工具协议、API JSON shape、数据库语义、UI 交互。
 - 每次只拆一个清晰边界，拆完立即运行匹配的 smoke/test。
 - 保留对外门面，避免打断现有 import。例如 `executor.js` 继续导出 `executeTool`、`autoSpeakForVoiceReply`、`persistAppState`。
-- 不做无关格式化、文案调整、业务逻辑调整或依赖升级。
+- 不做无关格式化、文档调整、业务逻辑调整或依赖升级。
 - 遇到必须改变行为才能继续的情况，停止并说明。
-
-当前分支：`refactor/module-split`
 
 ## 已完成
 
@@ -25,51 +26,64 @@
 - Shell 工具域拆分：
   - `src/capabilities/tools/shell.js`
   - 包含 `exec_command`、后台进程注册表、`list_processes`、`kill_process`、输出裁剪、cwd 解析、跨平台 shell spawn/PowerShell UTF-8 包装
-- 版本已升到 `2.1.185`
+- Web 工具域拆分：
+  - `src/capabilities/tools/web.js`
+  - 包含 `web_search`、`fetch_url`、`browser_read`
+  - 包含 URL 缓存/TTL、`searchCache`、web config 短缓存、网页正文保存到 `sandbox/articles`、搜索 provider/fallback、Playwright/Chromium 读取逻辑
+- `src/capabilities/executor.js` 继续保留工具调度门面和对外入口：
+  - `executeTool`
+  - `autoSpeakForVoiceReply`
+  - `persistAppState`
+- 版本已升到 `2.1.186`
 - 已 build 并验证安装包：
-  - `dist/Bailongma-Setup-2.1.185.exe`
+  - `dist/Bailongma-Setup-2.1.186.exe`
 - 已推送：
-  - commit `dd4b1d5`
+  - commit `e96746a`
   - branch `origin/refactor/module-split`
 
-已验证：
+## 已验证
+
 - `git diff --check`
-- `node --check` 覆盖 `src` 下 JS/MJS
+- `node --check` 覆盖 `src` 下 119 个 JS/MJS 文件
 - `npm run smoke:tools`：6/6 passed
 - `npm run smoke:brain-ui`：passed
-- 安装包 build 成功，packaged/installed `better-sqlite3` 为 Electron ABI 130
+- 本地 mock `executeTool('fetch_url', ...)` 调用通过
+- 标准 build 脚本成功，packaged/installed `better-sqlite3` 均为 Electron ABI 130
 - 安装版 `/status` HTTP 200
-- 安装版真实对话链路验证：
-  - 前台 `exec_command` 输出正常
-  - 后台 `exec_command background=true` 正常返回 PID
-  - `list_processes` 能看到后台进程
-  - `kill_process` 能停止后台进程
-  - `Get-ChildItem ..` 被安全策略拒绝
+- 安装版真实链路验证通过：
+  - `/message` + `/events` 真实对话链路正常
+  - `fetch_url` 工具审计 status `ok`
+  - `browser_read` 工具审计 status `ok`
+  - `web_search` 工具审计 status `ok`
+  - 前台 shell、后台进程、list、kill、安全拦截在上一轮已验证
 
-已知非回归：
-- 本地 Node CLI 下 `better-sqlite3` 会因为 Electron ABI 130 与 Node ABI 127 不一致而打印/导致相关 Node CLI 数据库操作失败；不要把这个当成本次重构回归。安装版 Electron 已验证可启动并返回 `/status` 200。
+## 已知非回归
+
+- 本地 Node CLI 下 `better-sqlite3` 可能因为 Electron ABI 130 与 Node ABI 127 不一致，导致涉及数据库写入的 Node CLI 脚本打印/失败；不要把这个当成本次重构回归。Electron 安装版已验证可启动并返回 `/status` 200。
+- 文档、终端或旧脚本里可能存在 Windows 控制台中文显示乱码；这不是本次模块拆分目标。
 
 ## 剩余重构对象
 
 ### 1. `src/capabilities/executor.js`
 
-当前状态：已拆出基础 helper、文件工具域、shell 工具域；`executor.js` 仍保留工具调度入口和大量其他工具实现。
+当前状态：已拆出基础 helper、文件工具域、shell 工具域、web 工具域；`executor.js` 仍保留工具调度入口和大量其他工具实现。
 
 剩余建议拆分顺序：
-- `src/capabilities/tools/web.js`：`web_search`、`fetch_url`、`browser_read`、URL/search 缓存、网页正文保存相关逻辑。
-- `src/capabilities/tools/memory.js`：`search_memory`、`upsert_memory`、`merge_memories`、`recall_memory`。
-- `src/capabilities/tools/reminders.js`：`schedule_reminder`、`manage_reminder`、时间解析。
-- `src/capabilities/tools/media.js`：`speak`、`generate_music`、`music`、`generate_image`。
-- `src/capabilities/tools/ui.js`：`ui_show`、`ui_update`、`ui_hide`、`ui_patch`、`manage_app`、`ui_register`。
-- `src/capabilities/tools/system.js`：`set_tick_interval`、`set_task`、`complete_task`、`set_security`、`set_agent_name` 等。
+
+- `src/capabilities/tools/memory.js`：`search_memory`、`upsert_memory`、`merge_memories`、`recall_memory`、记忆 JSON 兼容解析、识别器相关辅助逻辑。
+- `src/capabilities/tools/reminders.js`：`schedule_reminder`、`manage_reminder`、周期提醒时间解析、下一次触发时间计算。
+- `src/capabilities/tools/media.js`：`speak`、`generate_lyrics`、`generate_music`、`music`、`generate_image`。
+- `src/capabilities/tools/ui.js`：`ui_show`、`ui_update`、`ui_hide`、`ui_patch`、`manage_app`、`ui_register`、ACUI/组件草稿相关逻辑。
+- `src/capabilities/tools/system.js`：`set_tick_interval`、`set_task`、`complete_task`、`update_task_step`、`set_security`、`set_agent_name`、`set_location`、启动自检等。
 - `src/capabilities/tools/delegation.js`：Agent 委托相关工具。
 - 后续可考虑 `src/capabilities/tool-registry.js`，把工具名到 handler 的 switch/注册表进一步拆出。
 
-下一步建议：优先拆 `web.js`，因为它边界相对清晰，但涉及缓存、联网、文章保存和 browser fallback，需要更仔细保持 JSON/text shape。
+下一步建议：优先拆 `memory.js`。它边界相对清晰，但与 `db.js`、识别器写入、记忆检索返回 shape 强相关，必须保持文本/JSON 返回格式、错误文案和审计行为不变。
 
 ### 2. `src/api.js`
 
 建议拆分：
+
 - `src/api.js`：保留 server 创建、CORS、安全入口、WebSocket upgrade 分发。
 - `src/api/router.js`：轻量路由匹配和 handler 调用。
 - `src/api/http-utils.js`：`jsonResponse`、`readJsonBody`、`contentTypeFor`、静态文件响应。
@@ -88,6 +102,7 @@
 必须保留 `src/db.js` facade 和既有导出名。
 
 建议拆分：
+
 - `src/db/connection.js`
 - `src/db/schema.js`
 - `src/db/migrations.js`
@@ -107,6 +122,7 @@
 建议在 executor/API/db 稳定后再动。
 
 建议拆分：
+
 - `src/runtime/state.js`
 - `src/runtime/scheduler.js`
 - `src/runtime/turn-runner.js`
@@ -120,6 +136,7 @@
 建议结合 Playwright/smoke UI 验证。
 
 建议拆分：
+
 - `src/ui/brain-ui/main.js`
 - `src/ui/brain-ui/graph/memory-graph.js`
 - `src/ui/brain-ui/events/sse-client.js`
@@ -142,6 +159,7 @@
 ## 验证要求
 
 - executor 工具域改动：至少跑 `node --check` 和 `npm run smoke:tools`。
+- web 工具域改动：额外做 `fetch_url`/`browser_read`/`web_search` 的最小工具链路验证，避免依赖不稳定外网作为唯一判断。
 - brain UI 改动：跑 `npm run smoke:brain-ui`。
 - 社交/微信/外部渠道改动：跑 `npm run smoke:social`，但注意本地 Node CLI ABI mismatch 的已知限制。
 - build/启动路径改动：跑标准 Bailongma build 脚本并验证安装版 `/status`。

@@ -3,27 +3,6 @@ import { createReminder, findMergeableOneOffReminder, appendReminderTask, listPe
 import { emitEvent } from '../../events.js'
 import { PRIMARY_USER_ID } from '../../identity.js'
 
-function resolveAllowedTargetId(targetId, allowedTargetIds = []) {
-  const normalizedTarget = normalizeConversationPartyId(targetId)
-  const normalizedAllowed = [...new Set((allowedTargetIds || []).map(id => normalizeConversationPartyId(id)).filter(Boolean))]
-  if (!normalizedAllowed.length) {
-    throw new Error('The current prompt did not explicitly inject any sendable target entities, so sending a message is forbidden.')
-  }
-
-  if (normalizedAllowed.includes(normalizedTarget)) {
-    return normalizedTarget
-  }
-
-  const compact = value => String(value || '').trim().toLowerCase().replace(/^id:0*/, '')
-  const targetCompact = compact(normalizedTarget)
-  const fuzzyMatches = normalizedAllowed.filter(id => compact(id) === targetCompact)
-  if (fuzzyMatches.length === 1) {
-    console.log(`[send_message] ID strict validation passed by fuzzy normalization: "${targetId}" -> "${fuzzyMatches[0]}"`)
-    return fuzzyMatches[0]
-  }
-
-  throw new Error(`target_id "${targetId}" is not in the target entity list explicitly injected into the current prompt: ${normalizedAllowed.join(', ')}`)
-}
 function parseReminderDueAt(value) {
   if (!value || typeof value !== 'string') {
     throw new Error('due_at was not provided')
@@ -136,7 +115,7 @@ export async function execManageReminder(args, context = {}) {
   if (!task?.trim()) return '错误：未提供 task'
   const taskText = task.trim()
   const fallbackTargetId = context.visibleTargetIds?.[0] || context.allowedTargetIds?.[0] || PRIMARY_USER_ID
-  const resolvedTargetId = resolveAllowedTargetId(args.target_id || fallbackTargetId, context.allowedTargetIds)
+  const resolvedTargetId = normalizeConversationPartyId(args.target_id || fallbackTargetId)
 
   const kind = args.kind || 'once'
 

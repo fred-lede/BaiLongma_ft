@@ -1,5 +1,4 @@
 import { normalizeChannel } from './channel.js'
-import { trimAssistantFluff } from './reply-cleanup.js'
 
 export function formatConversationMessage(row, currentMsg = null, prevChannel = '') {
   if (row.role === 'jarvis') {
@@ -9,7 +8,7 @@ export function formatConversationMessage(row, currentMsg = null, prevChannel = 
     const channelTag = (normalized && normalized !== 'TUI' && normalized !== 'SYSTEM') ? `[via ${normalized}] ` : ''
     return {
       role: 'assistant',
-      content: `${channelTag}${trimAssistantFluff(row.content || '')}`,
+      content: `${channelTag}${row.content || ''}`,
     }
   }
 

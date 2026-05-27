@@ -33,17 +33,41 @@ export const TOOL_SCHEMAS = {
     type: 'function',
     function: {
       name: 'send_message',
-      description: 'Send a message to an individual by ID. All outbound communication must use this tool; do not output reply content directly. The same canonical user ID (e.g. ID:000001) may be reachable on multiple channels — use the optional channel parameter to override the default routing.',
+      description: [
+        'Send a message to an individual by ID. All outbound communication must use this tool; do not output reply content directly.',
+        '',
+        'Guidance (no longer enforced by the runtime — your responsibility to follow):',
+        '',
+        '## Targeting',
+        '• target_id should be an ID that appears in the conversation context injected into this prompt (e.g. recent messages or the explicitly listed targets). Do not invent IDs or send to people who are not part of the current context.',
+        '',
+        '## Brevity is the rule, not the option',
+        '• Match length to the question. "你好" → one short greeting. "1+1?" → "2". A 5-item list → just the 5 items. Do not pad with closing remarks.',
+        '• Cut all trailing pleasantries and filler: "刚记下的", "中午了", "都是日常用得最多的", "有需要随时叫我", "为您效劳", "希望对你有帮助" — none of these add information. Stop the message at the answer.',
+        '• Never restate what the user just asked. They know what they asked.',
+        '• Never describe the steps you took ("我查了一下", "让我看看") unless the user explicitly asked for the process.',
+        '• Do not say the same thing twice in different words. If you already wrote "我不认识 ID:000099", do not add "它没有出现在我的上下文里" — pick one.',
+        '',
+        '## One action, one message',
+        '• Do not send "我去做" before a tool call and then "做完了" after. Call the tool, then send ONE message with the result. If you sent a heads-up before the tool, do not repeat the same content after the tool returns.',
+        '• When a single user turn deserves a reply, send exactly one send_message in that turn. Multiple sends in one turn are only acceptable when the contents are genuinely different (e.g. a status update during a long task that takes many seconds).',
+        '',
+        '## Respect the user\'s attention',
+        '• A "你好"/"在吗" greeting deserves a brief greeting back. Do not steer it toward a topic the user did not raise. If you have a pending thought from your own tick loop, hold it until the user shows interest.',
+        '• Your tick-loop thoughts are NOT part of the conversation the user sees. Do not summarize them as "we talked about X" — the user did not talk about X with you.',
+        '',
+        'The same canonical user ID (e.g. ID:000001) may be reachable on multiple channels — use the optional channel parameter to override the default routing.',
+      ].join('\n'),
       parameters: {
         type: 'object',
         properties: {
           target_id: {
             type: 'string',
-            description: 'Recipient ID, such as ID:000001.'
+            description: 'Recipient ID, such as ID:000001. Use an ID that appears in the conversation context of this prompt.'
           },
           content: {
             type: 'string',
-            description: 'Message content.'
+            description: 'Message content. Delivered verbatim — keep it tight, lead with meaning, no service-tail fluff or duplicated lines.'
           },
           channel: {
             type: 'string',
@@ -486,7 +510,7 @@ To play music, use media_mode with mode=music and src=file_path to show the reco
           },
           target_id: {
             type: 'string',
-            description: 'For create only: final user ID served by this reminder, such as ID:000001. Defaults to the current conversation target.'
+            description: 'For create only: final user ID served by this reminder, such as ID:000001. Should be an ID that appears in the conversation context of this prompt; if omitted, defaults to the current conversation target.'
           },
           due_at: {
             type: 'string',

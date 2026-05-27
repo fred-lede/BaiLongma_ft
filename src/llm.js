@@ -591,6 +591,9 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
   let missingToolNudgeUsed = false
   let fakeToolNudgeUsed = false
   let emptyReplyNudgeUsed = false
+  let falseMemoryNudgeUsed = false
+  // 跟踪本次 callLLM 调用中实际调过的工具名，用于检测"声称做了 X 但没真的调 X"的 false-claim。
+  const calledTools = new Set()
   const toolLoopState = createToolLoopState()
 
   for (let round = 0; round < TOOL_LOOP_LIMITS.maxRounds; round++) {
@@ -608,12 +611,23 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
       onStream,  // 所有轮次均流式推送，让 UI 实时反映工具链执行过程中的模型输出
     })
 
+    // 跨轮累积 content 时的去重保护：如果新段已经是 allContent 末尾的字面重复，
+    // 跳过追加，避免 [Round N: "X"] + [Round N+1: "X"] 拼成 "X\nX"。
+    // 这是模型在 nudge 后重复生成时的最后一道防线（主要修复见 finalNudge 分支）。
+    const appendContent = (next) => {
+      if (!next) return
+      const trimmed = String(next).trim()
+      if (!trimmed) return
+      if (allContent && allContent.trim().endsWith(trimmed)) return
+      allContent += (allContent ? '\n' : '') + next
+    }
+
     if (aborted) {
-      if (content) allContent += (allContent ? '\n' : '') + content
+      appendContent(content)
       break
     }
 
-    if (content) allContent += (allContent ? '\n' : '') + content
+    appendContent(content)
 
     // 若无 JSON 工具调用，尝试从内容中解析 XML 格式工具调用（MiniMax 备用格式）
     let effectiveToolCalls = toolCalls
@@ -650,13 +664,35 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
           continue
         }
       }
+      // 检测"声称记住了但根本没调 upsert_memory"的 false-claim：用户基于这条承诺做决策，
+      // 但记忆其实没存进数据库——下次问就找不到了。trace 实证过这个 bug（search_memory 后
+      // 直接生成"记住了..."文本，memories_written count=0）。
+      if (!falseMemoryNudgeUsed && content && tools.includes('upsert_memory') && !calledTools.has('upsert_memory')) {
+        const falseMemoryClaim = /(?:记住了|记下了?|已记住|已经记住|我会记着|我记下了|存好了|存下了|已存)/
+        if (falseMemoryClaim.test(content)) {
+          console.log('[假记忆检测] 模型声称记住但未调 upsert_memory，注入修正 nudge')
+          messages.push({ role: 'assistant', content })
+          messages.push({
+            role: 'user',
+            content: 'You wrote "记住了" (or a similar memory-claim) but you did NOT actually call upsert_memory. That claim is false — the fact is not in the database, and the user will not see it next time. Call upsert_memory NOW with the fact you said you would remember, then call send_message to confirm to the user.',
+          })
+          allContent = ''
+          falseMemoryNudgeUsed = true
+          continue
+        }
+      }
       // 安全网：工具已结束、最近一次工具不是 send_message、且模型本轮也没继续动作。
       // 不再用 !allContent.trim() 做守卫——跨轮累积的旁白会让这个守卫错误地静默 break，
       // 真正可靠的信号是 sentMessage（line 691 在每个工具后维护）。
       if (mustReply && sawToolCall && !sentMessage && !finalNudgeUsed) {
+        // 关键修复：把上一轮的 assistant text 推入 messages，让模型在下一轮知道"自己刚才说过 X"。
+        // 否则模型被 nudge 后会重新生成一段近似内容，叠加进 allContent 导致 fallback 投递出双段重复。
+        // 同时清空 allContent，避免本轮的旁白和下一轮的回复被拼起来当一条消息发出。
+        if (content) messages.push({ role: 'assistant', content })
+        allContent = ''
         messages.push({
           role: 'user',
-          content: 'Tool results have returned, but you have not sent the user a final reply yet. Based on the available tool results, call send_message now to reply to the user. If information is insufficient, explain what was found, the failure source, and the limitations; do not end silently.',
+          content: 'Tool results have returned, but you have not sent the user a final reply yet. Based on the available tool results, call send_message now to reply to the user. If information is insufficient, explain what was found, the failure source, and the limitations; do not end silently. Do NOT repeat what you just wrote in plain text — wrap your reply in a send_message call.',
         })
         finalNudgeUsed = true
         continue
@@ -717,6 +753,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
       // 这样 line ~641 的"沉默退出 nudge"才能在该补刀时正确触发。
       if (tc.name === 'send_message') sentMessage = true
       else sentMessage = false
+      calledTools.add(tc.name)
       if (shouldPersistActionLog(tc.name)) {
         insertActionLog({
           timestamp: new Date().toISOString(),

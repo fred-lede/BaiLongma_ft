@@ -35,7 +35,6 @@ import { collectTrending, getTrendingBlock } from './trending.js'
 import { collectAgents, buildAgentContextBlock, buildDelegationAskDirections } from './agents/registry.js'
 import { tryAutoConfigureKey } from './key-auto-config.js'
 import { PRIMARY_USER_ID, formatPresenceForPrompt, normalizeChannel } from './identity.js'
-import { compactMeaningFirstReply, dedupeReplyLines, requiresToolForUserMessage, trimAssistantFluff } from './runtime/reply-cleanup.js'
 import { truncateToolResultForUI } from './runtime/tool-result-preview.js'
 import { buildLLMMessages } from './runtime/messages.js'
 
@@ -289,10 +288,6 @@ function buildStartupSelfCheckDirections(checkState) {
     `Result values: use ok, degraded, error, or skipped_* for each item. Continue to the next item even if one fails.`,
     `[FINAL TWO STEPS — REQUIRED]\n(a) Call ui_show to display SelfCheckCard with props: { results: [{name:"文件读写",status:"ok/error",...},{name:"热点面板",...},{name:"视频模式",...}], overall:"ok/degraded/error" }. Infer overall from actual results: all ok → ok; any skipped → degraded; any error → error.\n(b) Call complete_startup_self_check with a summary (one sentence) and the results object.`,
   ].join('\n')
-}
-
-function hasNonMessageToolCall(toolCallLog = []) {
-  return toolCallLog.some(t => t.name && t.name !== 'send_message')
 }
 
 // Fallback 投递：当模型未按协议调 send_message 时由主循环代为投递。
@@ -1012,11 +1007,8 @@ async function runTurn(input, label, msg = null) {
         // 注：send_message 的 conversations 写入已由 executor.js 内统一处理（带 channel + external_party_id）
         // 这里仅处理语音输入的 TTS 自动回放
         if (name === 'send_message' && args?.content && isVoiceChannel(msg?.channel)) {
-          const cleanedContent = compactMeaningFirstReply(
-            dedupeReplyLines(trimAssistantFluff(args.content)),
-            { userMessage: msg?.content || input, channel: msg?.channel }
-          )
-          if (cleanedContent) autoSpeakForVoiceReply(cleanedContent)
+          const speakText = String(args.content).trim()
+          if (speakText) autoSpeakForVoiceReply(speakText)
         }
       },
       onRetry: ({ attempt, nextAttempt, maxAttempts, delayMs, error }) => {
@@ -1070,34 +1062,17 @@ async function runTurn(input, label, msg = null) {
   // 参见 lessons-bailongma-silent-exit。
   const lastToolCall = toolCallLog[toolCallLog.length - 1]
   if (msg && msg.fromId && lastToolCall?.name !== 'send_message') {
-    const fallbackContent = compactMeaningFirstReply(dedupeReplyLines(trimAssistantFluff(
-      response
-        .replace(/<think>[\s\S]*?<\/think>/gi, '')
-        .replace(/\[RECALL:\s*.+?\]/g, '')
-        .replace(/\[SET_TASK:\s*[\s\S]+?\]/g, '')
-        .replace(/\[CLEAR_TASK\]/g, '')
-        .replace(/\[UPDATE_PERSONA:\s*[\s\S]+?\]/g, '')
-        .trim()
-    )), { userMessage: msg?.content || input, channel: msg?.channel })
+    // 仅剥离运行时协议标记（这些是 runtime 解析锚点，不是行为约束）。
+    // 内容本身按原文兜底投递，不做客套话裁剪 / 行去重 / meaning-first 改写。
+    const fallbackContent = response
+      .replace(/<think>[\s\S]*?<\/think>/gi, '')
+      .replace(/\[RECALL:\s*.+?\]/g, '')
+      .replace(/\[SET_TASK:\s*[\s\S]+?\]/g, '')
+      .replace(/\[CLEAR_TASK\]/g, '')
+      .replace(/\[UPDATE_PERSONA:\s*[\s\S]+?\]/g, '')
+      .trim()
 
-    if (fallbackContent && requiresToolForUserMessage(input) && !hasNonMessageToolCall(toolCallLog)) {
-      const timestamp = nowTimestamp()
-      const blockedContent = 'I did not actually call the required tool, so I cannot claim the operation completed. Please send again — I will execute the tool first, then reply based on the result.'
-      console.warn(`[protocol fallback] Blocked a text reply that required a tool call but made none. from=${msg.fromId}`)
-      if (isVoiceChannel(msg.channel)) autoSpeakForVoiceReply(blockedContent)
-      deliverFallbackReply(msg, blockedContent, timestamp)
-      toolCallLog.push({
-        name: 'send_message',
-        args: { target_id: msg.fromId, content: blockedContent },
-        result: 'fallback blocked missing required tool call',
-      })
-      emitEvent('protocol_violation', {
-        label,
-        reason: 'missing_required_tool_call',
-        fromId: msg.fromId,
-        content: fallbackContent.slice(0, 500),
-      })
-    } else if (fallbackContent) {
+    if (fallbackContent) {
       const timestamp = nowTimestamp()
       console.warn(`[protocol fallback] Model did not call send_message — delivering response body to ${msg.fromId}`)
       if (isVoiceChannel(msg.channel)) autoSpeakForVoiceReply(fallbackContent)

@@ -33,11 +33,18 @@ export function initChat({
   let audioUnlocked = false;
   let warmupTimer = null;
 
+  const PUSH_TO_TALK_PLACEHOLDER = "按住空格键开始说话";
+
+  // 聚焦输入框时提示发消息，未聚焦时提示语音输入
+  function idlePlaceholder() {
+    return document.activeElement === msgInput ? defaultInputPlaceholder() : PUSH_TO_TALK_PLACEHOLDER;
+  }
+
   function setComposerLocked(locked, reason = "") {
     inputLocked = locked;
     msgInput.disabled = locked;
     sendBtn.disabled = locked;
-    msgInput.placeholder = locked ? (reason || "系统准备中…") : defaultInputPlaceholder();
+    msgInput.placeholder = locked ? (reason || "系统准备中…") : idlePlaceholder();
   }
 
   function releaseWarmupLock() {
@@ -257,8 +264,14 @@ export function initChat({
     openChat();
   });
   chatArea.addEventListener("mouseleave", () => scheduleClose());
-  msgInput.addEventListener("focus", () => openChat());
-  msgInput.addEventListener("blur", () => { if (!isTyping()) scheduleClose(); });
+  msgInput.addEventListener("focus", () => {
+    openChat();
+    if (!inputLocked) msgInput.placeholder = defaultInputPlaceholder();
+  });
+  msgInput.addEventListener("blur", () => {
+    if (!inputLocked) msgInput.placeholder = PUSH_TO_TALK_PLACEHOLDER;
+    if (!isTyping()) scheduleClose();
+  });
   msgInput.addEventListener("input", () => {
     if (isTyping()) openChat();
     else if (!hasPendingJarvisMessage || pendingMessageDismissed) scheduleClose();
@@ -270,6 +283,9 @@ export function initChat({
     }
   });
   sendBtn.addEventListener("click", send);
+
+  // 初始未聚焦：显示语音输入提示
+  if (!inputLocked) msgInput.placeholder = idlePlaceholder();
 
   document.addEventListener("pointerdown", event => {
     if (chatArea.contains(event.target)) return;

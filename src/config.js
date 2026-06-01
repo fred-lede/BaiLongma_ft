@@ -905,6 +905,8 @@ const WEB_SEARCH_KEY_MAP = {
   serperKey:  'serper_api_key',
   searxngUrl: 'searxng_url',
   jinaKey:    'jina_api_key',
+  braveKey:   'brave_api_key',
+  tavilyKey:  'tavily_api_key',
 }
 
 function readWebSearchBlock() {
@@ -914,9 +916,11 @@ function readWebSearchBlock() {
       serperKey:  typeof raw.serper_api_key === 'string' ? raw.serper_api_key : '',
       searxngUrl: typeof raw.searxng_url    === 'string' ? raw.searxng_url    : '',
       jinaKey:    typeof raw.jina_api_key   === 'string' ? raw.jina_api_key   : '',
+      braveKey:   typeof raw.brave_api_key  === 'string' ? raw.brave_api_key  : '',
+      tavilyKey:  typeof raw.tavily_api_key === 'string' ? raw.tavily_api_key : '',
     }
   } catch {
-    return { serperKey: '', searxngUrl: '', jinaKey: '' }
+    return { serperKey: '', searxngUrl: '', jinaKey: '', braveKey: '', tavilyKey: '' }
   }
 }
 
@@ -928,15 +932,21 @@ export function getWebSearchConfig() {
   const envSerper  = process.env.SERPER_API_KEY || ''
   const envJina    = process.env.JINA_API_KEY   || ''
   const envSearxng = process.env.SEARXNG_URL    || ''
+  const envBrave   = process.env.BRAVE_API_KEY  || ''
+  const envTavily  = process.env.TAVILY_API_KEY || ''
   return {
     serperConfigured: !!(stored.serperKey  || envSerper),
     jinaConfigured:   !!(stored.jinaKey    || envJina),
+    braveConfigured:  !!(stored.braveKey   || envBrave),
+    tavilyConfigured: !!(stored.tavilyKey  || envTavily),
     // 输入框只回显 stored 值，避免用户以为能编辑 env 值
     searxngUrl:       stored.searxngUrl,
     // effective URL（含 env 兜底），UI 可显示在状态行
     effectiveSearxngUrl: stored.searxngUrl || envSearxng,
     serperFromEnv:    !stored.serperKey  && !!envSerper,
     jinaFromEnv:      !stored.jinaKey    && !!envJina,
+    braveFromEnv:     !stored.braveKey   && !!envBrave,
+    tavilyFromEnv:    !stored.tavilyKey  && !!envTavily,
     searxngFromEnv:   !stored.searxngUrl && !!envSearxng,
   }
 }
@@ -948,6 +958,8 @@ export function getWebSearchCredentials() {
     serperKey:  stored.serperKey  || process.env.SERPER_API_KEY || '',
     searxngUrl: stored.searxngUrl || process.env.SEARXNG_URL    || '',
     jinaKey:    stored.jinaKey    || process.env.JINA_API_KEY   || '',
+    braveKey:   stored.braveKey   || process.env.BRAVE_API_KEY  || '',
+    tavilyKey:  stored.tavilyKey  || process.env.TAVILY_API_KEY || '',
   }
 }
 

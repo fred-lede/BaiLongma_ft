@@ -548,7 +548,7 @@ const createSettingsModal = () => `
         <div class="settings-tab" data-tab="web-search">
           <div class="settings-section">
             <div class="settings-section-label">搜索引擎</div>
-            <p class="settings-hint">Agent 调用 web_search 时会按 Serper → SearXNG → Bing → Jina → DuckDuckGo 顺序兜底。Bing 和 DuckDuckGo 不需要配置即可使用；如果你有 Serper / Jina 的 key，质量会显著提升。</p>
+            <p class="settings-hint">Agent 调用 web_search 时分两梯队：第一梯队（带 key 的 API：Serper → Brave → Tavily → SearXNG）按优先级尝试；都没结果时，第二梯队（Bing / Jina / DuckDuckGo，无需配置）并行兜底。配任意一个 key 都能显著提升质量和稳定性，多配几个可避免单一额度用尽时搜索失败。</p>
 
             <div class="settings-row">
               <label class="settings-label" for="websearch-serper-key">Serper API Key</label>
@@ -557,10 +557,22 @@ const createSettingsModal = () => `
             <p class="settings-hint">在 <a href="https://serper.dev" target="_blank" style="color:var(--cool)">serper.dev</a> 注册后获取（每月 2500 次免费）。Google SERP JSON 接口，最稳定。</p>
 
             <div class="settings-row">
+              <label class="settings-label" for="websearch-brave-key">Brave API Key</label>
+              <input class="settings-input" type="password" id="websearch-brave-key" placeholder="留空则不修改">
+            </div>
+            <p class="settings-hint">在 <a href="https://brave.com/search/api" target="_blank" style="color:var(--cool)">brave.com/search/api</a> 获取（每月 2000 次免费）。独立索引，Serper 的可靠兜底。</p>
+
+            <div class="settings-row">
+              <label class="settings-label" for="websearch-tavily-key">Tavily API Key</label>
+              <input class="settings-input" type="password" id="websearch-tavily-key" placeholder="留空则不修改">
+            </div>
+            <p class="settings-hint">在 <a href="https://tavily.com" target="_blank" style="color:var(--cool)">tavily.com</a> 获取（每月 1000 次免费）。面向 LLM 的搜索接口。</p>
+
+            <div class="settings-row">
               <label class="settings-label" for="websearch-jina-key">Jina API Key</label>
               <input class="settings-input" type="password" id="websearch-jina-key" placeholder="留空则不修改">
             </div>
-            <p class="settings-hint">在 <a href="https://jina.ai" target="_blank" style="color:var(--cool)">jina.ai</a> 获取（有免费额度）。s.jina.ai 搜索接口，作为 Bing 失效时的额外兜底。</p>
+            <p class="settings-hint">在 <a href="https://jina.ai" target="_blank" style="color:var(--cool)">jina.ai</a> 获取（有免费额度）。s.jina.ai 搜索接口，第二梯队兜底之一。</p>
 
             <div class="settings-row">
               <label class="settings-label" for="websearch-searxng-url">SearXNG URL</label>
@@ -574,6 +586,14 @@ const createSettingsModal = () => `
             <div class="settings-config-row">
               <span class="settings-config-type">Serper</span>
               <span class="settings-config-info" id="websearch-status-serper">—</span>
+            </div>
+            <div class="settings-config-row">
+              <span class="settings-config-type">Brave</span>
+              <span class="settings-config-info" id="websearch-status-brave">—</span>
+            </div>
+            <div class="settings-config-row">
+              <span class="settings-config-type">Tavily</span>
+              <span class="settings-config-info" id="websearch-status-tavily">—</span>
             </div>
             <div class="settings-config-row">
               <span class="settings-config-type">Jina</span>

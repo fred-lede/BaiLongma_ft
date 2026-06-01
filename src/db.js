@@ -1332,13 +1332,31 @@ export function markConversationOpenQuestion(id, isOpen = true) {
 // 查最近 withinMs 毫秒内 jarvis 发给 toId 的消息中，是否有 content 完全相同的一条。
 // 命中返回 { id, content, timestamp, ageMs }，未命中返回 null。
 // 用途：send_message 防重发——零用户消息状态下，模型常被旧 directions 反复驱动发同一句话。
+// 防重发判定：在最近的 jarvis 出站里找一条与 content 逐字相同、且"用户尚未回应过"的消息。
+//
+// 旧逻辑只用 5 分钟时间窗（withinMs）卡——实测 deepseek 等模型重发节奏（如 5min4s / 14min）
+// 恰好踩在窗口外，逐字重发照样漏过（典型：启动期"委托授权询问"被连发 3 次）。对一条用户
+// 还没回应的主动消息，逐字重发不管隔多久都是骚扰，时间长短不该是豁免条件。
+// 新逻辑以"该条之后用户有没有回过话"为分界：
+//   - 没回过 → 不论间隔多久都判为重发并拒绝；
+//   - 回过了 → 话题已翻篇，放行（仍保留 withinMs 作兜底下限：刚回过也不许 5 分钟内逐字重发）。
 export function findRecentJarvisDuplicate(toId, content, withinMs = 300_000) {
   if (!toId || !content) return null
   const db = getDB()
   const normalizedId = normalizeConversationPartyId(toId)
   const target = String(content).trim()
   if (!target) return null
-  // 拉最近 20 条做内存比对：5 分钟内 jarvis 不会发到 20 条，比 LIKE 全表扫稳。
+
+  // 该对象最近一条真实用户消息的时间戳，作为"用户是否已回应"的分界线。
+  // SYSTEM 信号的 from_id 是 'SYSTEM'，不等于对象 id，天然被排除，不会被误当成用户回应。
+  const lastUserRow = db.prepare(`
+    SELECT timestamp FROM conversations
+    WHERE role = 'user' AND from_id = ?
+    ORDER BY id DESC LIMIT 1
+  `).get(normalizedId)
+  const lastUserTs = lastUserRow ? Date.parse(lastUserRow.timestamp) : NaN
+
+  // 拉最近 20 条 jarvis 出站做内存比对，比 LIKE 全表扫稳。
   const rows = db.prepare(`
     SELECT id, content, timestamp FROM conversations
     WHERE role = 'jarvis' AND to_id = ?
@@ -1347,12 +1365,13 @@ export function findRecentJarvisDuplicate(toId, content, withinMs = 300_000) {
   `).all(normalizedId)
   const now = Date.now()
   for (const r of rows) {
+    if (String(r.content || '').trim() !== target) continue
     const ts = Date.parse(r.timestamp)
     const ageMs = Number.isFinite(ts) ? now - ts : Infinity
-    if (ageMs > withinMs) break  // 已按 id DESC，再往后只会更老
-    if (String(r.content || '').trim() === target) {
-      return { id: r.id, content: r.content, timestamp: r.timestamp, ageMs }
-    }
+    // 用户在这条逐字相同的消息之后回过话 → 话题已翻篇；除非仍在 withinMs 兜底窗内，否则放行。
+    const userRepliedSince = Number.isFinite(lastUserTs) && Number.isFinite(ts) && lastUserTs > ts
+    if (userRepliedSince && ageMs > withinMs) continue
+    return { id: r.id, content: r.content, timestamp: r.timestamp, ageMs }
   }
   return null
 }

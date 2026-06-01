@@ -290,14 +290,16 @@ async function execSendMessage({ target_id, content, channel = 'AUTO' }, context
   const delivery = resolveDeliveryTarget(resolvedId, channel, context)
   if (delivery.error) return `错误：${delivery.error}`
 
-  // 防重发：最近 5 分钟内对同一 target 发过一字不差的同样内容 → 拒绝。
+  // 防重发：对同一 target 发过一字不差、且对方此后没回过话的内容 → 拒绝（不论隔多久）。
   //   常见诱因：启动期 directions（delegation ask 等）在用户回应前每 tick 都注入相同指令，
   //   模型每次都被驱动着发一遍同一句话。让 send_message 直接拦下来，并告知模型该停。
+  //   判定细节见 db.findRecentJarvisDuplicate：以"用户是否已回应"为界，5 分钟窗只是兜底下限。
   const dup = findRecentJarvisDuplicate(resolvedId, cleanedContent, 5 * 60 * 1000)
   if (dup) {
     const ageSec = Math.max(0, Math.round(dup.ageMs / 1000))
+    const ageText = ageSec >= 60 ? `${Math.round(ageSec / 60)} 分钟前` : `${ageSec} 秒前`
     const preview = cleanedContent.length > 50 ? cleanedContent.slice(0, 50) + '…' : cleanedContent
-    return `错误：这条消息（"${preview}"）你在 ${ageSec} 秒前已发给 ${resolvedId} 一次（conversation id=${dup.id}），对方还没回应。重发同一句话是无效且让人反感的行为。本轮不要再调用 send_message；保持安静，等对方主动回应再继续，或者下一轮换一种表达方式与新内容。`
+    return `错误：这条消息（"${preview}"）你在 ${ageText}已发给 ${resolvedId} 一次（conversation id=${dup.id}），对方至今没有回应。在对方回应之前逐字重发同一句话是无效且让人反感的行为，无论隔了多久。本轮不要再调用 send_message；保持安静，等对方主动开口再继续。如果确有新进展，也要换成带新信息的表达，不要照搬原话。`
   }
 
   const timestamp = nowTimestamp()

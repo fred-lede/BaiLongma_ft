@@ -292,7 +292,7 @@ export const TOOL_SCHEMAS = {
     type: 'function',
     function: {
       name: 'list_processes',
-      description: 'List current background processes with their recent output. Returns ok, count, and processes (each with pid, command, started_at, recent_output). Use tail to control how many output lines to include per process (default 20, max 200).',
+      description: 'List background processes with their recent output. Returns ok, count, and processes (each with pid, command, status running|exited, exit_code, started_at, exited_at, recent_output). Recently exited processes are retained for ~5 min so you can still read their final output and exit code. Use tail to control how many output lines to include per process (default 20, max 200).',
       parameters: {
         type: 'object',
         properties: {

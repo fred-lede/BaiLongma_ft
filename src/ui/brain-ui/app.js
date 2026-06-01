@@ -145,7 +145,7 @@ function setAgentName(nextName) {
   if (brandNameEl) brandNameEl.textContent = `${normalized} AI Agent`;
   if (graphEl) graphEl.setAttribute("aria-label", `${normalized} memory graph`);
   const input = document.getElementById("msg-input");
-  if (input && !chat?.isComposerLocked?.()) input.placeholder = defaultInputPlaceholder();
+  if (input && !chat?.isComposerLocked?.() && document.activeElement === input) input.placeholder = defaultInputPlaceholder();
   document.querySelectorAll(".msg-jarvis .msg-label").forEach((el) => {
     el.textContent = normalized;
   });
@@ -2102,6 +2102,8 @@ function initTTSSettings() {
         }
       };
       setStatus("websearch-status-serper",  !!webSearch?.serperConfigured, !!webSearch?.serperFromEnv);
+      setStatus("websearch-status-brave",   !!webSearch?.braveConfigured,  !!webSearch?.braveFromEnv);
+      setStatus("websearch-status-tavily",  !!webSearch?.tavilyConfigured, !!webSearch?.tavilyFromEnv);
       setStatus("websearch-status-jina",    !!webSearch?.jinaConfigured,   !!webSearch?.jinaFromEnv);
       const searxngConfigured = !!webSearch?.searxngUrl || !!webSearch?.searxngFromEnv;
       setStatus("websearch-status-searxng", searxngConfigured, !!webSearch?.searxngFromEnv, webSearch?.effectiveSearxngUrl || "");
@@ -2114,12 +2116,18 @@ function initTTSSettings() {
     saveWebSearchBtn.addEventListener("click", async () => {
       const updates = {};
       const serperEl  = document.getElementById("websearch-serper-key");
+      const braveEl   = document.getElementById("websearch-brave-key");
+      const tavilyEl  = document.getElementById("websearch-tavily-key");
       const jinaEl    = document.getElementById("websearch-jina-key");
       const searxngEl = document.getElementById("websearch-searxng-url");
       const serperVal  = serperEl?.value?.trim();
+      const braveVal   = braveEl?.value?.trim();
+      const tavilyVal  = tavilyEl?.value?.trim();
       const jinaVal    = jinaEl?.value?.trim();
       const searxngVal = searxngEl?.value?.trim();
       if (serperVal)  updates.serperKey  = serperVal;
+      if (braveVal)   updates.braveKey   = braveVal;
+      if (tavilyVal)  updates.tavilyKey  = tavilyVal;
       if (jinaVal)    updates.jinaKey    = jinaVal;
       // SearXNG URL：空字符串也要传，让用户能清掉
       if (searxngEl)  updates.searxngUrl = searxngVal || "";
@@ -2134,6 +2142,8 @@ function initTTSSettings() {
         if (data.ok) {
           showFeedback(webSearchFeedback, "已保存");
           if (serperEl) serperEl.value = "";
+          if (braveEl)  braveEl.value = "";
+          if (tavilyEl) tavilyEl.value = "";
           if (jinaEl)   jinaEl.value = "";
           loadWebSearchSettings();
         } else {

@@ -53,6 +53,16 @@ function getUrlTtl(url) {
   return URL_TTL_MS.default
 }
 
+// 判断 URL 是否像 JSON/API 端点。这类地址走远程 Jina Reader 既慢又会把 JSON
+// 当网页渲染、破坏结构，应该直连优先。判错的代价很低：直连失败仍会退回 Jina。
+function isLikelyApiUrl(url) {
+  const u = String(url || '').toLowerCase()
+  return /\.json(\?|#|$)/.test(u)
+    || /[?&](format|output|alt)=json\b/.test(u)
+    || /\/api\//.test(u)
+    || /\/(rest|graphql)\//.test(u)
+}
+
 const WEB_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
   'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.7',
@@ -364,6 +374,74 @@ async function searchViaSerper(query, limit, signal) {
   }
 }
 
+// web_search 引擎1b：Brave Search（独立索引的 JSON API，serper 的可靠兜底；免费 2000/月）
+async function searchViaBrave(query, limit, signal) {
+  const { braveKey } = readWebConfig()
+  if (!braveKey) return null
+
+  const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${limit}`
+  const merged = createMergedAbortSignal(signal, 12000)
+  try {
+    const res = await fetch(url, {
+      headers: {
+        'Accept': 'application/json',
+        'Accept-Encoding': 'gzip',
+        'X-Subscription-Token': braveKey,
+      },
+      signal: merged?.signal,
+    })
+    merged?.cleanup()
+    if (!res.ok) {
+      const hint = res.status === 401 || res.status === 403 ? ' (check brave_api_key)' : ''
+      return { ok: false, reason: `http ${res.status}${hint}` }
+    }
+    const data = await res.json()
+    const raw = (data?.web?.results || []).map(r => ({ title: r.title, url: r.url, snippet: r.description }))
+    const results = normalizeResults(raw, limit)
+    if (results.length === 0) return { ok: false, reason: 'empty results' }
+    return { ok: true, results, source: 'brave' }
+  } catch (err) {
+    merged?.cleanup()
+    if (err.name === 'AbortError') throw err
+    return { ok: false, reason: `network: ${err.message || err}` }
+  }
+}
+
+// web_search 引擎1c：Tavily（面向 LLM 的搜索 API，JSON；免费 1000/月）
+async function searchViaTavily(query, limit, signal) {
+  const { tavilyKey } = readWebConfig()
+  if (!tavilyKey) return null
+
+  const merged = createMergedAbortSignal(signal, 12000)
+  try {
+    const res = await fetch('https://api.tavily.com/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        api_key: tavilyKey,
+        query,
+        max_results: limit,
+        search_depth: 'basic',
+      }),
+      signal: merged?.signal,
+    })
+    merged?.cleanup()
+    if (!res.ok) {
+      const hint = res.status === 401 || res.status === 403 ? ' (check tavily_api_key)' : ''
+      return { ok: false, reason: `http ${res.status}${hint}` }
+    }
+    const data = await res.json()
+    const raw = (data?.results || []).map(r => ({ title: r.title, url: r.url, snippet: r.content }))
+    const results = normalizeResults(raw, limit)
+    if (results.length === 0) return { ok: false, reason: 'empty results' }
+    return { ok: true, results, source: 'tavily' }
+  } catch (err) {
+    merged?.cleanup()
+    if (err.name === 'AbortError') throw err
+    return { ok: false, reason: `network: ${err.message || err}` }
+  }
+}
+
 // web_search 引擎2：SearXNG（自托管，JSON API）
 async function searchViaSearXNG(query, limit, signal) {
   const { searxngUrl } = readWebConfig()
@@ -511,6 +589,49 @@ async function searchViaDDG(query, limit, signal) {
   }
 }
 
+function buildSearchPayload(query, result) {
+  return {
+    ok: true, tool: 'web_search', query,
+    source: result.source,
+    results: result.results,
+    hint: 'Open 1-3 reliable result URLs with fetch_url, then answer the user.',
+  }
+}
+
+// 并行跑多个引擎，返回第一个 ok 的结果；全失败则给出 failures 汇总。
+// 用于无 key 的爬虫兜底层：避免 bing→jina→ddg 串行把各自超时累加成 ~48s。
+async function raceEnginesFirstOk(engines, query, limit, signal, failures) {
+  return await new Promise((resolve, reject) => {
+    let remaining = engines.length
+    let settled = false
+    const finish = (result) => { if (!settled) { settled = true; resolve(result) } }
+    if (remaining === 0) return finish(null)
+    for (const [name, engine] of engines) {
+      Promise.resolve()
+        .then(() => engine(query, limit, signal))
+        .then((result) => {
+          if (settled) return
+          if (result && result.ok) return finish(result)
+          if (result) {
+            failures.push({ engine: name, reason: result.reason || 'unknown' })
+            console.log(`[web_search] ${name} failed: ${result.reason || 'unknown'}`)
+          }
+          // result == null → 未配置，跳过
+        })
+        .catch((err) => {
+          if (err && err.name === 'AbortError') { if (!settled) { settled = true; reject(err) } ; return }
+          failures.push({ engine: name, reason: `threw: ${err?.message || err}` })
+          console.log(`[web_search] ${name} threw: ${err?.message || err}`)
+        })
+        .finally(() => {
+          if (settled) return
+          remaining--
+          if (remaining === 0) finish(null)
+        })
+    }
+  })
+}
+
 export async function execWebSearch(args, context = {}) {
   throwIfAborted(context.signal)
   const query = String(args.query || args.q || args.keyword || '').trim()
@@ -523,16 +644,18 @@ export async function execWebSearch(args, context = {}) {
 
   console.log(`[web_search] ${truncateForLog(query)}`)
 
-  // 依次尝试：Serper → SearXNG → Bing（国内可访问）→ Jina Search → DuckDuckGo（兜底）
-  const engines = [
-    ['serper',   searchViaSerper],
-    ['searxng',  searchViaSearXNG],
-    ['bing',     searchViaBing],
-    ['jina',     searchViaJina],
-    ['ddg',      searchViaDDG],
-  ]
   const failures = []
-  for (const [name, engine] of engines) {
+
+  // 第一梯队：带 key 的可靠 JSON API，按优先级【串行】尝试。
+  // 未配置的引擎瞬间返回 null（不发网络请求），所以串行不会拖慢——
+  // 通常只有 serper 配了，~1.5s 就出结果。
+  const tier1 = [
+    ['serper', searchViaSerper],
+    ['brave',  searchViaBrave],
+    ['tavily', searchViaTavily],
+    ['searxng', searchViaSearXNG],
+  ]
+  for (const [name, engine] of tier1) {
     throwIfAborted(context.signal)
     let result
     try {
@@ -545,17 +668,26 @@ export async function execWebSearch(args, context = {}) {
     }
     if (result == null) continue  // 未配置
     if (result.ok) {
-      const payload = {
-        ok: true, tool: 'web_search', query,
-        source: result.source,
-        results: result.results,
-        hint: 'Open 1-3 reliable result URLs with fetch_url, then answer the user.',
-      }
+      const payload = buildSearchPayload(query, result)
       searchCacheSet(cacheKey, payload)
       return webJson(payload)
     }
     failures.push({ engine: name, reason: result.reason || 'unknown' })
     console.log(`[web_search] ${name} failed: ${result.reason || 'unknown'}`)
+  }
+
+  // 第二梯队：无 key 的爬虫兜底，【并行】抢答。最坏耗时压成单引擎超时（~18s）而非串行累加。
+  throwIfAborted(context.signal)
+  const tier2 = [
+    ['bing', searchViaBing],
+    ['jina', searchViaJina],
+    ['ddg',  searchViaDDG],
+  ]
+  const raced = await raceEnginesFirstOk(tier2, query, limit, context.signal, failures)
+  if (raced && raced.ok) {
+    const payload = buildSearchPayload(query, raced)
+    searchCacheSet(cacheKey, payload)
+    return webJson(payload)
   }
 
   const summary = failures.length
@@ -565,7 +697,7 @@ export async function execWebSearch(args, context = {}) {
     ok: false, tool: 'web_search', query,
     error: `all search engines failed (${summary})`,
     failures,
-    hint: 'All search engines failed. Try fetch_url with a known URL, or configure SERPER_API_KEY for reliable search.',
+    hint: 'All search engines failed. Try fetch_url with a known URL, or configure SERPER_API_KEY / BRAVE_API_KEY for reliable search.',
   })
 }
 
@@ -605,7 +737,7 @@ async function fetchViaJina(url, signal) {
 }
 
 // fetch_url 策略二：直接 HTTP + 正则 HTML 转文本（兜底，适合简单静态页）
-async function fetchViaDirect(url, signal) {
+async function fetchViaDirect(url, signal, { expectJson = false } = {}) {
   const merged = createMergedAbortSignal(signal, 12000)
   try {
     const res = await fetch(url, { headers: WEB_HEADERS, signal: merged?.signal })
@@ -615,9 +747,16 @@ async function fetchViaDirect(url, signal) {
     if (contentType && !/text|html|xml|json/i.test(contentType)) {
       return { ok: false, status: res.status, content_type: contentType }
     }
-    const html = await res.text()
-    const text = htmlToText(html)
-    const title = extractTitle(html)
+    const raw = await res.text()
+    // JSON/API 响应：原样返回（能 parse 就顺手美化），不走 htmlToText 以免破坏结构
+    const looksJson = (expectJson || /json/i.test(contentType)) && /^\s*[\[{]/.test(raw)
+    if (looksJson) {
+      let body = raw.trim()
+      try { body = JSON.stringify(JSON.parse(raw), null, 2) } catch {}
+      return { ok: true, status: res.status, title: '', body, is_json: true }
+    }
+    const text = htmlToText(raw)
+    const title = extractTitle(raw)
     if (isLowValuePageText(text)) return { ok: false, status: res.status, title, low_value: true }
     return { ok: true, status: res.status, title, body: text }
   } catch (err) {
@@ -625,6 +764,48 @@ async function fetchViaDirect(url, signal) {
     if (err.name === 'AbortError') throw err
     return { ok: false, error: err.message }
   }
+}
+
+// fetch_url 兜底：Jina 和直连都失败时，自动用真实浏览器渲染（处理 JS / 反爬），
+// 不再依赖模型手动想起来调 browser_read。纯 404 / DNS / 网络层错误浏览器也救不了，短路返回。
+async function fetchUrlBrowserFallback(url, args, context, directResult = {}) {
+  const status = directResult.status
+  // 只有像「被反爬 / JS 渲染 / 未知失败」时才值得花时间起浏览器
+  const worthBrowser =
+    directResult.low_value === true ||
+    status === 403 || status === 429 || status === 503 ||
+    (status == null && !directResult.error)
+
+  if (args.no_browser_fallback || !worthBrowser) {
+    const hint = directResult.low_value
+      ? 'The page requires JavaScript or blocks crawlers. Use browser_read instead.'
+      : 'This page could not be read. Use web_search to find another accessible source.'
+    return webJson({
+      ok: false, tool: 'fetch_url', url,
+      status: directResult.status,
+      content_type: directResult.content_type,
+      error: directResult.error || (directResult.low_value ? 'no readable content' : `HTTP ${directResult.status}`),
+      hint,
+    })
+  }
+
+  console.log(`[fetch_url] auto-upgrading to browser_read: ${url}`)
+  const browserRaw = await execBrowserRead(
+    { url, max_chars: args.max_chars || args.maxChars, timeout_ms: args.timeout_ms || args.timeout },
+    context,
+  )
+  let parsed
+  try { parsed = JSON.parse(browserRaw) } catch { return browserRaw }
+  // 标注为 fetch_url 自动升级的结果；成功则缓存，避免重复渲染
+  parsed.tool = 'fetch_url'
+  parsed.fetch_source = 'browser_read'
+  parsed.auto_upgraded = true
+  if (parsed.ok) {
+    urlCache.set(url, { payload: parsed, fetchedAt: Date.now() })
+  } else if (!parsed.hint) {
+    parsed.hint = 'Both lightweight fetch and full browser rendering failed. Use web_search to find another source.'
+  }
+  return webJson(parsed)
 }
 
 // fetch_url: open a known URL, extract readable text, and return structured JSON.
@@ -642,42 +823,58 @@ export async function execFetchUrl(args, context = {}) {
 
   console.log(`[fetch_url] -> ${url}`)
 
-  // 策略一：Jina Reader（处理 JS 页面、Cloudflare 防护、内容提取质量最好）
   throwIfAborted(context.signal)
   let title = ''
   let text = ''
-  let fetchSource = 'jina'
+  let fetchSource = ''
   let httpStatus = null
+  let isJson = false
 
-  const jinaResult = await fetchViaJina(url, context.signal)
-  if (jinaResult) {
-    title = jinaResult.title
-    text = jinaResult.body
-  } else {
-    // 策略二：直接 HTTP（静态页面兜底）
-    console.log(`[fetch_url] jina failed, trying direct: ${url}`)
-    fetchSource = 'direct'
-    const directResult = await fetchViaDirect(url, context.signal)
-    httpStatus = directResult.status
-
-    if (!directResult.ok) {
-      const hint = directResult.low_value
-        ? 'The page requires JavaScript or blocks crawlers. Use browser_read instead.'
-        : 'This page could not be read. Use web_search to find another accessible source.'
-      return webJson({
-        ok: false, tool: 'fetch_url', url,
-        status: directResult.status,
-        content_type: directResult.content_type,
-        error: directResult.error || (directResult.low_value ? 'no readable content' : `HTTP ${directResult.status}`),
-        hint,
-      })
+  if (isLikelyApiUrl(url)) {
+    // JSON/API 端点：直连优先（Jina 会把 JSON 当网页渲染，慢且破坏结构）
+    const directResult = await fetchViaDirect(url, context.signal, { expectJson: true })
+    if (directResult.ok) {
+      fetchSource = 'direct'
+      httpStatus = directResult.status
+      title = directResult.title || ''
+      text = directResult.body || ''
+      isJson = !!directResult.is_json
+    } else {
+      // 直连失败 → 退回 Jina；Jina 也不行 → 浏览器兜底
+      console.log(`[fetch_url] api direct failed (${directResult.status || directResult.error || '?'}), trying jina: ${url}`)
+      const jinaResult = await fetchViaJina(url, context.signal)
+      if (jinaResult) {
+        fetchSource = 'jina'
+        title = jinaResult.title
+        text = jinaResult.body
+      } else {
+        return await fetchUrlBrowserFallback(url, args, context, directResult)
+      }
     }
-    title = directResult.title || ''
-    text = directResult.body || ''
+  } else {
+    // 普通网页：Jina Reader 优先（JS 页面、Cloudflare 防护、正文提取质量最好）
+    const jinaResult = await fetchViaJina(url, context.signal)
+    if (jinaResult) {
+      fetchSource = 'jina'
+      title = jinaResult.title
+      text = jinaResult.body
+    } else {
+      // 直连兜底（静态页）；再失败 → 自动升级到真实浏览器渲染
+      console.log(`[fetch_url] jina failed, trying direct: ${url}`)
+      const directResult = await fetchViaDirect(url, context.signal)
+      if (directResult.ok) {
+        fetchSource = 'direct'
+        httpStatus = directResult.status
+        title = directResult.title || ''
+        text = directResult.body || ''
+      } else {
+        return await fetchUrlBrowserFallback(url, args, context, directResult)
+      }
+    }
   }
 
   const MAX = 5000
-  const isLong = text.length >= ARTICLE_LENGTH_THRESHOLD
+  const isLong = !isJson && text.length >= ARTICLE_LENGTH_THRESHOLD
   let bodyPath = null
   let bodyBytes = null
   if (isLong) {
@@ -698,6 +895,7 @@ export async function execFetchUrl(args, context = {}) {
     url,
     status: httpStatus,
     fetch_source: fetchSource,
+    is_json: isJson || undefined,
     title,
     content,
     truncated: isLong || text.length > MAX,

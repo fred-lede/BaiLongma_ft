@@ -2,9 +2,13 @@
 // 工具清单一节由 auto-catalog.js 从 capabilities/schemas/ 自动生成，杜绝随版本漂移。
 
 import { buildToolCatalogText } from './auto-catalog.js'
+import { getAppVersion } from '../version.js'
 
 // 在模块加载时生成一次工具清单文本（纯数据派生，无副作用）。
 const TOOL_CATALOG_TEXT = buildToolCatalogText()
+
+// 当前应用版本（从 package.json 派生，升级自动跟上，不手写）。
+const APP_VERSION = getAppVersion()
 
 export const SELF_KNOWLEDGE_TOPICS = {
   self_architecture: {
@@ -12,7 +16,7 @@ export const SELF_KNOWLEDGE_TOPICS = {
     title: '白龙马架构与运行机制',
     subtitle: 'How BaiLongma Works',
     icon: '⚙',
-    summary: '白龙马（BaiLongma）是一套 Electron + Node.js 的"持续意识"框架，版本 2.x。它不是被动等待提问的聊天机器人，而是一个持续运行、自主感知、带长期记忆的 Agent。以下是当前版本的完整机制说明。',
+    summary: `白龙马（BaiLongma）是一套 Electron + Node.js 的"持续意识"框架，当前版本 ${APP_VERSION}。它不是被动等待提问的聊天机器人，而是一个持续运行、自主感知、带长期记忆的 Agent。以下是当前版本的完整机制说明。`,
     sections: [
       {
         title: '整体架构',

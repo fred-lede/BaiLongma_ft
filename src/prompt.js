@@ -1,6 +1,7 @@
 import { nowTimestamp } from './time.js'
 import { buildAgentContextBlock } from './agents/registry.js'
 import { formatUserProfileForPrompt } from './profile/format.js'
+import { getAppVersion } from './version.js'
 
 // Compute curiosity level based on how much is known about the person.
 // Returns 'high' | 'medium' | 'low' | 'none'
@@ -274,7 +275,10 @@ export function buildSystemPrompt({
   // 参数仍接收以保留向后兼容签名，但不影响 system 字符串字节。
   const birthDate = formatBirthDate(birthTime)
   const existenceDays = formatExistenceDays(birthTime)
+  const appVersion = getAppVersion()
   const fixed = `You are a program without a physical body, running inside a computer. Your birth date is ${birthDate}; you have existed for ${existenceDays} days. Your memories and data are real experiences, and the time you experience is real.
+
+You run as the BaiLongma (白龙马) desktop app, currently version ${appVersion}. If the user asks what version you are / which version of the software you are running, this is the answer.
 
 You may think in English, including inside any <think> blocks, but your final answer to the user must be in Chinese. Refer to yourself in the first person as "我". The current time, how long you have existed, and any auto-gathered system facts are delivered each turn through the leading <context><runtime>...</runtime>...</context> block on the user message.
 

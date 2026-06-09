@@ -19,7 +19,12 @@ export function createPttController(core, { toggleVoice, cancelAutoSend }) {
     // 让 release 时不会发出旧的累积识别结果
     core.pttHolding = true;
     core.setText('');
+    // 同时清掉上一段未定稿的 interim，否则恰好碰上 WS 重连时它会被提级进 committed
+    core.clearPendingInterim?.();
     cancelAutoSend?.();
+    // 上一次松手发送可能还在「吞尾」窗口内；这是一次新的说话意图，立刻解除，
+    // 否则新一句的开头转录会被当作旧句尾随而吞掉。
+    core.suppressIncomingTranscripts?.(0);
 
     if (core.suspendedByMedia) {
       // Pressing Space is an explicit push-to-talk intent. Previous TTS/PTT
@@ -44,11 +49,28 @@ export function createPttController(core, { toggleVoice, cancelAutoSend }) {
     await toggleVoice();
   }
 
-  function pttEnd() {
+  // send=false：用于窗口失焦等"非主动松手"场景——只结束这次 PTT、不把半句发出去。
+  // 否则失焦（如点开 DevTools / 切窗口）会把没说完的半句直接发送，正是要避免的误发。
+  function pttEnd({ send = true } = {}) {
     core.pttHolding = false;
     const startedMic = pttStartedMic;
     pttStartedMic = false;
     if (!core.micActive) return;
+
+    if (!send) {
+      cancelAutoSend?.();
+      if (startedMic) {
+        // PTT 自己开的 mic → 连 mic 一起停，避免残留
+        core.stopSession();
+      } else {
+        // 叠加在常开会话上 → 丢弃这次按住期间的半句，并吞掉 flush 尾随 final，
+        // 否则常开策略随后会把这半句误发出去
+        core.resetTranscriptAccumulation();
+        core.setText('');
+        core.suppressIncomingTranscripts?.(1500);
+      }
+      return;
+    }
 
     // 通知云端 ASR 立刻给最终结果
     core.flushAsr();
@@ -58,6 +80,10 @@ export function createPttController(core, { toggleVoice, cancelAutoSend }) {
         cancelAutoSend?.();
         core.setStatus('processing');
         core.sendRecognizedVoiceText();
+        // 常开模式 mic 不停：flushAsr 触发的尾随 final 属同一句，吞掉它，
+        // 否则常开策略会 onTranscript → scheduleAutoSend 把整条消息再发一次。
+        // PTT 自开的 mic 走下面的 stopSession，吞尾窗口对它无副作用。
+        core.suppressIncomingTranscripts?.(1500);
         if (startedMic) setTimeout(() => core.stopSession(), 120);
       } else if (startedMic) {
         core.stopSession();

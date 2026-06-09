@@ -1516,7 +1516,11 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
             (errMsg) => {
               try { ws.send(JSON.stringify({ type: 'error', message: errMsg })) } catch {}
             },
-            () => { try { ws.close() } catch {} }
+            () => { try { ws.close() } catch {} },
+            // onEvent：把云端非转录事件（task-started/finished/failed）转发到前端诊断
+            (event, info) => {
+              try { ws.send(JSON.stringify({ type: 'diag', event, info })) } catch {}
+            }
           )
           configured = true
         } catch {}

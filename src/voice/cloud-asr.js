@@ -17,11 +17,12 @@ import { WebSocket } from 'ws'
 // 连接建立前的待发音频上限（~4s，防止连接失败时无限堆积）
 const MAX_PENDING_CHUNKS = 16
 
-function createAliyunSession(apiKey, lang, onTranscript, onError, onClose) {
+function createAliyunSession(apiKey, lang, onTranscript, onError, onClose, onEvent) {
   const WS_URL = 'wss://dashscope.aliyuncs.com/api-ws/v1/inference/'
   const taskId = crypto.randomUUID()
 
   let ready = false
+  let finishing = false   // 我们主动发了 finish-task → 随后的 task-finished 属预期，不算异常
   const pending = []
 
   const ws = new WebSocket(WS_URL, {
@@ -67,7 +68,16 @@ function createAliyunSession(apiKey, lang, onTranscript, onError, onClose) {
           onTranscript(sentence.text, isFinal, seg)
         }
       } else if (event === 'task-failed') {
+        onEvent?.('task-failed', msg?.header?.error_message)
         onError(msg?.header?.error_message || '阿里云 ASR 错误')
+      } else {
+        // task-started / task-finished / 其它：转发给前端诊断（result-generated 太频繁不转）
+        onEvent?.(event)
+        // Aliyun 在我们没主动 finish 的情况下自己结束了任务（疑似超长单任务上限）→
+        // 关掉这条连接，触发前端重连续上（重连会保住前文 + 缓冲音频，识别接着走）。
+        if (event === 'task-finished' && !finishing) {
+          try { ws.close() } catch {}
+        }
       }
     } catch {}
   })
@@ -85,6 +95,7 @@ function createAliyunSession(apiKey, lang, onTranscript, onError, onClose) {
     },
     flush() {
       if (ws.readyState !== WebSocket.OPEN) return
+      finishing = true
       ws.send(JSON.stringify({
         header: { action: 'finish-task', task_id: taskId, streaming: 'duplex' },
         payload: { input: {} },
@@ -229,6 +240,8 @@ function createXunfeiSession(appId, apiKey, lang, onTranscript, onError, onClose
 
 // ─── 火山引擎豆包大模型流式 ASR ───
 // 协议：自定义二进制帧，首包 gzip JSON full request，后续 gzip PCM audio only request。
+// 端点用 bigmodel_async（官方文档：双向流式优化版，数据变化即返回、低延迟，推荐的实时端点）。
+// 不要用 bigmodel_nostream（流式输入模式：音频>15s 或收到最后一包才返回）。bigmodel 为 legacy 双向流式。
 const VOLC_BIGMODEL_ASR_URL = 'wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async'
 const VOLC_DEFAULT_RESOURCE_ID = 'volc.bigasr.sauc.duration'
 const VOLC_SEED_RESOURCE_ID = 'volc.seedasr.sauc.duration'
@@ -332,15 +345,24 @@ function parseVolcResponse(data) {
   return { body: JSON.parse(text), isLast: flags === 0x3 }
 }
 
-function getVolcTextAndFinal(body, isLast) {
+// 火山 result 是「累积」的：每帧带从头到现在的全部 utterances（最后一条通常是非 definite 的
+// 当前句，前面的是 definite 已定句）。逐条下发、用累积列表里的稳定下标作 seg，正好套进前端
+// 那套（与阿里云一致）按 seg 去重/替换的累积模型：definite→final 入库、非 definite→interim 显示。
+// 不要把它们拼成一坨整段重发——那样跨多句会被前端当新内容反复追加，导致重复/错乱。
+function emitVolcTranscripts(body, isLast, onTranscript) {
   const results = Array.isArray(body?.result) ? body.result : (body?.result ? [body.result] : [])
-  if (results.length === 0) return { text: '', isFinal: !!isLast }
-  const utterances = results.flatMap(result => Array.isArray(result?.utterances) ? result.utterances : [])
-  const finalUtterances = utterances.filter(u => u?.definite && u?.text)
-  if (finalUtterances.length > 0) {
-    return { text: finalUtterances.map(u => u.text).join(''), isFinal: true }
+  const utterances = results.flatMap(r => Array.isArray(r?.utterances) ? r.utterances : [])
+  if (utterances.length > 0) {
+    utterances.forEach((u, i) => {
+      if (!u?.text) return
+      // 下标在累积列表里稳定（第 i 句永远是第 i 条）→ 作 seg 供前端去重，重发同句即替换不追加
+      onTranscript(u.text, !!u.definite, `v${i}`)
+    })
+    return
   }
-  return { text: results.map(result => result?.text || '').filter(Boolean).join(''), isFinal: !!isLast }
+  // 兜底：没有 utterances 字段时用整段 text，常量 seg 让前端替换而非追加
+  const text = results.map(r => r?.text || '').filter(Boolean).join('')
+  if (text) onTranscript(text, !!isLast, 'vfull')
 }
 
 function createVolcengineSession(config, lang, onTranscript, onError, onClose) {
@@ -377,8 +399,7 @@ function createVolcengineSession(config, lang, onTranscript, onError, onClose) {
       const parsed = parseVolcResponse(data)
       if (!parsed) return
       if (parsed.error) { onError(parsed.error); return }
-      const { text, isFinal } = getVolcTextAndFinal(parsed.body, parsed.isLast)
-      if (text) onTranscript(text, isFinal)
+      emitVolcTranscripts(parsed.body, parsed.isLast, onTranscript)
     } catch (err) {
       onError(`火山 ASR 响应解析失败: ${err.message}`)
     }
@@ -416,7 +437,7 @@ function createVolcengineSession(config, lang, onTranscript, onError, onClose) {
 // config: { provider, lang, aliyunApiKey?, tencentSecretId?, tencentSecretKey?,
 //           tencentAppId?, xunfeiAppId?, xunfeiApiKey?,
 //           volcAsrApiKey?, volcAsrAppKey?, volcAsrAccessKey?, volcAsrResourceId? }
-export function createCloudASRSession(config, onTranscript, onError, onClose) {
+export function createCloudASRSession(config, onTranscript, onError, onClose, onEvent) {
   const { provider = 'aliyun', lang = 'zh' } = config
 
   if (provider === 'aliyun') {
@@ -425,7 +446,7 @@ export function createCloudASRSession(config, onTranscript, onError, onClose) {
       onError('阿里云 ASR Key 格式不正确：请填写百炼/DashScope 控制台的 sk- 开头 API Key')
       return null
     }
-    return createAliyunSession(config.aliyunApiKey, lang, onTranscript, onError, onClose)
+    return createAliyunSession(config.aliyunApiKey, lang, onTranscript, onError, onClose, onEvent)
   }
 
   if (provider === 'tencent') {

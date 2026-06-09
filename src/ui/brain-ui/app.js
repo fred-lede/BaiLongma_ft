@@ -3878,11 +3878,12 @@ initHotspot().catch((err) => console.warn('[Hotspot] init failed:', err));
       window.bailongmaVoice?.pttEnd?.();
     }, { capture: true });
 
-    // 切到后台时如果还按着，强制释放，避免 mic 永远不关
+    // 切到后台/失焦（如点开 DevTools、切窗口）时如果还按着，强制释放 PTT，避免 mic 永远不关。
+    // 关键：用 send:false —— 失焦不是"主动松手发送"，不能把没说完的半句误发出去。
     window.addEventListener("blur", () => {
       if (!pttHeld) return;
       pttHeld = false;
-      window.bailongmaVoice?.pttEnd?.();
+      window.bailongmaVoice?.pttEnd?.({ send: false });
     });
   })();
 

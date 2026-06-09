@@ -225,20 +225,23 @@ export function initChat({
     }
   }
 
-  async function send({ channel = null, label = null } = {}) {
+  // text 显式传入时直接发送、不经过输入框（语音识别用：voice 完全不在 msg-input 留草稿）；
+  // 不传 text 则保持原行为，从输入框读取并清空。
+  async function send({ channel = null, label = null, text = null } = {}) {
     if (inputLocked) return;
-    const text = msgInput.value.trim();
-    if (!text) return;
-    msgInput.value = "";
+    const fromInput = (text == null);
+    const content = (fromInput ? msgInput.value : text).trim();
+    if (!content) return;
+    if (fromInput) msgInput.value = "";
     // If onUserMessage returns a string, use it as the backend payload; if it returns false, skip the backend call
-    const override = onUserMessage?.(text);
-    addMsg("user", text, { label: label || undefined });
+    const override = onUserMessage?.(content);
+    addMsg("user", content, { label: label || undefined });
     openChat();
     scheduleClose(1000);
     if (override === false) return;
 
     try {
-      const backendText = (typeof override === "string") ? override : text;
+      const backendText = (typeof override === "string") ? override : content;
       const payload = { content: backendText, from_id: "ID:000001" };
       if (channel) payload.channel = channel;
       const resp = await fetch(`${apiBase}/message`, {

@@ -7,6 +7,14 @@ import { insertActionLog } from './db.js'
 import { isTerminalInternalToolRound } from './runtime/tool-protocol.js'
 import { stripMarkers } from './runtime/markers.js'
 import { beginTurn } from './runtime/turn-trace.js'
+import { createMergedAbortSignal } from './capabilities/abort-utils.js'
+
+// 单轮流式调用的「空闲超时」：从开始到第一个 token、以及每两个 token 之间，
+// 若超过这个时长没有任何增量到达，判定为 provider 连接卡死（连接开着却不吐字节）。
+// 每收到一个 chunk 就重置，所以正常的长流式生成不受影响，只掐真正的停摆。
+// 必须显著小于 index.js 的 RUN_TURN_WATCHDOG_MS(180s)，且留够 streamOnceWithRetry 重试的余量
+// （最坏 3 次 × 该值 + 退避 仍要 < 180s）。
+const STREAM_IDLE_TIMEOUT_MS = 45_000
 
 // find_tool 命中后，把它返回的 loaded 工具 schema 原地追加进本轮 toolSchemas。
 // 已在列表里的跳过；schema 取不到的跳过。数组原地 mutate —— 调用方传的是 callLLM 的 toolSchemas
@@ -79,7 +87,35 @@ async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens,
     requestParams.tool_choice = 'auto'
   }
 
-  const stream = await getClient().chat.completions.create(requestParams, { signal })
+  // ── 空闲超时（连接卡死保护）──
+  // provider 连接开着却长时间不吐任何增量 = 停摆。每收到一个 chunk 就重置计时；超时则中止本轮，
+  // 交给 streamOnceWithRetry 重试，避免把整个 turn 干耗到 index.js 的 180s watchdog 才被发现。
+  // 正是这次「你有意识吗」事故的成因：第二轮请求卡死 180s，已生成的答案被一并丢弃。
+  const idleController = new AbortController()
+  let idleFired = false
+  let idleTimer = null
+  const armIdle = () => {
+    if (idleTimer) clearTimeout(idleTimer)
+    idleTimer = setTimeout(() => {
+      idleFired = true
+      try { idleController.abort('stream idle timeout') } catch {}
+    }, STREAM_IDLE_TIMEOUT_MS)
+  }
+  // 合并「调用方 signal（watchdog/抢占）」与「空闲超时 signal」：任一触发都中止底层请求。
+  const reqController = new AbortController()
+  const onCallerAbort = () => { try { reqController.abort(signal?.reason || 'Aborted') } catch {} }
+  const onIdleAbort = () => { try { reqController.abort('stream idle timeout') } catch {} }
+  if (signal) {
+    if (signal.aborted) reqController.abort(signal.reason || 'Aborted')
+    else signal.addEventListener('abort', onCallerAbort, { once: true })
+  }
+  idleController.signal.addEventListener('abort', onIdleAbort, { once: true })
+  const cleanupIdle = () => {
+    if (idleTimer) { clearTimeout(idleTimer); idleTimer = null }
+    try { signal?.removeEventListener('abort', onCallerAbort) } catch {}
+  }
+
+  armIdle()
 
   let fullContent = ''
   let fullReasoningContent = ''
@@ -92,7 +128,10 @@ async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens,
   let cacheMissTokens = 0
 
   try {
+  // create() 也放进 try：连接建立阶段就卡死时，idle 触发 → 这里抛 AbortError → 下方 catch 转成可重试的瞬时错误。
+  const stream = await getClient().chat.completions.create(requestParams, { signal: reqController.signal })
   for await (const chunk of stream) {
+    armIdle()  // 收到增量，重置空闲计时（正常长流式生成因此不受影响）
     if (signal?.aborted) break
     if (chunk.usage?.total_tokens) {
       usageTokens = chunk.usage.total_tokens
@@ -192,6 +231,15 @@ async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens,
   }
 
   } catch (err) {
+    // 空闲超时（我们自己的看门狗触发）且调用方并未中止 —— 当作瞬时错误上抛，由 streamOnceWithRetry 重试，
+    // 而不是误判成"用户中止"(aborted:true) 把本轮静默放弃。
+    if (idleFired && !signal?.aborted) {
+      if (streamStarted) onStream?.({ event: 'end' })
+      const e = new Error(`stream idle timeout after ${STREAM_IDLE_TIMEOUT_MS / 1000}s`)
+      e.code = 'ETIMEDOUT'
+      e.hadContent = fullContent.length > 0
+      throw e
+    }
     if (err.name === 'AbortError' || signal?.aborted) {
       if (streamStarted) onStream?.({ event: 'end' })
       return {
@@ -204,6 +252,8 @@ async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens,
     err.hadContent = fullContent.length > 0
     if (streamStarted) onStream?.({ event: 'end' })
     throw err
+  } finally {
+    cleanupIdle()
   }
 
   if (streamStarted) onStream?.({ event: 'end' })
@@ -731,6 +781,11 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
   })
 
   let allContent = ''
+  // 可挽救草稿：社交渠道第一轮已写出一条完整回复、但还没 send_message 投递时，nudge 会把它从 allContent
+  // 挪进 messages 并清空 allContent（期望下一轮包 send_message 重发）。一旦下一轮 provider 卡死/被 watchdog
+  // 掐断，allContent 已空、草稿就丢了——「你有意识吗」事故正是如此。这里把草稿原文留一份，
+  // 作为协议兜底投递的内容来源（仅在 !delivered 时使用，不会和正常投递双发）。
+  let salvageableReply = ''
   let lastToolResult = null
   let sawToolCall = false
   let sentMessage = false
@@ -775,17 +830,31 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
     // append-only，所以前端用 final messages.slice(0, inputOffset) 即可精确还原"本轮看到了什么"。
     const roundInputOffset = messages.length
 
-    const { content, reasoningContent, toolCalls, aborted } = await streamOnceWithRetry({
-      messages,
-      toolSchemas,
-      temperature,
-      topP,
-      maxTokens,
-      thinking,
-      signal,
-      onRetry,
-      onStream,  // 所有轮次均流式推送，让 UI 实时反映工具链执行过程中的模型输出
-    })
+    let roundResult
+    try {
+      roundResult = await streamOnceWithRetry({
+        messages,
+        toolSchemas,
+        temperature,
+        topP,
+        maxTokens,
+        thinking,
+        signal,
+        onRetry,
+        onStream,  // 所有轮次均流式推送，让 UI 实时反映工具链执行过程中的模型输出
+      })
+    } catch (err) {
+      // 只要**前面的轮次已攒到可投递的回复**（典型：社交渠道第一轮已出答案、第二轮包 send_message 时
+      // provider 卡死/报错，甚至重试退避期间被 watchdog 掐），就不能让这个错误/中止把已生成的答案一起
+      // 带走——跳出循环走下方协议兜底投递（aborted 时它会用全新 signal 投递）。allContent 此刻可能已被
+      // nudge 清空，故同时认 salvageableReply。两者皆空才无可挽救，照旧上抛（含真正的 AbortError）。
+      if (allContent.trim() || salvageableReply.trim()) {
+        console.warn(`[LLM] 轮内请求中断/失败(${(err?.message || String(err)).slice(0, 80)})，已有可投递回复 —— 跳出走兜底投递`)
+        break
+      }
+      throw err
+    }
+    const { content, reasoningContent, toolCalls, aborted } = roundResult
 
     trace.recordRound({ round, inputOffset: roundInputOffset, content, reasoningContent, toolCalls, aborted })
 
@@ -842,6 +911,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
       // 那会逼出一整轮多余的 LLM 调用，正是要消除的延迟来源。只有社交渠道才需要这条 nudge。
       if (!localReply && mustReply && !sawToolCall && !sentMessage && allContent.trim() && !plainTextReplyNudgeUsed) {
         const draft = allContent.trim()
+        salvageableReply = draft   // 清空 allContent 前留一份，供下一轮失败时兜底投递
         if (content) messages.push({ role: 'assistant', content })
         allContent = ''
         messages.push({
@@ -1246,8 +1316,16 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
   //   #4 不双发 —— 仅 !delivered 时触发；一旦投出立刻 delivered=true，index.js 不会再补。
   //   #5 投递前剥离 <think>/[RECALL:] 等协议标记。
   //   #8 source:'fallback' 由 executeTool→tool-audit 自动写入 action_log，区分协议兜底与显式调用。
-  if (mustReply && !silentSignal && !delivered && !aborted) {
-    let fallbackContent = stripProtocolMarkersForDelivery(allContent)
+  //
+  // 中断恢复（去掉了旧的 !aborted 守卫）：watchdog 超时/高优先级抢占会把本 turn 的 signal abort。
+  // 但若模型在被掐断前**已经生成好了一条可投递的答案**（典型：社交渠道第一轮出了纯文本、第二轮包
+  // send_message 时卡死被 watchdog 掐），这条答案不应凭空丢掉——「你有意识吗」事故就是这么蒸发的。
+  // 此时原 signal 已废，复用它会让 send_message 立刻 AbortError 失败，所以中断兜底改走一条全新的、
+  // 带 30s 超时的干净 signal，确保已生成的答案仍能送达。
+  if (mustReply && !silentSignal && !delivered) {
+    // 内容来源：优先本轮累积的 allContent；若它已被 nudge 清空（草稿挪进了 messages），
+    // 退回 salvageableReply —— 这正是中断/卡死时把"已生成但没发出"的答案救回来的关键。
+    let fallbackContent = stripProtocolMarkersForDelivery(allContent.trim() ? allContent : salvageableReply)
     const fallbackTarget = toolContext?.currentTargetId
     // 播放收尾一致性：视频流程里模型常不调 send_message 而是留 body 走兜底（音乐则习惯调
     // send_message 被 isMediaCloser 替换）。这里对兜底 body 做同样处理——本 turn 播放过媒体、
@@ -1257,14 +1335,25 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
       mediaEmojiSent = true
     }
     if (fallbackContent && fallbackTarget) {
-      // localReply 渠道：纯文本直投是设计内的快路径（省掉 send_message 那一轮），不是协议违规；
-      // 社交渠道走到这里才是模型漏调 send_message 的兜底。日志分级表达，避免把正常路径当告警噪声。
-      if (localReply) console.log(`[local reply] 纯文本直投给 ${fallbackTarget}（本地渠道无需 send_message）`)
-      else console.warn(`[protocol fallback] 模型未调 send_message —— callLLM 代为投递给 ${fallbackTarget}`)
+      // 中断恢复路径：原 signal 已 abort，另起一条带超时的干净 signal 兜底投递。
+      let fbSignal = signal
+      let fbCleanup = null
+      if (aborted) {
+        const fresh = createMergedAbortSignal(null, 30_000)
+        fbSignal = fresh?.signal
+        fbCleanup = fresh?.cleanup
+        console.warn(`[protocol fallback] 本轮被中断但已生成回复 —— 用独立 signal 兜底投递给 ${fallbackTarget}`)
+      } else if (localReply) {
+        // localReply 渠道：纯文本直投是设计内的快路径（省掉 send_message 那一轮），不是协议违规。
+        console.log(`[local reply] 纯文本直投给 ${fallbackTarget}（本地渠道无需 send_message）`)
+      } else {
+        // 社交渠道未中断却走到这里 = 模型漏调 send_message 的常规兜底。
+        console.warn(`[protocol fallback] 模型未调 send_message —— callLLM 代为投递给 ${fallbackTarget}`)
+      }
       try {
         const fbArgs = { target_id: fallbackTarget, content: fallbackContent }
         // source:'fallback' 让 tool-audit 把这条 action_log 标记为协议兜底（不变量 #8）。
-        const fbResult = await executeTool('send_message', fbArgs, { ...toolContext, signal, source: 'fallback' })
+        const fbResult = await executeTool('send_message', fbArgs, { ...toolContext, signal: fbSignal, source: 'fallback' })
         // 兜底也是"真正执行过的 send_message"：置 delivered，并触发与正常路径同样的
         //   onToolCall 回调（语音渠道自动 TTS、UI tool_call 事件、toolCallLog 登记都在那里）。
         //   __fallback 标记仅给 onToolCall 用于遥测分类；executeTool 收到的是干净的 fbArgs。
@@ -1272,8 +1361,12 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
         lastToolResult = { name: 'send_message', args: fbArgs, result: fbResult }
         if (onToolCall) onToolCall('send_message', { ...fbArgs, __fallback: true }, fbResult)
       } catch (err) {
-        if (err?.name === 'AbortError') throw err
+        // 中断恢复用的是独立 signal，其超时/中止不应再往上抛（本 turn 本就在收尾）。
+        // 仅在正常路径(非 aborted)下保留原语义：调用方 signal 的 AbortError 继续上抛。
+        if (err?.name === 'AbortError' && !aborted) throw err
         console.warn('[protocol fallback] callLLM 兜底投递失败:', err?.message || err)
+      } finally {
+        fbCleanup?.()
       }
     }
   }

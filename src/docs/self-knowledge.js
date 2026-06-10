@@ -97,7 +97,7 @@ export const SELF_KNOWLEDGE_TOPICS = {
   - memory/injector.js（+ injector-retrieval/injector-format）—— 按当前上下文检索相关记忆并注入，承重墙是"相关度选择器"
   - memory/consolidator.js + consolidation-loop.js —— 整理器（后台人格）：合并重复、降权过期（merge_memories / downgrade_memory）
   - memory/tool-router.js —— 按消息只加载相关工具子集；缺工具时 find_tool 现场调取
-  - memory/focus.js / focus-classifier / focus-compress —— 焦点：让模型"知道自己在关注什么"，用户换话题即松手
+  - memory/threads.js / thread-classifier / thread-summarize —— 线索模型：注意力 = 多条并发线索 + 一个前台指针；"好的我去做"挂承诺（commitment）钉住线索温度，"干得咋样"这类进度问询直接路由到开放承诺；前台切走时旧线索增量摘要，原文永不隐藏（温度是每轮读时重算的）
   - memory/refresh-loop.js —— 定期刷新过期记忆；embedding.js + embedding-backfill 提供向量召回
   - 主动召回：recall_memory 工具会影响下一轮注入方向；search_memory / probe_memory 用于即时查与自检
 

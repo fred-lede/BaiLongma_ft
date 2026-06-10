@@ -129,6 +129,13 @@ function initSchema() {
   //   并对本轮触发判定的 user 消息做一次 UPDATE 回填（push 时 focus 尚未算）。
   try { db.exec(`ALTER TABLE conversations ADD COLUMN focus_topic TEXT DEFAULT ''`) } catch {}
 
+  // 迁移：线索模型（DynamicMemoryPool.md 第 8 章）——写时归属。
+  //   每条对话在写入时由行动者声明归属到哪条线索（thread_id）。这是"episode 是因果链
+  //   不是时间段"的落地：减法（读时选择）按 thread_id 算，不再按时间区间圈地。
+  //   focus_topic 列保留（话题边界标注仍有用），thread_id 是归属、focus_topic 是标注。
+  try { db.exec(`ALTER TABLE conversations ADD COLUMN thread_id TEXT DEFAULT ''`) } catch {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_conv_thread_id ON conversations(thread_id)`) } catch {}
+
   // 迁移：P0-2 标记 agent 自己留下的"未答悬念"（follow-up question）。
   //   open_question=1 表示这条 jarvis 消息末尾留了一个非澄清型问号悬念。
   //   conversationWindow 渲染时：若该悬念在 N 轮内未被用户接茬 / 话题已切换，
@@ -441,6 +448,46 @@ function initSchema() {
       conclusions   TEXT    NOT NULL DEFAULT '[]',
       updated_at    TEXT    NOT NULL DEFAULT (datetime('now'))
     );
+  `)
+
+  // threads / commitments 表：线索模型（DynamicMemoryPool.md 第 8 章）持久化。
+  //   threads     : 线索全集。status='open'|'closed'；closed 仍在仓库可召回——线索数据只增不删，
+  //                 "遗忘"只发生在读时（threadTemperature 不选它），不发生在写时。
+  //   commitments : 承诺注册表。"好的我去做"= 单 Agent 版 spawn 时刻；开放承诺钉住线索温度，
+  //                 是指代性问询（"干得咋样"）的解析锚点。
+  //   thread_state: 单行 KV，存 foregroundId（前台指针）。
+  // 写入策略：saveThreadState 整态原子替换（transaction 内 DELETE+INSERT），与 focus_stack 同款。
+  // focus_stack 表只读保留：首启 threads 为空时一次性迁移，之后不再写。
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS threads (
+      id              TEXT PRIMARY KEY,
+      topic           TEXT NOT NULL DEFAULT '[]',
+      signature       TEXT NOT NULL DEFAULT '[]',
+      label           TEXT NOT NULL DEFAULT '',
+      summary         TEXT NOT NULL DEFAULT '',
+      conclusions     TEXT NOT NULL DEFAULT '[]',
+      status          TEXT NOT NULL DEFAULT 'open',
+      created_at      TEXT NOT NULL,
+      last_event_at   TEXT NOT NULL,
+      last_event_tick INTEGER NOT NULL DEFAULT 0,
+      hit_count       INTEGER NOT NULL DEFAULT 1,
+      last_summary_at TEXT NOT NULL DEFAULT '',
+      updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS commitments (
+      id          TEXT PRIMARY KEY,
+      thread_id   TEXT NOT NULL,
+      text        TEXT NOT NULL DEFAULT '',
+      status      TEXT NOT NULL DEFAULT 'open',
+      channel     TEXT NOT NULL DEFAULT '',
+      created_at  TEXT NOT NULL,
+      closed_at   TEXT
+    );
+    CREATE TABLE IF NOT EXISTS thread_state (
+      key   TEXT PRIMARY KEY,
+      value TEXT NOT NULL DEFAULT ''
+    );
+    CREATE INDEX IF NOT EXISTS idx_commitments_status ON commitments(status);
   `)
 
   // wechat-clawbot 上下文令牌持久化：
@@ -1305,21 +1352,30 @@ export function setCurrentFocusTopic(topic) {
 }
 export function getCurrentFocusTopic() { return currentFocusTopic }
 
+// 线索模型：进程内当前线索 id（写时归属的"印章"，与 currentFocusTopic 平行）。
+// index.js 在归属判定之后 set 一次；insertConversation 写库时自动盖章。
+let currentThreadId = ''
+export function setCurrentThreadId(threadId) {
+  currentThreadId = String(threadId || '')
+}
+export function getCurrentThreadId() { return currentThreadId }
+
 // 写入一条对话记录
 // focus_topic / open_question 优先取调用方显式传入；未传时 focus_topic 读 currentFocusTopic。
 export function insertConversation({
   role, from_id, to_id = null, content, timestamp,
   channel = '', external_party_id = '',
-  focus_topic = null, open_question = 0,
+  focus_topic = null, open_question = 0, thread_id = null,
 }) {
   const db = getDB()
   const fromId = normalizeConversationPartyId(from_id)
   const toId = normalizeConversationPartyId(to_id)
   const topic = focus_topic == null ? currentFocusTopic : String(focus_topic || '')
+  const threadId = thread_id == null ? currentThreadId : String(thread_id || '')
   const info = db.prepare(`
-    INSERT INTO conversations (role, from_id, to_id, content, timestamp, channel, external_party_id, focus_topic, open_question)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(role, fromId, toId, content, timestamp, channel || '', external_party_id || '', topic, open_question ? 1 : 0)
+    INSERT INTO conversations (role, from_id, to_id, content, timestamp, channel, external_party_id, focus_topic, open_question, thread_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(role, fromId, toId, content, timestamp, channel || '', external_party_id || '', topic, open_question ? 1 : 0, threadId)
   return Number(info.lastInsertRowid) || 0
 }
 
@@ -1328,16 +1384,58 @@ export function insertConversation({
 //   index.js 在 updateFocusFrame 之后调用本函数，用 (from_id, timestamp) 定位该行回填。
 //   注意：不加 focus_topic 必须为空的 WHERE 约束——只通过 from_id+timestamp 精确定位单行；
 //   即使外部预填了别的值，本轮焦点判断的结果才是权威的。
-export function updateUserMessageFocusTopic(fromId, timestamp, topic) {
+export function updateUserMessageFocusTopic(fromId, timestamp, topic, threadId = null) {
   if (!fromId || !timestamp) return 0
   const db = getDB()
   const normalizedId = normalizeConversationPartyId(fromId)
   const t = Array.isArray(topic) ? topic.slice(0, 3).join(',') : String(topic || '')
-  const info = db.prepare(`
-    UPDATE conversations SET focus_topic = ?
-    WHERE role = 'user' AND from_id = ? AND timestamp = ?
-  `).run(t, normalizedId, timestamp)
+  const info = threadId
+    ? db.prepare(`
+        UPDATE conversations SET focus_topic = ?, thread_id = ?
+        WHERE role = 'user' AND from_id = ? AND timestamp = ?
+      `).run(t, String(threadId), normalizedId, timestamp)
+    : db.prepare(`
+        UPDATE conversations SET focus_topic = ?
+        WHERE role = 'user' AND from_id = ? AND timestamp = ?
+      `).run(t, normalizedId, timestamp)
   return info.changes || 0
+}
+
+// 线索合并修正（分类器事后仲裁"其实是同一条线索"）：把 source 线索的对话过户给 target。
+// 这是合并而非删除——行还在，只是归属修正。
+export function reassignConversationsThread(sourceThreadId, targetThreadId) {
+  if (!sourceThreadId || !targetThreadId) return 0
+  try {
+    const info = getDB().prepare(`
+      UPDATE conversations SET thread_id = ? WHERE thread_id = ?
+    `).run(String(targetThreadId), String(sourceThreadId))
+    return info.changes || 0
+  } catch {
+    return 0
+  }
+}
+
+// 增量摘要器取数：某线索自 sinceAt 以来的对话（写时归属，不按时间区间圈地）。
+export function getConversationsForThread(threadId, { sinceAt = null, limit = 60 } = {}) {
+  if (!threadId) return []
+  const db = getDB()
+  const safeLimit = Math.max(1, Math.min(200, Number(limit) || 60))
+  try {
+    const rows = sinceAt
+      ? db.prepare(`
+          SELECT ${CONVERSATION_COLUMNS} FROM conversations
+          WHERE thread_id = ? AND strftime('%s', timestamp) >= strftime('%s', ?)
+          ORDER BY timestamp DESC, id DESC LIMIT ?
+        `).all(String(threadId), sinceAt, safeLimit)
+      : db.prepare(`
+          SELECT ${CONVERSATION_COLUMNS} FROM conversations
+          WHERE thread_id = ?
+          ORDER BY timestamp DESC, id DESC LIMIT ?
+        `).all(String(threadId), safeLimit)
+    return rows.reverse()
+  } catch {
+    return []
+  }
 }
 
 // P0-2：把某条 jarvis 消息标记为留了未答悬念（open_question=1）
@@ -1649,7 +1747,7 @@ export function upsertUserProfile(profile = {}) {
 const RECENT_RAW_CONTEXT_FLOOR = 60
 const CONVERSATION_COLUMNS = `
   id, role, from_id, to_id, content, channel, timestamp, created_at,
-  external_party_id, focus_absorbed, focus_topic, open_question
+  external_party_id, focus_absorbed, focus_topic, open_question, thread_id
 `
 
 function normalizeConversationLimit(limit, fallback = 20) {
@@ -1673,21 +1771,17 @@ export function getRecentConversation(entityId, limit = 20, maxHours = 24, { inc
     return rows.reverse()
   }
 
+  // 线索模型（DynamicMemoryPool.md 8.3 原语 4）：absorbed 棘轮退役。
+  // 写端（markConversationsAbsorbed）已无人调用；读端也不再按 focus_absorbed 过滤——
+  // 历史上被时间区间误标记的行不该永久隐藏（误丢的代价是失忆，不可恢复）。
+  // "主线深化时不看子线索原文"由读时选择（thread_id + buildThreadView）天然完成。
   const rows = db.prepare(`
-    WITH scoped AS (
-      SELECT
-        ${CONVERSATION_COLUMNS},
-        ROW_NUMBER() OVER (ORDER BY timestamp DESC, id DESC) AS recent_rank
-      FROM conversations
-      WHERE (from_id = ? OR to_id = ?)
-      AND timestamp >= ?
-    )
-    SELECT ${CONVERSATION_COLUMNS}
-    FROM scoped
-    WHERE recent_rank <= ? OR focus_absorbed = 0
+    SELECT ${CONVERSATION_COLUMNS} FROM conversations
+    WHERE (from_id = ? OR to_id = ?)
+    AND timestamp >= ?
     ORDER BY timestamp DESC, id DESC
     LIMIT ?
-  `).all(normalizedId, normalizedId, cutoff, RECENT_RAW_CONTEXT_FLOOR, safeLimit)
+  `).all(normalizedId, normalizedId, cutoff, safeLimit)
   return rows.reverse() // 按时间正序返回
 }
 
@@ -1707,20 +1801,13 @@ export function getRecentConversationTimeline(limit = 20, maxHours = 24, { inclu
     return rows.reverse()
   }
 
+  // absorbed 棘轮退役（同 getRecentConversation 的说明）：不再按 focus_absorbed 过滤。
   const rows = db.prepare(`
-    WITH scoped AS (
-      SELECT
-        ${CONVERSATION_COLUMNS},
-        ROW_NUMBER() OVER (ORDER BY timestamp DESC, id DESC) AS recent_rank
-      FROM conversations
-      WHERE timestamp >= ?
-    )
-    SELECT ${CONVERSATION_COLUMNS}
-    FROM scoped
-    WHERE recent_rank <= ? OR focus_absorbed = 0
+    SELECT ${CONVERSATION_COLUMNS} FROM conversations
+    WHERE timestamp >= ?
     ORDER BY timestamp DESC, id DESC
     LIMIT ?
-  `).all(cutoff, RECENT_RAW_CONTEXT_FLOOR, safeLimit)
+  `).all(cutoff, safeLimit)
   return rows.reverse()
 }
 
@@ -2263,6 +2350,125 @@ export function saveFocusStack(stack) {
     tx(stack || [])
   } catch (err) {
     console.warn('[focus-persist] saveFocusStack failed:', err.message)
+  }
+}
+
+// ============================================================
+// threads / commitments —— 线索模型（DynamicMemoryPool.md 第 8 章）持久化
+// ============================================================
+//
+// loadThreadState: 启动时一次性读出 { threads, foregroundId, commitments }。
+//   只加载 status='open' 的承诺所属线索 + 最近 7 天活跃线索（冷线索留在仓库，召回另走记忆）。
+//   threads 为空且 focus_stack 有货 → 返回 null 让上层走 migrateFocusStackToThreads。
+// saveThreadState: 整态原子替换（transaction）。与 saveFocusStack 同款的"丢一次不如阻塞"取舍。
+const THREAD_LOAD_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
+
+function rowToThread(r) {
+  const topic = JSON.parse(r.topic || '[]')
+  const signature = JSON.parse(r.signature || '[]')
+  return {
+    id: r.id,
+    topic,
+    signature: signature.length > 0 ? signature : [...topic],
+    label: r.label || '',
+    summary: r.summary || '',
+    conclusions: JSON.parse(r.conclusions || '[]'),
+    status: r.status || 'open',
+    createdAt: r.created_at,
+    lastEventAt: r.last_event_at,
+    lastEventTick: r.last_event_tick || 0,
+    hitCount: r.hit_count || 1,
+    lastSummaryAt: r.last_summary_at || '',
+  }
+}
+
+export function loadThreadState() {
+  const db = getDB()
+  try {
+    const threadRows = db.prepare(`SELECT * FROM threads`).all()
+    if (threadRows.length === 0) return null
+    const commitmentRows = db.prepare(`SELECT * FROM commitments WHERE status = 'open'`).all()
+    const openThreadIds = new Set(commitmentRows.map(r => r.thread_id))
+    const cutoff = Date.now() - THREAD_LOAD_WINDOW_MS
+    const threads = threadRows
+      .filter(r => openThreadIds.has(r.id) || (Date.parse(r.last_event_at || '') || 0) >= cutoff)
+      .map(rowToThread)
+    const fgRow = db.prepare(`SELECT value FROM thread_state WHERE key = 'foregroundId'`).get()
+    let foregroundId = fgRow?.value || null
+    if (foregroundId && !threads.some(t => t.id === foregroundId)) foregroundId = null
+    const commitments = commitmentRows.map(r => ({
+      id: r.id,
+      threadId: r.thread_id,
+      text: r.text || '',
+      status: r.status || 'open',
+      channel: r.channel || '',
+      createdAt: r.created_at,
+      closedAt: r.closed_at || null,
+    }))
+    return { threads, foregroundId, commitments }
+  } catch {
+    return null
+  }
+}
+
+export function saveThreadState(threadState) {
+  const db = getDB()
+  const ts = threadState || {}
+  try {
+    const tx = db.transaction(() => {
+      const upsertThread = db.prepare(`
+        INSERT INTO threads (id, topic, signature, label, summary, conclusions, status, created_at, last_event_at, last_event_tick, hit_count, last_summary_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        ON CONFLICT(id) DO UPDATE SET
+          topic = excluded.topic, signature = excluded.signature, label = excluded.label, summary = excluded.summary,
+          conclusions = excluded.conclusions, status = excluded.status,
+          last_event_at = excluded.last_event_at, last_event_tick = excluded.last_event_tick,
+          hit_count = excluded.hit_count, last_summary_at = excluded.last_summary_at,
+          updated_at = datetime('now')
+      `)
+      // 注意：threads 表不 DELETE——线索数据只增不删（被 evict 出内存的线索仍在仓库）。
+      for (const t of (ts.threads || [])) {
+        upsertThread.run(
+          t.id,
+          JSON.stringify(t.topic || []),
+          JSON.stringify(t.signature || t.topic || []),
+          t.label || '',
+          t.summary || '',
+          JSON.stringify(t.conclusions || []),
+          t.status || 'open',
+          t.createdAt || new Date().toISOString(),
+          t.lastEventAt || new Date().toISOString(),
+          t.lastEventTick || 0,
+          t.hitCount || 1,
+          t.lastSummaryAt || ''
+        )
+      }
+      const upsertCommitment = db.prepare(`
+        INSERT INTO commitments (id, thread_id, text, status, channel, created_at, closed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          thread_id = excluded.thread_id, text = excluded.text, status = excluded.status,
+          channel = excluded.channel, closed_at = excluded.closed_at
+      `)
+      for (const c of (ts.commitments || [])) {
+        upsertCommitment.run(
+          c.id, c.threadId, c.text || '', c.status || 'open',
+          c.channel || '', c.createdAt || new Date().toISOString(), c.closedAt || null
+        )
+      }
+      db.prepare(`
+        INSERT INTO thread_state (key, value) VALUES ('foregroundId', ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+      `).run(ts.foregroundId || '')
+      // 内存中被 merge 掉的线索：仓库行标记 closed（不删行）
+      if (Array.isArray(ts.mergedAwayIds)) {
+        const close = db.prepare(`UPDATE threads SET status = 'merged', updated_at = datetime('now') WHERE id = ?`)
+        for (const id of ts.mergedAwayIds) close.run(id)
+      }
+    })
+    tx()
+  } catch (err) {
+    console.warn('[thread-persist] saveThreadState failed:', err.message)
   }
 }
 

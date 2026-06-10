@@ -620,6 +620,29 @@ Always use registered components — inline-template and inline-script are not s
 // follows the design doc (5.x): soft persona / constraints first, then the
 // memory pool, then task + supplemental signals, then this round's directions.
 // =============================================================================
+
+// 线索年龄的人话描述（墙钟时间——tick 在任务/空闲模式下间隔差 40 倍，不可作时间单位）
+function humanizeDurationMs(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return ''
+  const m = Math.floor(ms / 60000)
+  if (m < 1) return 'just now'
+  if (m < 60) return `${m}m ago`
+  const h = Math.floor(m / 60)
+  if (h < 48) return `${h}h ago`
+  return `${Math.floor(h / 24)}d ago`
+}
+
+function humanizeThreadAge(thread, now = Date.now()) {
+  if (!thread) return ''
+  const created = Date.parse(thread.createdAt || '')
+  const last = Date.parse(thread.lastEventAt || '')
+  const createdDesc = Number.isFinite(created) ? humanizeDurationMs(now - created) : ''
+  const lastDesc = Number.isFinite(last) ? humanizeDurationMs(now - last) : ''
+  if (!createdDesc) return ''
+  if (createdDesc === 'just now') return 'just started focusing on this'
+  return `started ${createdDesc}, last active ${lastDesc || 'just now'}`
+}
+
 export function buildContextBlock({
   memories = '',
   recallSummary = '',
@@ -639,6 +662,9 @@ export function buildContextBlock({
   focusFrame = null,
   focusStack = null,
   focusTickCounter = 0,
+  // 线索模型（DynamicMemoryPool.md 第 8 章）：threadView 给了就走 <thread> 渲染，
+  // focusFrame/focusStack 是专注栈时代的遗留入口（旧测试仍走这条路）。
+  threadView = null,
   agentSkills = '',
   // Runtime info（每轮都变化、所以从 system 迁过来）：
   //   currentTime    — 当前 ISO 时间戳
@@ -772,18 +798,72 @@ There is no active current_task. Default to quiet presence, but do not treat qui
 </task>`)
   }
 
+  // <thread> + <threads-background> —— 线索模型（DynamicMemoryPool.md 8.6）注意力视图。
+  //
+  // 与专注栈时代的 <focus> 的本质区别：
+  //   - 前台线索带「开放承诺」行：进度类问询（"干得怎么样"）指的就是它，模型不用猜指代。
+  //   - 后台线索是温度筛过的（warm 才出现），每轮读时重算——错一轮自愈一轮。
+  //   - 没有"已收尾、别展开"的暗示措辞：后台线索是「可随时拾起的并行事项」，不是历史残骸。
+  if (threadView && (threadView.foreground || (threadView.background || []).length > 0)) {
+    const fg = threadView.foreground
+    if (fg && Array.isArray(fg.topic) && fg.topic.length > 0) {
+      const topicAttr = (fg.label || fg.topic.join(', ')).replace(/"/g, "'")
+      const age = humanizeThreadAge(fg)
+      let body = `You are currently focused on this thread. Stay aligned with it unless the user clearly pivots — in which case let it go without making a fuss.`
+      if (threadView.foregroundCommitment) {
+        const c = threadView.foregroundCommitment
+        body += `\n\nOpen commitment (you promised, not yet delivered): "${c.text}". When the user asks how things are going ("怎么样了/进度如何"), they mean THIS — report on it.`
+      }
+      if (fg.summary) {
+        body += `\n\nWhere this thread stands (your own earlier summary): ${fg.summary}`
+      }
+      const conclusions = Array.isArray(fg.conclusions) ? fg.conclusions.filter(c => c !== fg.summary) : []
+      if (conclusions.length > 0) {
+        body += `\n\nEarlier conclusions in this thread (context, do not re-derive):\n${conclusions.map(c => `- ${c}`).join('\n')}`
+      }
+      sections.push(`<thread topic="${topicAttr}" age="${age}">\n${body}\n</thread>`)
+    }
+
+    const bg = (threadView.background || [])
+    if (bg.length > 0) {
+      const lines = []
+      const seen = new Set()
+      for (const { thread } of bg) {
+        if (!thread) continue
+        const label = thread.label || (Array.isArray(thread.topic) ? thread.topic.join(' / ') : '')
+        const lastConclusion = Array.isArray(thread.conclusions) && thread.conclusions.length > 0
+          ? thread.conclusions[thread.conclusions.length - 1]
+          : (thread.summary || '')
+        const key = (lastConclusion || label).trim()
+        if (!key || seen.has(key)) continue
+        seen.add(key)
+        const commitment = (threadView.openCommitments || []).find(c => c.threadId === thread.id)
+        const commitmentTag = commitment ? ` [open commitment: ${String(commitment.text).slice(0, 60)}]` : ''
+        lines.push(lastConclusion ? `- ${lastConclusion}${commitmentTag}` : `- (still forming; keywords: ${label})${commitmentTag}`)
+      }
+      if (lines.length > 0) {
+        sections.push(`<threads-background>
+Other recent threads you and the user have open — parallel matters, neither tasks to resume on your own nor closed history. The first-person "我" in each line is you yourself; anyone else referred to is the user, so do not absorb the user's words or feelings as your own. Pick one up only when the user brings it back or its commitment calls for action.
+${lines.join('\n')}
+</threads-background>`)
+      }
+    }
+  }
+
   // <focus> + <focus-history> —— 注意力焦点感知信号（非命令）
   //
-  // 焦点是连续判断的副产品：让模型「知道自己在关注什么」，但用户一旦换话题就立刻松手。
+  // 专注栈时代的遗留渲染：threadView 没给（旧调用点/旧测试）才走这条路。
   // 多帧栈语义：
   //   - 栈顶帧 → <focus>（当前主线）
   //   - 栈下面的帧 → <focus-history>（未完成的背景专注，可能已被压缩回填出结论）
   //   - 栈顶自己累积的 conclusions（子主题压缩回填上来的）也附在 <focus> 段末尾
   //
   // 向后兼容：旧调用点只传 focusFrame 时，把它当作单元素栈处理。
-  const effectiveStack = Array.isArray(focusStack) && focusStack.length > 0
-    ? focusStack
-    : (focusFrame ? [focusFrame] : [])
+  const effectiveStack = threadView
+    ? []
+    : (Array.isArray(focusStack) && focusStack.length > 0
+        ? focusStack
+        : (focusFrame ? [focusFrame] : []))
 
   if (effectiveStack.length > 0) {
     const topIdx = effectiveStack.length - 1

@@ -10,6 +10,24 @@ let wechatAccessToken = null
 let wechatAccessTokenExpiresAt = 0
 let wechatTokenRefreshing = null
 
+function normalizeSocialPayload(payload) {
+  if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+    return {
+      text: String(payload.text ?? payload.content ?? '').trim(),
+      mediaPath: String(payload.mediaPath ?? payload.media_path ?? '').trim(),
+      mediaKind: String(payload.mediaKind ?? payload.media_kind ?? '').trim(),
+      fileName: String(payload.fileName ?? payload.file_name ?? '').trim(),
+      size: Number(payload.size || 0) || 0,
+    }
+  }
+  return { text: String(payload ?? '').trim(), mediaPath: '', mediaKind: '', fileName: '', size: 0 }
+}
+
+function rejectUnsupportedMedia(platform, message) {
+  if (!message.mediaPath) return null
+  return { ok: false, error: `${platform} media send is not supported by this connector yet` }
+}
+
 async function sendDiscord({ channelId }, content) {
   const token = env('DISCORD_BOT_TOKEN')
   if (!token) return { ok: false, skipped: true, reason: 'DISCORD_BOT_TOKEN not configured' }
@@ -107,26 +125,26 @@ async function sendWeComWebhook(target, content) {
   return { ok: true, platform: 'wecom-webhook' }
 }
 
-async function sendClawbot({ userId }, content) {
-  return sendClawbotMessage(userId, content)
+async function sendClawbot({ userId }, message) {
+  return sendClawbotMessage(userId, message)
 }
 
-export async function dispatchSocialMessage(targetId, content) {
+export async function dispatchSocialMessage(targetId, payload) {
   const target = parseSocialTarget(targetId)
   if (!target) return null
+  const message = normalizeSocialPayload(payload)
   switch (target.platform) {
     case 'discord':
-      return await sendDiscord(target, content)
+      return rejectUnsupportedMedia('discord', message) || await sendDiscord(target, message.text)
     case 'feishu':
-      return await sendFeishu(target, content)
+      return rejectUnsupportedMedia('feishu', message) || await sendFeishu(target, message.text)
     case 'wechat-official':
-      return await sendWechatOfficial(target, content)
+      return rejectUnsupportedMedia('wechat-official', message) || await sendWechatOfficial(target, message.text)
     case 'wecom-webhook':
-      return await sendWeComWebhook(target, content)
+      return rejectUnsupportedMedia('wecom-webhook', message) || await sendWeComWebhook(target, message.text)
     case 'wechat-clawbot':
-      return sendClawbot(target, content)
+      return sendClawbot(target, message)
     default:
       return null
   }
 }
-

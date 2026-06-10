@@ -1,4 +1,13 @@
-import { WeChatClient } from 'wechat-ilink-client'
+import crypto from 'crypto'
+import fs from 'fs/promises'
+import path from 'path'
+import {
+  WeChatClient,
+  UploadMediaType,
+  aesEcbPaddedSize,
+  encryptAesEcb,
+  getMimeFromFilename,
+} from 'wechat-ilink-client'
 import { getClawbotCredentials, setClawbotCredentials, clearClawbotCredentials } from '../config.js'
 import { upsertClawbotToken, getAllClawbotTokens } from '../db.js'
 
@@ -6,16 +15,149 @@ let client = null
 let currentQrUrl = null   // set during login, cleared after scan
 let clawbotStatus = 'idle' // idle | qr_pending | connected | error
 
+function normalizeClawbotPayload(payload) {
+  if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+    return {
+      text: String(payload.text ?? payload.content ?? '').trim(),
+      mediaPath: String(payload.mediaPath ?? payload.media_path ?? '').trim(),
+      mediaKind: String(payload.mediaKind ?? payload.media_kind ?? '').trim(),
+      fileName: String(payload.fileName ?? payload.file_name ?? '').trim(),
+    }
+  }
+  return { text: String(payload ?? '').trim(), mediaPath: '', mediaKind: '', fileName: '' }
+}
+
+function inferUploadMediaType(filePath) {
+  const mime = getMimeFromFilename(filePath)
+  if (mime.startsWith('image/')) return { mediaType: UploadMediaType.IMAGE, kind: 'image' }
+  if (mime.startsWith('video/')) return { mediaType: UploadMediaType.VIDEO, kind: 'video' }
+  return { mediaType: UploadMediaType.FILE, kind: 'file' }
+}
+
+function pickUploadUrl(uploadUrlResp, filekey, cdnBaseUrl) {
+  const directUrl = uploadUrlResp?.upload_full_url
+    || uploadUrlResp?.full_upload_url
+    || uploadUrlResp?.upload_url
+  if (directUrl) return String(directUrl)
+
+  const uploadParam = uploadUrlResp?.upload_param
+    || uploadUrlResp?.uploadParam
+    || uploadUrlResp?.encrypted_query_param
+  if (!uploadParam) return ''
+
+  const url = new URL('/c2c/upload', cdnBaseUrl || 'https://novac2c.cdn.weixin.qq.com')
+  url.searchParams.set('encrypted_query_param', String(uploadParam))
+  url.searchParams.set('filekey', filekey)
+  const taskId = uploadUrlResp?.taskid || uploadUrlResp?.task_id
+  if (taskId) url.searchParams.set('taskid', String(taskId))
+  return url.toString()
+}
+
+async function uploadEncryptedBuffer(uploadUrl, plaintext, aeskey) {
+  const ciphertext = encryptAesEcb(plaintext, aeskey)
+  let lastError = null
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const res = await fetch(uploadUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: new Uint8Array(ciphertext),
+      })
+      if (res.status >= 400 && res.status < 500) {
+        const errMsg = res.headers.get('x-error-message') || await res.text()
+        throw new Error(`CDN upload client error ${res.status}: ${errMsg}`)
+      }
+      if (res.status !== 200) {
+        const errMsg = res.headers.get('x-error-message') || `status ${res.status}`
+        throw new Error(`CDN upload server error: ${errMsg}`)
+      }
+      const downloadParam = res.headers.get('x-encrypted-param') || ''
+      if (!downloadParam) throw new Error('CDN upload response missing x-encrypted-param header')
+      return downloadParam
+    } catch (err) {
+      lastError = err
+      if (err?.message?.includes('client error')) throw err
+      if (attempt >= 3) break
+    }
+  }
+  throw lastError || new Error('CDN upload failed after 3 attempts')
+}
+
+async function uploadMediaViaClawbotApi(userId, filePath) {
+  const plaintext = await fs.readFile(filePath)
+  const rawsize = plaintext.length
+  const rawfilemd5 = crypto.createHash('md5').update(plaintext).digest('hex')
+  const filesize = aesEcbPaddedSize(rawsize)
+  const filekey = crypto.randomBytes(16).toString('hex')
+  const aeskey = crypto.randomBytes(16)
+  const { mediaType, kind } = inferUploadMediaType(filePath)
+
+  const uploadUrlResp = await client.api.getUploadUrl({
+    filekey,
+    media_type: mediaType,
+    to_user_id: userId,
+    rawsize,
+    rawfilemd5,
+    filesize,
+    no_need_thumb: true,
+    aeskey: aeskey.toString('hex'),
+  })
+  const ret = uploadUrlResp?.ret ?? uploadUrlResp?.code ?? uploadUrlResp?.errcode
+  if (ret != null && ret !== 0) {
+    const errMsg = uploadUrlResp?.err_msg || uploadUrlResp?.errmsg || uploadUrlResp?.message || uploadUrlResp?.msg || ''
+    throw new Error(`getUploadUrl rejected: ret=${ret} ${errMsg}`.trim())
+  }
+
+  const uploadUrl = pickUploadUrl(uploadUrlResp, filekey, client.api?.cdnBaseUrl)
+  if (!uploadUrl) throw new Error(`getUploadUrl returned no upload URL: ${JSON.stringify(uploadUrlResp)}`)
+
+  const downloadParam = await uploadEncryptedBuffer(uploadUrl, plaintext, aeskey)
+  return {
+    kind,
+    uploaded: {
+      filekey,
+      downloadEncryptedQueryParam: downloadParam,
+      aeskey: aeskey.toString('hex'),
+      fileSize: rawsize,
+      fileSizeCiphertext: filesize,
+    },
+  }
+}
+
+async function sendClawbotMedia(userId, message) {
+  const contextToken = client.contextTokens instanceof Map ? client.contextTokens.get(userId) : ''
+  if (!contextToken) throw new Error(`No context_token for user ${userId}. Receive a message from them first.`)
+  const { kind, uploaded } = await uploadMediaViaClawbotApi(userId, message.mediaPath)
+  const caption = message.text || undefined
+  if (kind === 'image') {
+    await client.sendUploadedImage(userId, uploaded, caption, contextToken)
+  } else if (kind === 'video') {
+    await client.sendUploadedVideo(userId, uploaded, caption, contextToken)
+  } else {
+    await client.sendUploadedFile(userId, message.fileName || path.basename(message.mediaPath), uploaded, caption, contextToken)
+  }
+  return kind
+}
+
 // Called by dispatch.js to send replies back to WeChat
-export async function sendClawbotMessage(userId, content) {
+export async function sendClawbotMessage(userId, payload) {
+  const message = normalizeClawbotPayload(payload)
+  if (!message.text && !message.mediaPath) {
+    return { ok: false, reason: 'empty wechat-clawbot message' }
+  }
   if (!client || clawbotStatus !== 'connected') {
     return { ok: false, reason: 'wechat-clawbot not connected' }
   }
   try {
-    await client.sendText(userId, content)
-    return { ok: true, platform: 'wechat-clawbot' }
+    if (message.mediaPath) {
+      const kind = await sendClawbotMedia(userId, message)
+      return { ok: true, platform: 'wechat-clawbot', kind }
+    }
+    await client.sendText(userId, message.text)
+    return { ok: true, platform: 'wechat-clawbot', kind: 'text' }
   } catch (err) {
-    console.error(`[ClawBot] sendText 失败: ${err.message}`)
+    const action = message.mediaPath ? 'sendMedia' : 'sendText'
+    console.error(`[ClawBot] ${action} failed: ${err.message}`)
     return { ok: false, error: err.message }
   }
 }

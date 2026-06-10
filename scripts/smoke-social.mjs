@@ -2,6 +2,8 @@ import http from 'http'
 import crypto from 'crypto'
 import { startAPI } from '../src/api.js'
 import { popMessage } from '../src/queue.js'
+import { dispatchSocialMessage } from '../src/social/dispatch.js'
+import { executeTool } from '../src/capabilities/executor.js'
 
 const port = 39000 + Math.floor(Math.random() * 1000)
 process.env.FEISHU_VERIFICATION_TOKEN = 'smoke-feishu-token'
@@ -74,6 +76,32 @@ try {
     || wecomMsg?.channel !== 'WECOM'
     || wecomMsg?.content !== 'hello wecom'
   ) throw new Error('WeCom message enqueue failed')
+
+  const unsupportedOfficialMedia = await dispatchSocialMessage('wechat:official:from_openid', {
+    text: 'caption',
+    mediaPath: 'package.json',
+    mediaKind: 'file',
+  })
+  if (unsupportedOfficialMedia?.ok !== false || !/media send is not supported/.test(unsupportedOfficialMedia.error || '')) {
+    throw new Error('Unsupported media dispatch should be rejected for WeChat official')
+  }
+
+  const notConnectedClawbotMedia = await dispatchSocialMessage('wechat:clawbot:smoke_user', {
+    text: 'caption',
+    mediaPath: 'package.json',
+    mediaKind: 'file',
+  })
+  if (notConnectedClawbotMedia?.ok !== false || notConnectedClawbotMedia?.reason !== 'wechat-clawbot not connected') {
+    throw new Error('ClawBot media dispatch did not reach ClawBot connector')
+  }
+
+  const unsupportedToolMedia = await executeTool('send_message', {
+    target_id: 'wechat:official:from_openid',
+    media_path: 'package.json',
+  }, { source: 'smoke-test' })
+  if (!unsupportedToolMedia.includes('媒体消息当前仅支持微信 ClawBot')) {
+    throw new Error('send_message should reject media for non-ClawBot targets')
+  }
 
   console.log('[PASS] social smoke')
 } finally {

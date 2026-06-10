@@ -1,4 +1,6 @@
 import crypto from 'crypto'
+import fs from 'fs'
+import path from 'path'
 import { nowTimestamp } from '../time.js'
 import { normalizeConversationPartyId, upsertPrefetchTask, removePrefetchTask, listPrefetchTasks, insertConversation, setConfig as dbSetConfig, markConversationOpenQuestion, findRecentJarvisDuplicate, getRecentActionLogs } from '../db.js'
 import { emitEvent, emitUICommand, hasACUIClient, addActiveUICard, setStickyEvent } from '../events.js'
@@ -40,6 +42,9 @@ import { lookupReplyTarget, normalizeChannel, suggestProactiveChannel } from '..
 //   当前轮输出，只在后续轮该悬念过期时降权，避免代词被钩偏。
 const FOLLOWUP_VERB_RE = /(要不要|需不需要|要么|要|想|需要|是否|帮我?|给我?|行不行|可以吗|好吗|可否|能否)/
 const FOLLOWUP_EN_RE = /\b(should|want|need|shall|would you like|do you want|may i|can i)\b/i
+const OUTBOUND_IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'])
+const OUTBOUND_VIDEO_EXTS = new Set(['.mp4', '.mov', '.webm', '.mkv', '.avi'])
+
 export function detectOpenFollowupQuestion(text = '') {
   const s = String(text || '').trim()
   if (!s) return false
@@ -49,6 +54,76 @@ export function detectOpenFollowupQuestion(text = '') {
   const segs = s.split(/[。!！\n]+/).filter(Boolean)
   const lastSeg = segs[segs.length - 1] || s
   return FOLLOWUP_VERB_RE.test(lastSeg) || FOLLOWUP_EN_RE.test(lastSeg)
+}
+
+function inferOutboundMediaKind(filePath = '') {
+  const ext = path.extname(filePath).toLowerCase()
+  if (OUTBOUND_IMAGE_EXTS.has(ext)) return 'image'
+  if (OUTBOUND_VIDEO_EXTS.has(ext)) return 'video'
+  return 'file'
+}
+
+function normalizeOptionalPath(value) {
+  const text = value == null ? '' : String(value).trim()
+  return text || ''
+}
+
+function prepareOutboundMedia({ image_path, media_path } = {}) {
+  const imagePath = normalizeOptionalPath(image_path)
+  const mediaPath = normalizeOptionalPath(media_path)
+  if (imagePath && mediaPath && path.resolve(imagePath) !== path.resolve(mediaPath)) {
+    return { error: 'Provide only one of image_path or media_path.' }
+  }
+
+  const rawPath = imagePath || mediaPath
+  if (!rawPath) return null
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(rawPath)) {
+    return { error: 'media_path must be a local file path, not a URL.' }
+  }
+
+  let resolvedPath = ''
+  try {
+    resolvedPath = path.resolve(rawPath)
+  } catch (err) {
+    return { error: `Invalid media path: ${err.message}` }
+  }
+
+  let stat = null
+  try {
+    stat = fs.statSync(resolvedPath)
+  } catch {
+    return { error: `Media file does not exist: ${resolvedPath}` }
+  }
+  if (!stat.isFile()) return { error: `Media path is not a file: ${resolvedPath}` }
+
+  const kind = inferOutboundMediaKind(resolvedPath)
+  if (imagePath && kind !== 'image') {
+    return { error: 'image_path must point to an image file (.png, .jpg, .jpeg, .gif, .webp, .bmp).' }
+  }
+
+  return {
+    path: resolvedPath,
+    kind,
+    fileName: path.basename(resolvedPath),
+    size: stat.size,
+  }
+}
+
+function formatOutboundConversationContent(text, media) {
+  if (!media) return text
+  const marker = `[${media.kind}] ${media.fileName}`
+  return text ? `${text}\n${marker}` : marker
+}
+
+function makeSocialPayload(text, media) {
+  if (!media) return text
+  return {
+    text,
+    mediaPath: media.path,
+    mediaKind: media.kind,
+    fileName: media.fileName,
+    size: media.size,
+  }
 }
 
 // 工具执行器：根据工具名和参数执行对应操作，返回结果字符串
@@ -292,32 +367,40 @@ function resolveDeliveryTarget(resolvedId, channelPref, context = {}) {
 }
 
 // send_message：投递到指定渠道（本地 SSE 或外部平台），并写入 conversations 表
-async function execSendMessage({ target_id, content, channel = 'AUTO' }, context = {}) {
+async function execSendMessage({ target_id, content = '', channel = 'AUTO', image_path, media_path }, context = {}) {
   if (!target_id) return '错误：未提供 target_id'
-  if (!content?.trim()) return '错误：未提供消息内容'
 
   const resolvedId = normalizeConversationPartyId(target_id)
-  const cleanedContent = String(content).trim()
+  const cleanedContent = content == null ? '' : String(content).trim()
+  const media = prepareOutboundMedia({ image_path, media_path })
+  if (media?.error) return `错误：${media.error}`
+  if (!cleanedContent && !media) return '错误：未提供消息内容'
+  const outboundContent = formatOutboundConversationContent(cleanedContent, media)
 
   const delivery = resolveDeliveryTarget(resolvedId, channel, context)
   if (delivery.error) return `错误：${delivery.error}`
+  if (media && (delivery.isLocal || !delivery.externalTargetId || !/^wechat:clawbot:/i.test(delivery.externalTargetId))) {
+    const resolvedTarget = delivery.externalTargetId || (delivery.isLocal ? 'TUI' : 'unknown')
+    return `错误：媒体消息当前仅支持微信 ClawBot（wechat:clawbot:*），当前解析目标为 ${resolvedTarget}`
+  }
 
   // 防重发：对同一 target 发过一字不差、且对方此后没回过话的内容 → 拒绝（不论隔多久）。
   //   常见诱因：启动期 directions（delegation ask 等）在用户回应前每 tick 都注入相同指令，
   //   模型每次都被驱动着发一遍同一句话。让 send_message 直接拦下来，并告知模型该停。
   //   判定细节见 db.findRecentJarvisDuplicate：以"用户是否已回应"为界，5 分钟窗只是兜底下限。
-  const dup = findRecentJarvisDuplicate(resolvedId, cleanedContent, 5 * 60 * 1000)
+  const dup = findRecentJarvisDuplicate(resolvedId, outboundContent, 5 * 60 * 1000)
   if (dup) {
     const ageSec = Math.max(0, Math.round(dup.ageMs / 1000))
     const ageText = ageSec >= 60 ? `${Math.round(ageSec / 60)} 分钟前` : `${ageSec} 秒前`
-    const preview = cleanedContent.length > 50 ? cleanedContent.slice(0, 50) + '…' : cleanedContent
+    const preview = outboundContent.length > 50 ? outboundContent.slice(0, 50) + '…' : outboundContent
     return `错误：这条消息（"${preview}"）你在 ${ageText}已发给 ${resolvedId} 一次（conversation id=${dup.id}），对方至今没有回应。在对方回应之前逐字重发同一句话是无效且让人反感的行为，无论隔了多久。本轮不要再调用 send_message；保持安静，等对方主动开口再继续。如果确有新进展，也要换成带新信息的表达，不要照搬原话。`
   }
 
   const timestamp = nowTimestamp()
   const channelLabel = delivery.deliveryChannel || (delivery.isLocal ? 'TUI' : '')
   console.log(`\n[消息发送] → ${resolvedId}${delivery.externalTargetId ? ` via ${delivery.externalTargetId}` : ''}${channelLabel ? ` [${channelLabel}]` : ''}`)
-  console.log(`  ${cleanedContent}`)
+  console.log(`  ${outboundContent}`)
+  if (media) console.log(`  media_path: ${media.path}`)
   console.log(`  时间：${timestamp}`)
 
   // 顺序：先写数据库（source of truth），再广播 SSE，最后外部投递。
@@ -331,7 +414,7 @@ async function execSendMessage({ target_id, content, channel = 'AUTO' }, context
     role: 'jarvis',
     from_id: 'jarvis',
     to_id: resolvedId,
-    content: cleanedContent,
+    content: outboundContent,
     timestamp,
     channel: channelLabel,
     external_party_id: delivery.externalTargetId || '',
@@ -345,24 +428,25 @@ async function execSendMessage({ target_id, content, channel = 'AUTO' }, context
   emitEvent('message', {
     from: 'consciousness',
     to: resolvedId,
-    content: cleanedContent,
+    content: outboundContent,
     timestamp,
     channel: channelLabel,
     external_party_id: delivery.externalTargetId || '',
+    ...(media ? { media_path: media.path, media_kind: media.kind, file_name: media.fileName } : {}),
   })
 
   let socialResult = null
   if (!delivery.isLocal && delivery.externalTargetId) {
     try {
-      socialResult = await dispatchSocialMessage(delivery.externalTargetId, cleanedContent)
+      socialResult = await dispatchSocialMessage(delivery.externalTargetId, makeSocialPayload(cleanedContent, media))
     } catch (err) {
       console.warn(`[消息发送] 外部投递异常 (${delivery.deliveryChannel}): ${err.message}`)
       socialResult = { ok: false, error: err.message }
     }
   }
 
-  if (socialResult?.ok) return `消息已发送至 ${resolvedId}（${socialResult.platform} 已投递）`
-  if (socialResult?.skipped) return `消息已发送至 ${resolvedId}（社交平台未配置：${socialResult.reason}）`
+  if (socialResult?.ok) return `${media ? '媒体' : '消息'}已发送至 ${resolvedId}（${socialResult.platform} 已投递）`
+  if (socialResult?.skipped) return `${media ? '媒体' : '消息'}已发送至 ${resolvedId}（社交平台未配置：${socialResult.reason}）`
   if (socialResult && socialResult.ok === false) {
     const reason = socialResult.reason || socialResult.error || 'unknown'
     // wechat-clawbot 缺 context_token 是该渠道最常见的失败：重启后内存 Map 清空、或用户从未入站。

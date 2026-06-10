@@ -71,7 +71,15 @@ export const commsSchemas = {
           },
           content: {
             type: 'string',
-            description: 'Message content. Delivered verbatim — keep it tight, lead with meaning, no service-tail fluff or duplicated lines.'
+            description: 'Message text. Delivered verbatim. Required unless image_path or media_path is provided. When sending media, this becomes the optional caption.'
+          },
+          image_path: {
+            type: 'string',
+            description: 'Optional local image path to send through WeChat ClawBot. Supported image extensions: .png, .jpg, .jpeg, .gif, .webp, .bmp. Use content as an optional caption.'
+          },
+          media_path: {
+            type: 'string',
+            description: 'Optional local media path to send through WeChat ClawBot. Images are sent as images, videos as videos, and other files as file attachments. Use content as an optional caption.'
           },
           channel: {
             type: 'string',
@@ -79,7 +87,7 @@ export const commsSchemas = {
             description: 'Optional delivery channel. AUTO (default) follows the channel of the user\'s most recent message — if they last reached you on WECHAT, your message goes to WECHAT (this also holds for follow-ups triggered later by reminders or ticks). Pass an explicit channel (e.g. TUI for long-form output that belongs on the local UI) to override.'
           }
         },
-        required: ['target_id', 'content']
+        required: ['target_id']
       }
     }
   },

@@ -174,7 +174,7 @@ const createSettingsModal = () => `
         <button class="settings-nav-item" data-tab="llm" type="button">LLM 模型</button>
         <button class="settings-nav-item" data-tab="media" type="button">媒体能力</button>
         <button class="settings-nav-item" data-tab="social" type="button">社交媒体</button>
-        <button class="settings-nav-item" data-tab="voice" type="button">语音识别</button>
+        <button class="settings-nav-item" data-tab="voice" type="button">语音对话</button>
         <button class="settings-nav-item" data-tab="web-search" type="button">上网搜索</button>
         <button class="settings-nav-item" data-tab="security" type="button">安全沙箱</button>
         <button class="settings-nav-item" data-tab="update" type="button">更新</button>
@@ -439,6 +439,14 @@ const createSettingsModal = () => `
                 <option value="en-US">English (US)</option>
               </select>
             </div>
+            <div class="settings-row">
+              <label class="settings-label" for="voice-mic-select">麦克风</label>
+              <select class="settings-select" id="voice-mic-select">
+                <option value="">系统默认麦克风</option>
+              </select>
+              <button class="settings-save-btn" id="voice-refresh-mics" type="button" style="padding:0 10px;">刷新</button>
+            </div>
+            <p class="settings-hint" id="voice-mic-status" style="margin-top:-2px;">更换麦克风后，重新开启语音对话生效。</p>
             <div class="settings-row">
               <label class="settings-label" for="voice-auto-send">识别后自动发送</label>
               <input id="voice-auto-send" type="checkbox" checked style="width:auto;flex:none;">

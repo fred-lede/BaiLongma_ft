@@ -2466,6 +2466,9 @@ function initTTSSettings() {
   const voiceFeedback   = document.getElementById("settings-voice-feedback");
   const voiceThreshSlider = document.getElementById("settings-voice-threshold");
   const voiceThreshVal    = document.getElementById("settings-voice-threshold-val");
+  const voiceMicSelect    = document.getElementById("voice-mic-select");
+  const voiceRefreshMicsBtn = document.getElementById("voice-refresh-mics");
+  const voiceMicStatus    = document.getElementById("voice-mic-status");
 
   if (!settingsBtn || !overlay) return;
 
@@ -2829,6 +2832,7 @@ function initTTSSettings() {
   const VOICE_AUTO_MIC_KEY   = "bailongma-voice-auto-mic";
   const VOICE_THRESHOLD_KEY  = "bailongma-voice-threshold";
   const VOICE_PROVIDER_KEY   = "bailongma-voice-provider";
+  const VOICE_MIC_DEVICE_KEY = "bailongma-voice-mic-device-id";
 
   function applyVoiceProviderUI(provider) {
     const panels = {
@@ -2866,6 +2870,75 @@ function initTTSSettings() {
     return null;
   }
 
+  function setVoiceMicStatus(message, isError = false) {
+    if (!voiceMicStatus) return;
+    voiceMicStatus.textContent = message;
+    voiceMicStatus.style.color = isError ? "var(--warm)" : "var(--dim)";
+  }
+
+  async function loadMicrophoneDevices({ requestPermission = false } = {}) {
+    if (!voiceMicSelect) return;
+    if (!navigator.mediaDevices?.enumerateDevices) {
+      voiceMicSelect.disabled = true;
+      setVoiceMicStatus("当前环境不支持麦克风设备枚举，将使用系统默认麦克风。", true);
+      return;
+    }
+
+    const savedDeviceId = localStorage.getItem(VOICE_MIC_DEVICE_KEY) || "";
+    const preferredDeviceId = voiceMicSelect.value || savedDeviceId;
+    let permissionError = null;
+
+    voiceMicSelect.disabled = true;
+    if (voiceRefreshMicsBtn) voiceRefreshMicsBtn.disabled = true;
+
+    try {
+      if (requestPermission && navigator.mediaDevices.getUserMedia) {
+        try {
+          const permissionStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          permissionStream.getTracks().forEach(track => track.stop());
+        } catch (err) {
+          permissionError = err;
+        }
+      }
+
+      const devices = (await navigator.mediaDevices.enumerateDevices())
+        .filter(device => device.kind === "audioinput");
+
+      voiceMicSelect.innerHTML = "";
+      const defaultOption = document.createElement("option");
+      defaultOption.value = "";
+      defaultOption.textContent = "系统默认麦克风";
+      voiceMicSelect.appendChild(defaultOption);
+
+      devices.forEach((device, index) => {
+        const option = document.createElement("option");
+        option.value = device.deviceId;
+        option.textContent = device.label || `麦克风 ${index + 1}`;
+        voiceMicSelect.appendChild(option);
+      });
+
+      const selectedStillExists = !preferredDeviceId || devices.some(device => device.deviceId === preferredDeviceId);
+      voiceMicSelect.value = selectedStillExists ? preferredDeviceId : "";
+      if (!selectedStillExists && savedDeviceId) localStorage.removeItem(VOICE_MIC_DEVICE_KEY);
+
+      const hasLabels = devices.some(device => device.label);
+      if (permissionError) {
+        setVoiceMicStatus("未获得麦克风权限，仍可使用系统默认麦克风；点刷新可重新授权。", true);
+      } else if (!devices.length) {
+        setVoiceMicStatus("未检测到独立麦克风，将使用系统默认麦克风。");
+      } else if (!hasLabels) {
+        setVoiceMicStatus(`已检测到 ${devices.length} 个麦克风；点刷新并授权后可显示完整名称。`);
+      } else {
+        setVoiceMicStatus(`已检测到 ${devices.length} 个麦克风。更换后重新开启语音对话生效。`);
+      }
+    } catch {
+      setVoiceMicStatus("麦克风列表读取失败，将使用系统默认麦克风。", true);
+    } finally {
+      voiceMicSelect.disabled = false;
+      if (voiceRefreshMicsBtn) voiceRefreshMicsBtn.disabled = false;
+    }
+  }
+
   const voiceProviderSelect = document.getElementById("voice-provider-select");
   if (voiceProviderSelect) {
     voiceProviderSelect.addEventListener("change", () => applyVoiceProviderUI(voiceProviderSelect.value));
@@ -2892,6 +2965,18 @@ function initTTSSettings() {
     });
   }
 
+  voiceRefreshMicsBtn?.addEventListener("click", () => {
+    loadMicrophoneDevices({ requestPermission: true });
+  });
+
+  voiceMicSelect?.addEventListener("change", () => {
+    setVoiceMicStatus("保存后，重新开启语音对话生效。");
+  });
+
+  navigator.mediaDevices?.addEventListener?.("devicechange", () => {
+    if (!overlay.hidden) loadMicrophoneDevices();
+  });
+
   async function loadVoiceSettings() {
     const langSelect = document.getElementById("voice-lang-select");
     const autoSend   = document.getElementById("voice-auto-send");
@@ -2902,6 +2987,7 @@ function initTTSSettings() {
     const savedThresh = parseFloat(localStorage.getItem(VOICE_THRESHOLD_KEY) || "0.008");
     if (voiceThreshSlider) voiceThreshSlider.value = String(savedThresh);
     if (voiceThreshVal)    voiceThreshVal.textContent = savedThresh.toFixed(3);
+    await loadMicrophoneDevices();
 
     let savedProvider = localStorage.getItem(VOICE_PROVIDER_KEY) || "aliyun";
     try {
@@ -2930,14 +3016,19 @@ function initTTSSettings() {
       const autoMic   = document.getElementById("voice-auto-mic")?.checked ?? false;
       const threshold = parseFloat(voiceThreshSlider?.value ?? "0.008");
       const provider  = voiceProviderSelect?.value || "aliyun";
+      const micDeviceId = voiceMicSelect?.value || "";
 
       localStorage.setItem(VOICE_LANG_KEY,      lang);
       localStorage.setItem(VOICE_AUTO_SEND_KEY,  String(autoSend));
       localStorage.setItem(VOICE_AUTO_MIC_KEY,   String(autoMic));
       localStorage.setItem(VOICE_THRESHOLD_KEY,  String(threshold));
       localStorage.setItem(VOICE_PROVIDER_KEY,   provider);
+      if (micDeviceId) localStorage.setItem(VOICE_MIC_DEVICE_KEY, micDeviceId);
+      else localStorage.removeItem(VOICE_MIC_DEVICE_KEY);
 
       window.dispatchEvent(new CustomEvent("bailongma:voice-threshold", { detail: { threshold } }));
+      const micLabel = voiceMicSelect?.selectedOptions?.[0]?.textContent || "系统默认麦克风";
+      setVoiceMicStatus(`当前麦克风：${micLabel}。重新开启语音对话生效。`);
 
       const body = { voiceProvider: provider };
       const aliyunKey = document.getElementById("voice-aliyun-key")?.value?.trim();

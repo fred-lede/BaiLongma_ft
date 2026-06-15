@@ -82,6 +82,7 @@ export const BARGEIN_THRESHOLD = 0.09; // 振幅阈值（高于环境噪声和 A
 
 const CLOUD_WS_URL  = 'ws://127.0.0.1:3721/voice/cloud';
 const VOICE_PROVIDER_KEY = 'bailongma-voice-provider';
+const VOICE_MIC_DEVICE_KEY = 'bailongma-voice-mic-device-id';
 
 // 采集分块大小（样本数）：AudioWorklet 累积到该样本数再投递；ScriptProcessor 回退也用它。
 // 2048 @ 16kHz = 128ms/块，权衡延迟与消息/网络开销。
@@ -527,7 +528,7 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
   function sendRecognizedVoiceText() {
     if (!lastTranscriptText) return;
     // 直接把识别文本作为消息发送，完全不经过聊天输入框(msg-input)——不留草稿、不会被失焦误发。
-    getSendMessage?.({ channel: '语音识别', label: 'You · 语音识别', text: lastTranscriptText });
+    getSendMessage?.({ channel: '语音识别', label: 'You · 语音对话', text: lastTranscriptText });
     // 发出后清空累积：已发的内容不能再被后续语音追加/重发。
     // （此处只清文字层，reconnectBuffer 是尚未识别的原始音频，由音频层自管理）
     resetTranscriptAccumulation();
@@ -567,26 +568,51 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
   }
 
   // ─── 麦克风捕获（两种模式共用） ───
+  function getSelectedMicDeviceId() {
+    return (localStorage.getItem(VOICE_MIC_DEVICE_KEY) || '').trim();
+  }
+
+  function makeAudioConstraints(deviceId = getSelectedMicDeviceId()) {
+    return {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: false,
+      channelCount: 1,
+      ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+    };
+  }
+
+  function attachMicStream(stream) {
+    const actx = new (window.AudioContext || window.webkitAudioContext)();
+    const src = actx.createMediaStreamSource(stream);
+    const analyser = actx.createAnalyser();
+    analyser.fftSize = 256;
+    analyser.smoothingTimeConstant = 0.5;
+    const dataArray = new Uint8Array(analyser.frequencyBinCount);
+    src.connect(analyser);
+    micData = { analyser, dataArray, stream, actx, src };
+    return stream;
+  }
+
   async function startMic() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: false,
-          channelCount: 1,
-        },
+        audio: makeAudioConstraints(),
       });
-      const actx = new (window.AudioContext || window.webkitAudioContext)();
-      const src = actx.createMediaStreamSource(stream);
-      const analyser = actx.createAnalyser();
-      analyser.fftSize = 256;
-      analyser.smoothingTimeConstant = 0.5;
-      const dataArray = new Uint8Array(analyser.frequencyBinCount);
-      src.connect(analyser);
-      micData = { analyser, dataArray, stream, actx, src };
-      return stream;
+      return attachMicStream(stream);
     } catch (e) {
+      const shouldFallbackToDefault = getSelectedMicDeviceId()
+        && e?.name !== 'NotAllowedError'
+        && e?.name !== 'SecurityError';
+      if (shouldFallbackToDefault) {
+        try {
+          localStorage.removeItem(VOICE_MIC_DEVICE_KEY);
+          const fallbackStream = await navigator.mediaDevices.getUserMedia({
+            audio: makeAudioConstraints(''),
+          });
+          return attachMicStream(fallbackStream);
+        } catch {}
+      }
       // 权限拒绝时球体变红，不在 transcript 显示文字
       setStatus('error');
       return null;

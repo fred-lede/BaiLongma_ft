@@ -307,8 +307,8 @@ export function initChat({
       run: () => openSettings?.("llm"),
     },
     {
-      cmd: "/asr", keys: ["asr", "语音识别", "shibie"],
-      label: "配置语音识别", desc: "麦克风转文字 · 阿里云/腾讯云/讯飞/本地",
+      cmd: "/voice", keys: ["voice", "asr", "语音对话", "语音识别", "shibie"],
+      label: "配置语音对话", desc: "麦克风转文字 + 回复转语音",
       run: () => openSettings?.("voice"),
     },
     {

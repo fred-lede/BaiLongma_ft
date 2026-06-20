@@ -18,7 +18,7 @@ import {
   ensureThreadState, attributeUserMessage, buildThreadView, getForegroundThread,
   openCommitment, closeCommitment, touchCommitmentThread, latestOpenCommitment,
   mergeThreads, migrateFocusStackToThreads, threadTemperature, makeThread,
-  isIndexicalProgressQuery, isLikelyOneOffLeaf,
+  isIndexicalProgressQuery, isLikelyOneOffLeaf, classifyReference,
   WARM_WINDOW_MS, COOL_WINDOW_MS, MAX_WARM_INJECTED,
 } from './memory/threads.js'
 import { buildSummarizeInput } from './memory/thread-summarize.js'
@@ -190,6 +190,65 @@ console.log('— 读时减法：buildThreadView —')
   assert(view2.background.some(x => x.thread === coolThread), '温度读时重算：重新活跃立刻回到视图（无需任何恢复动作）')
 }
 
+console.log('— 多话题 20 轮连续性（活 app 实测话术 · 抗增殖回归）—')
+{
+  // 来自 2.1.424 活 app 20 轮端到端实测：修前 v0 增殖到 10 条线索（同概念分词边界漂移→精确交集=0→反复新建）。
+  // 修后（模糊词干重叠 + 指代词表拓宽 + 指代落空续前台）应收敛到 ≤4 条。
+  const T = [
+    '帮我讲讲现在开源大模型天梯榜大概是什么排名',      // 1 建话题
+    '我更想了解那种盲测投票的榜单是怎么回事',          // 2 那种(拓宽)+落空续前台
+    '那个榜单一般多久更新一次',                        // 3
+    '它前三名通常是哪几个模型',                        // 4 裸指代它
+    '那这个排名到底可不可信，有什么争议',              // 5 这个+落空续前台
+    '换个话题，周杰伦最近有什么新歌',                  // 6 真切换(无指代)
+    '他早期专辑你印象最深的是哪张',                    // 7 他(人称,拓宽)
+    '七里香大概是哪一年发行的来着',                    // 8 无指代·子话题
+    '对了今天广州天气怎么样',                          // 9 叶子
+    '刚说的那张专辑里你最推荐哪一首',                  // 10 刚说/那张
+    '回到刚才那个开源天梯榜，DeepSeek 排第几',         // 11 精确回指(远)→切回天梯
+    '帮我想一篇讲大模型评测方法的短文提纲',            // 12 无指代
+    '开头那部分从历史背景写起好不好',                  // 13 那部分
+    '那个评测的关键指标你建议列哪几个',                // 14 那个评测
+    '这个提纲你觉得大概写得怎么样了',                  // 15 这个提纲
+    '那篇短文你会给它取个什么标题',                    // 16 那篇
+    '说回天梯榜那个事，开源和闭源差距大吗',            // 17 那个事→天梯
+    '那个周杰伦的话题，他一共获过几次金曲奖',          // 18 那个周杰伦→音乐
+    '这个整体聊下来你怎么看',                          // 19 裸指代
+    '好了今天就聊到这儿，谢谢你',                      // 20 收尾叶子
+  ]
+  const st = makeState()
+  const seen = new Map()
+  const ev = []
+  T.forEach((m, i) => {
+    const r = attributeUserMessage(st, m, { tick: i })
+    const fg = getForegroundThread(st)
+    if (fg && !seen.has(fg.id)) seen.set(fg.id, seen.size)
+    ev.push({ event: r.event, fg })
+  })
+  const distinct = seen.size
+  assert(distinct <= 4, `20 轮多话题收敛到 ≤4 条线索（实得 ${distinct}，修前 10）`)
+
+  // 指代轮绝不新建线索（抗增殖不变量）：这些句子都带指代词，必须 continued/resumed/noop
+  const demonTurns = [2, 3, 4, 5, 7, 10, 13, 14, 15, 16, 17, 18, 19]
+  const spawned = demonTurns.filter(n => ev[n - 1].event === 'created')
+  assert(spawned.length === 0, `指代轮无一新建线索（违例轮：${spawned.join(',') || '无'}）`)
+
+  // 天梯主线就近连续：T1/T4/T5 同一条线索（前台续命，可靠）
+  const A = ev[0].fg
+  assert(ev[3].fg === A && ev[4].fg === A, 'T4/T5 仍在天梯线索（前台续命）')
+  // 真切换仍然能切走（T6 无指代换话题）——抗增殖没把真切换也焊死
+  assert(ev[5].fg !== A, 'T6 无指代换话题·正常切到新线索')
+
+  // 止血版的契约（2026-06-20）：跨线索"回指召回"受签名质量限制——n-gram 分词器常把
+  // "帮我讲讲现在"的碎片排进 top-8 签名、漏掉"天梯榜"，导致 T11"开源天梯榜"精确重叠<2 切不回 A。
+  // 这是刻意取舍：收紧后台 resume（≥2）后宁可回指不到、续前台，也绝不靠单关键词巧合错认
+  // 真实脏池子里的垃圾线索（实测主病灶）。所以这里只断言"指代回指轮绝不新建/不增殖"，
+  // 不再断言"必须切回 A"——跨线索召回留待签名质量专项（option C）。
+  const callbackTurns = [11, 17, 18]
+  const cbSpawned = callbackTurns.filter(n => ev[n - 1].event === 'created')
+  assert(cbSpawned.length === 0, `回指轮不凭空新建线索（违例轮：${cbSpawned.join(',') || '无'}）`)
+}
+
 console.log('— focusStack 迁移 —')
 {
   const legacy = [
@@ -242,6 +301,58 @@ console.log('— prompt 渲染：<thread> / <threads-background> —')
     focusTickCounter: 3,
   })
   assert(legacyCtx.includes('<focus topic="legacy, topic"'), '遗留 focusStack 渲染保持')
+}
+
+console.log('— classifyReference 分类 —')
+{
+  assert(classifyReference('那个打开网页，打开').kind === 'anaphora-recent', '"那个打开网页"=就近回指')
+  assert(classifyReference('没有打开那个网站').kind === 'anaphora-recent', '"打开那个网站"=就近回指')
+  assert(classifyReference('放一下').kind === 'anaphora-recent', '"放一下"泛操作=就近回指')
+  assert(classifyReference('就这个吧').kind === 'anaphora-recent', '裸指代"就这个吧"=就近回指')
+  const cb = classifyReference('回到那个开源天梯接着看')
+  assert(cb.kind === 'precise-callback', '"那个+具体名词"=精确回指')
+  assert(cb.referentKws.some(k => k.includes('天梯') || k.includes('开源')), '精确回指带出具体名词')
+  assert(classifyReference('帮我修复部署脚本里的报错').kind === 'none', '实质任务句=none 走常规归属')
+}
+
+console.log('— 话题漂移回归：开源天梯榜 case（真实对话逐回合）—')
+{
+  const state = makeState()
+  const r1 = attributeUserMessage(state, '帮我查一下那些大模型 TNT 版天梯榜')
+  assert(r1.event === 'created', 'T1 首句建线索A')
+  const a = r1.thread
+
+  const r2 = attributeUserMessage(state, '我想知道那个开源相关的大模型的天梯')
+  assert(r2.thread === a, 'T2 开源天梯仍归线索A（不漂）')
+
+  // T3：旧实现在这里凭空切到"谷歌/浏览器/打开"伪线索 → 漂移源头
+  const r3 = attributeUserMessage(state, '你用我的谷歌浏览器吧 那个打开网页 打开')
+  assert(r3.via === 'anaphora-recent', 'T3 "那个打开网页"判为就近回指')
+  assert(r3.thread === a, 'T3 续线索A，不新建"浏览器"伪线索')
+  assert(getForegroundThread(state) === a, 'T3 前台仍是天梯线索A')
+
+  const r4 = attributeUserMessage(state, '你只打开了谷歌 没有打开那个网站')
+  assert(r4.thread === a, 'T4 "那个网站"续线索A')
+
+  const r5 = attributeUserMessage(state, '我要你打开模型的天梯榜')
+  assert(r5.thread === a, 'T5 明示"模型的天梯榜"仍归A')
+
+  const threads = ensureThreadState(state).threads
+  assert(threads.length === 1, '全程只有一条线索（无漂移产生的伪线索）')
+  assert(!threads.some(t => t.topic.some(k => k.includes('浏览') || k.includes('谷歌'))),
+    '没有任何线索的话题是"浏览器/谷歌"')
+}
+
+console.log('— 精确回指可切回较远后台线索（门槛≥1）—')
+{
+  const state = makeState()
+  const ladder = addThread(state, ['天梯', '开源', '模型'], { lastEventAgoMs: 3600 * 1000 })
+  addThread(state, ['周杰伦', '听歌', '音乐'], { foreground: true })
+  // 前台在"听歌"，用户用"那个+具体名词"点名较远的天梯话题 → 应切回 ladder
+  const r = attributeUserMessage(state, '那个开源天梯榜再给我看看')
+  assert(r.via === 'callback', '"那个开源天梯榜"判为精确回指')
+  assert(r.thread === ladder, '精确回指切回天梯线索（重叠≥1即可，不需要≥2）')
+  assert(getForegroundThread(state) === ladder, '前台移到被点名的线索')
 }
 
 console.log('— 杂项 —')

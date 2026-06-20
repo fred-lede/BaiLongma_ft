@@ -37,7 +37,7 @@ const SIGNATURE_LIMIT = 8
 
 // ngram 抽取器会把功能词碎片（"这个""续把""帮我"）排上来，它们跨话题高频出现，
 // 用于归属匹配是纯噪声。匹配前过滤；展示 topic 也跟着干净。
-const NOISE_TOKEN_RE = /^(这个|那个|什么|怎么|为什|可以|我们|你们|他们|帮我|给我|一下|一个|继续|部分|现在|今天|明天|昨天|晚上|早上|然后|还是|就是|但是|因为|所以|如果|这样|那样|的话|时候|问题|事情|东西)/
+const NOISE_TOKEN_RE = /^(这个|那个|什么|怎么|为什|可以|我们|你们|他们|帮我|给我|一下|一个|继续|部分|现在|今天|明天|昨天|晚上|早上|然后|还是|就是|但是|因为|所以|如果|这样|那样|的话|时候|问题|事情|东西|网页|网站|网址|页面|链接|地址|文件|文档|内容)/
 function filterNoiseTokens(kws) {
   return (kws || []).filter(k => {
     const t = String(k || '').trim()
@@ -82,6 +82,47 @@ export function isIndexicalProgressQuery(body) {
   // 指代性问询天然很短（"干得咋样""进度如何"）；长句里出现"进展"多半是实质请求的一部分
   if (!text || text.length > 25) return false
   return INDEXICAL_PROGRESS_RE.test(text)
+}
+
+// ── 指代-就近 / 精确回指（2026-06-19，治"打开那个网页"型话题漂移）─────────────
+// 用户语言规律（来自实战 case：开源天梯榜对话连漂三轮到 YouTube）：
+//   规律①「裸指代 / 泛指代」——只说"这个/那个"，或对泛称宾语施加操作（"打开那个网页""放一下"
+//     "点开它"）。指代物不在这句话里，而在最近的对话里（用户倒数第二条 / 我上一条回复）。
+//     这种句子绝不命名新话题，旧实现却按字面把"打开网页"切成"浏览器/网页"伪话题、挤掉真目标
+//     ——这正是漂移源头。正解：续前台，从源头掐断伪话题诞生。
+//   规律②「那个+具体名词」——用户特意点名一个较远的概念（"那个开源天梯"），名词本身就是
+//     精确指代，是强 resume 信号，允许据此切回后台线索（门槛从≥2降到≥1）。
+//
+// 泛称宾语：本身不携带话题，只是"被操作的东西"的占位名词。
+const GENERIC_OBJECT_RE = /(网页|网站|网址|页面|那页|这页|链接|地址|玩意儿?|东西|文件|文档|内容)/
+// 操作动词：对宾语施加的动作，跨话题高频，本身不定义话题。
+// 刻意不含 SUSTAINED_RE 里的"调试/部署/优化/实现"——那些动词本身就是话题。
+const OPERATION_VERB_RE = /(打开|关闭|关掉|启动|运行|播放|暂停|下载|搜索|显示|发送|点开|访问|跳转|打开一?下|放一?下|查一?下|搜一?下|看一?下|念一?下|读一?下|发一?下)/
+// 指代词 / 就近回指标记。
+const DEMONSTRATIVE_RE = /(这|那)(个|种|些|位|款|家|件|批|类|段|张|篇|份|首|部|台|项|套|条|者|回|次)|它|他|她|刚才|刚刚|刚说|刚提|上面|前面|之前(说|讲|提|的|那)|你?刚(说|讲|发|放|提)/
+
+/**
+ * 把一条用户消息分类为 none / anaphora-recent / precise-callback。
+ *   - anaphora-recent：就近回指（规律①）→ 上层应续前台，绝不新建/切走。
+ *   - precise-callback：那个+具体名词（规律②）→ 上层用 referentKws 在所有线索里精确匹配，
+ *       命中后台即 resume（门槛≥1）。
+ *   - none：既非指代也非泛操作，走常规关键词归属。
+ * substantive：句子剥掉操作动词/泛称后剩的实质话题词（供"明示压过暗示"守卫用）。
+ */
+export function classifyReference(body) {
+  const text = String(body || '').trim()
+  if (!text) return { kind: 'none', substantive: [] }
+  const hasDemon = DEMONSTRATIVE_RE.test(text)
+  const actsOnGeneric = GENERIC_OBJECT_RE.test(text) && (OPERATION_VERB_RE.test(text) || hasDemon)
+  // 句子自身的实质话题词：剥掉操作动词、泛称、指代后还剩什么
+  const substantive = extractAttributionKeywords(text)
+    .filter(k => !OPERATION_VERB_RE.test(k) && !GENERIC_OBJECT_RE.test(k))
+  // 光杆操作动词（"放一下""下载""打开吧"）：宾语缺省 = 指代最近对话里的东西。
+  const bareOperation = OPERATION_VERB_RE.test(text) && substantive.length === 0
+  if (actsOnGeneric || bareOperation) return { kind: 'anaphora-recent', substantive }
+  if (hasDemon && substantive.length === 0) return { kind: 'anaphora-recent', substantive }
+  if (hasDemon && substantive.length > 0) return { kind: 'precise-callback', referentKws: substantive, substantive }
+  return { kind: 'none', substantive }
 }
 
 // 按 lastEventAt 判断线索是否已冷（无视前台短路；开放承诺仍钉住温度）。
@@ -286,6 +327,9 @@ export function buildThreadView(state, { now = Date.now() } = {}) {
 }
 
 // ── 关键词重叠：对线索的 signature ∪ topic 做字面交集 ──
+// 注（2026-06-20）：曾试过"词干包含"模糊匹配（"天梯"⊂"版天梯"），干净起点能多连上同概念，
+// 但活 app 实测它在真实脏线索池里把全新内容也凭子串撞进垃圾线索（n-gram 切的"它是有/么死"
+// 含高频碎片，模糊后到处命中），净负收益，已撤回。回到精确匹配。
 function overlapCount(thread, kws) {
   if (!thread) return 0
   const set = new Set([...(thread.signature || []), ...(thread.topic || [])])
@@ -340,6 +384,51 @@ export function attributeUserMessage(state, message, {
         return { event: 'continued', thread: foreground, switchedFrom: null }
       }
       return { event: 'noop', thread: null, switchedFrom: null }
+    }
+  }
+
+  // 1.5) 指代-就近 / 精确回指（2026-06-19）。在常规关键词归属之前拦截。
+  const ref = classifyReference(body)
+  if (ref.kind === 'anaphora-recent') {
+    // 规律①：指代物在最近对话里 = 续前台，绝不新建/切走 → 从源头掐断"浏览器"型伪话题。
+    // 守卫一（明示压过暗示）：句子的实质词若强匹配某后台线索(≥2)，说明用户其实点了名，
+    //   不当就近回指，落常规切换。
+    const namesOther = (ref.substantive || []).length > 0 && ts.threads.some(t =>
+      (!foreground || t.id !== foreground.id) && overlapCount(t, ref.substantive) >= BACKGROUND_RESUME_OVERLAP_MIN
+    )
+    // 守卫二：冷掉的前台不当就近锚点（沿用 bug2 教训）——落常规规则。
+    if (!namesOther && foreground && !isThreadColdByAge(state, foreground)) {
+      touchThread(state, foreground.id, { tick })
+      return { event: 'continued', thread: foreground, switchedFrom: null, via: 'anaphora-recent' }
+    }
+  } else if (ref.kind === 'precise-callback' && ref.referentKws.length > 0) {
+    // 规律②：那个+具体名词是强 resume 信号。具体词命中前台→continued，命中后台→resume（门槛≥1）。
+    const rkws = ref.referentKws
+    if (foreground && overlapCount(foreground, rkws) >= 1) {
+      touchThread(state, foreground.id, { tick })
+      return { event: 'continued', thread: foreground, switchedFrom: null, via: 'callback' }
+    }
+    let cbBest = null
+    let cbOverlap = 0
+    for (const t of ts.threads) {
+      if (foreground && t.id === foreground.id) continue
+      const n = overlapCount(t, rkws)
+      if (n > cbOverlap) { cbBest = t; cbOverlap = n }
+    }
+    // 收紧（2026-06-20）：切到后台线索需 ≥2 个关键词命中。单关键词巧合多是脏池子里的垃圾线索
+    // 碰瓷，不足以夺走话题——宁可走下面的 fallback 续前台，也不错认旧垃圾线索（实测的主病灶）。
+    if (cbBest && cbOverlap >= BACKGROUND_RESUME_OVERLAP_MIN) {
+      const switchedFrom = foreground && foreground.id !== cbBest.id ? foreground : null
+      ts.foregroundId = cbBest.id
+      touchThread(state, cbBest.id, { tick })
+      return { event: switchedFrom ? 'resumed' : 'continued', thread: cbBest, switchedFrom, via: 'callback' }
+    }
+    // 落空 fallback（2026-06-19，治话题增殖）：带指代词的句子（"这个排名""那种榜单"）哪怕
+    // 一个既有线索都没字面命中，也几乎不会是凭空的新话题——指代词本身就宣告"我在指刚才聊的东西"。
+    // 此时续前台，而不是新建一条伪线索。前台冷/无前台才落常规（真·指向一个已淡出的远概念时新建）。
+    if (foreground && !isThreadColdByAge(state, foreground)) {
+      touchThread(state, foreground.id, { tick })
+      return { event: 'continued', thread: foreground, switchedFrom: null, via: 'callback-fallback' }
     }
   }
 

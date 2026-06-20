@@ -89,7 +89,7 @@ MiniMax 一个 Key 同时供 LLM 与 TTS 两用。`,
 
 ■ 官网：https://platform.xiaomimimo.com
 ■ 字段：apiKey（在 MiMo 控制台「API Keys」生成）
-■ 默认模型：MiMo-V2.5-Pro-UltraSpeed
+■ 默认模型：mimo-v2.5-pro（极速版 MiMo-V2.5-Pro-UltraSpeed 可在模型列表中手动选用，非默认）
 ■ 降级策略：默认模型不可用时自动尝试其它 MiMo 模型
 ■ Base URL：https://api.xiaomimimo.com/v1（系统已内置）
 
@@ -120,7 +120,7 @@ MiniMax 一个 Key 同时供 LLM 与 TTS 两用。`,
       { name: '通义千问', url: 'https://bailian.console.aliyun.com/', free: false, note: 'qwen-turbo/plus' },
       { name: 'Moonshot', url: 'https://platform.moonshot.cn/', free: false, note: 'moonshot-v1-8k/32k' },
       { name: '智谱 AI', url: 'https://open.bigmodel.cn/', free: false, note: 'glm-5.1（默认）、glm-5-turbo、glm-5' },
-      { name: '小米 MiMo', url: 'https://platform.xiaomimimo.com/', free: false, note: 'MiMo-V2.5-Pro-UltraSpeed（默认，失败自动降级）、mimo-v2.5-pro、mimo-v2.5' },
+      { name: '小米 MiMo', url: 'https://platform.xiaomimimo.com/', free: false, note: 'mimo-v2.5-pro（默认，失败自动降级）、mimo-v2.5、MiMo-V2.5-Pro-UltraSpeed（极速版，可选）' },
     ],
   },
 

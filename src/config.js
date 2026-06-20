@@ -17,7 +17,7 @@ export const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini'
 export const DEFAULT_QWEN_MODEL = 'qwen-turbo'
 export const DEFAULT_MOONSHOT_MODEL = 'moonshot-v1-8k'
 export const DEFAULT_ZHIPU_MODEL = 'glm-5.1'
-export const DEFAULT_MIMO_MODEL = 'MiMo-V2.5-Pro-UltraSpeed'
+export const DEFAULT_MIMO_MODEL = 'mimo-v2.5-pro'
 
 export const DEEPSEEK_MODELS = [
   {
@@ -164,11 +164,6 @@ export const ZHIPU_MODELS = [
 
 export const MIMO_MODELS = [
   {
-    id: 'MiMo-V2.5-Pro-UltraSpeed',
-    label: 'MiMo-V2.5-Pro-UltraSpeed',
-    deprecated: false,
-  },
-  {
     id: 'mimo-v2.5-pro',
     label: 'MiMo-V2.5-Pro',
     deprecated: false,
@@ -186,6 +181,12 @@ export const MIMO_MODELS = [
   {
     id: 'mimo-v2-flash',
     label: 'MiMo-V2-Flash',
+    deprecated: false,
+  },
+  {
+    // 极速版：保留为可选项，非默认首选（小米平台暂无此官方 ID，调用失败会自动降级到上面的真实模型）
+    id: 'MiMo-V2.5-Pro-UltraSpeed',
+    label: 'MiMo-V2.5-Pro-UltraSpeed（极速版）',
     deprecated: false,
   },
 ]

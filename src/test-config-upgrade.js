@@ -133,13 +133,13 @@ async function loadFresh(json) {
 }
 
 // 清理
-// Scenario G: MiMo falls back from the UltraSpeed default to the remaining MiMo models.
+// Scenario G: MiMo falls back from the v2.5 Pro default to the remaining MiMo models.
 {
   const { DEFAULT_MIMO_MODEL, MIMO_PROVIDER, getProviderModelFallbacks } = await loadFresh({ schemaVersion: 2 })
   const chain = getProviderModelFallbacks(MIMO_PROVIDER, DEFAULT_MIMO_MODEL)
-  assert(chain[0] === 'MiMo-V2.5-Pro-UltraSpeed', 'G: MiMo fallback starts with UltraSpeed')
-  assert(chain[1] === 'mimo-v2.5-pro', 'G: MiMo fallback tries Pro next')
-  assert(chain.includes('mimo-v2.5'), 'G: MiMo fallback includes standard v2.5')
+  assert(chain[0] === 'mimo-v2.5-pro', 'G: MiMo fallback starts with the v2.5 Pro default')
+  assert(chain[1] === 'mimo-v2.5', 'G: MiMo fallback tries standard v2.5 next')
+  assert(chain.includes('MiMo-V2.5-Pro-UltraSpeed'), 'G: UltraSpeed (极速版) stays available as a fallback option')
   assert(new Set(chain).size === chain.length, 'G: MiMo fallback chain has no duplicates')
   const invalidChain = getProviderModelFallbacks(MIMO_PROVIDER, 'missing-mimo-model')
   assert(invalidChain[0] === DEFAULT_MIMO_MODEL, 'G: invalid MiMo model normalizes to the default before fallback')

@@ -379,11 +379,11 @@ export function selectTools(ctx = {}) {
       for (const t of TICKER_TOOLS) suppressed.add(t)
     }
   }
-  if (hits(body, HOTSPOT_TRIGGERS) || isTick) {
+  // 热点/世界杯：关键词自动注入已移除——改由 Agent 依 prompt 规则自决是否开面板。
+  //   hotspot_mode/worldcup_mode 仍在 TOOL_GROUPS 里，Agent 想用时 find_tool 即可发现并当场装载。
+  //   仅保留 TICK 心跳对 hotspot 的广注入：awakening exploration 阶段 agent 可能主动想浏览热点。
+  if (isTick) {
     for (const t of HOTSPOT_TOOLS) out.add(t)
-  }
-  if (hits(body, WORLDCUP_TRIGGERS)) {
-    for (const t of WORLDCUP_TOOLS) out.add(t)
   }
   if (hitsPersonCardIntent(messageBody)) {
     for (const t of PERSON_CARD_TOOLS) out.add(t)

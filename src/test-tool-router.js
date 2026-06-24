@@ -213,26 +213,30 @@ function hasNone(tools, names) {
   ]), '11) startupSelfCheckActive → full startup self-check tool set injected')
 }
 
-// ====== 11b) Worldcup 触发 ======
+// ====== 11b) Worldcup / Hotspot 不再被关键词自动注入 ======
+// 设计变更：worldcup_mode / hotspot_mode 不再因关键词命中而自动注入 schema；
+// 改由 Agent 依 prompt 规则自决，需要时调 find_tool 发现并当场装载（TOOL_GROUPS 仍保留触发词供 find_tool 用）。
 {
   const tools = selectTools({
     messageBody: '今天世界杯的赛况怎么样了',
     isTick: false,
     senderId: 'ID:000001',
   })
-  assert(has(tools, 'worldcup_mode'),
-    `11b) 世界杯赛况 → worldcup_mode injected (got: ${tools.join(',')})`)
-  assert(hasAll(tools, ['web_search', 'fetch_url']),
-    '11b) worldcup 触发同时带上 web 工具（追问细节要联网）')
+  assert(!has(tools, 'worldcup_mode'),
+    `11b) 世界杯关键词不再自动注入 worldcup_mode（改 Agent 经 find_tool 自决, got: ${tools.join(',')})`)
+  assert(has(tools, 'find_tool'),
+    '11b) find_tool 常驻——Agent 可据此发现并装载 worldcup_mode')
 }
 {
   const tools = selectTools({
-    messageBody: '昨晚谁赢了，几比几',
+    messageBody: '微博热搜现在有什么',
     isTick: false,
     senderId: 'ID:000001',
   })
-  assert(has(tools, 'worldcup_mode'),
-    `11c) 比分追问 → worldcup_mode injected (got: ${tools.join(',')})`)
+  assert(!has(tools, 'hotspot_mode'),
+    `11c) 热点关键词不再自动注入 hotspot_mode（非 TICK 轮, got: ${tools.join(',')})`)
+  assert(has(tools, 'find_tool'),
+    '11c) find_tool 常驻——Agent 可据此发现并装载 hotspot_mode')
 }
 
 // ====== 12) Exec 触发 ======

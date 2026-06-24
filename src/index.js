@@ -32,13 +32,12 @@ import { loadInstalledTools } from './capabilities/marketplace/index.js'
 import { resumePendingVideoJobs, getAIVideoPanelState } from './capabilities/tools/media.js'
 import { dispatchSocialMessage } from './social/dispatch.js'
 import { startSocialConnectors } from './social/index.js'
-import { getWeatherCardProps, isWeatherQuery } from './weather.js'
 import { collectSystemInfo, getSystemInfoBlock, getBatteryBlock, getDesktopPath } from './system-info.js'
 import { collectDesktopInfo, getDesktopBlock } from './desktop-scanner.js'
 import { collectInstalledSoftware, getInstalledSoftwareBlock } from './installed-software-scanner.js'
 import { collectLocalResources } from './local-resources-scanner.js'
 import { collectGeoWeather, getGeoWeatherBlock } from './geo-weather.js'
-import { collectTrending, getTrendingBlock } from './trending.js'
+import { collectTrending } from './trending.js'
 import { collectAgents, buildAgentContextBlock, buildDelegationAskDirections } from './agents/registry.js'
 import { refreshSkills, selectSkillsForMessage, formatSkillsForContext } from './skills/registry.js'
 import { tryAutoConfigureKey } from './key-auto-config.js'
@@ -465,64 +464,6 @@ function deliverFallbackReply(msg, content, timestamp) {
   }
 }
 
-function formatQuickWeatherReply(cardProps) {
-  if (!cardProps) return ''
-  const city = cardProps.city || '当地'
-  const temp = Number.isFinite(cardProps.temp) ? `${Math.round(cardProps.temp)}度` : ''
-  const feel = Number.isFinite(cardProps.feel) ? `体感${Math.round(cardProps.feel)}` : ''
-  const condition = cardProps.condition || cardProps.desc || ''
-  const parts = [temp, feel, condition].filter(Boolean)
-  return parts.length ? `${city}现在${parts.join('，')}。` : ''
-}
-
-async function tryHandleDirectWeatherTurn(input, msg, { finishTurn } = {}) {
-  if (!msg || !isWeatherQuery(input)) return false
-
-  emitEvent('action', {
-    tool: 'weather_query',
-    summary: '查询天气',
-    detail: String(input || '').slice(0, 120),
-  })
-
-  const cardProps = await getWeatherCardProps(input)
-  if (!cardProps) return false
-
-  const reply = formatQuickWeatherReply(cardProps)
-  if (!reply) return false
-
-  // P0-1：天气快速路径绕开了 updateFocusFrame，需要手动给本轮 user 消息和
-  //   即将写入的 jarvis 回复打上"天气"焦点标签；否则 conversationWindow 里
-  //   这两行 focus_topic 永远是空，破坏话题边界标注。
-  setCurrentFocusTopic('天气')
-  setCurrentThreadId('')  // 天气是一次性叶子，不归属任何线索
-  try { updateUserMessageFocusTopic(msg.fromId, msg.timestamp, '天气') } catch {}
-
-  const timestamp = nowTimestamp()
-  if (isVoiceChannel(msg.channel)) autoSpeakForVoiceReply(reply)
-  deliverFallbackReply(msg, reply, timestamp)
-
-  // 推一个 Scene 天气 surface(取代旧 ACUI WeatherCard)。
-  //   id 按城市稳定 → 同城再查会原地更新/morph，而非堆叠新卡。
-  //   intent=ambient：天气是看完即过的环境信息，由 shell 决定低调入场。
-  //   无连接的 shell 也无妨：sceneStore 记录状态，shell 连上后自动同步。
-  const sceneCity = cardProps.city || '此地'
-  const surfaceId = `weather-${String(sceneCity).trim().toLowerCase().replace(/\s+/g, '-')}`
-  sceneStore.set(surfaceId, {
-    kind: 'weather',
-    data: {
-      city: cardProps.city,
-      temp: cardProps.temp,
-      condition: cardProps.condition,
-      forecast: cardProps.forecast,
-    },
-    intent: 'ambient',
-  })
-  emitEvent('action', { tool: 'ui_set', summary: '放置天气 surface', detail: surfaceId })
-
-  finishTurn?.(reply)
-  return true
-}
-
 export function buildToolContext({ currentTargetId = null, conversationWindow = [], includeRecentPartners = false } = {}) {
   const visibleTargetIds = [
     currentTargetId,
@@ -873,8 +814,7 @@ function buildSystemEnv(msg) {
     blocks.push(getInstalledSoftwareBlock())
   if (/天气|气温|温度|下雨|下雪|晴天|气候|风力|风速|台风|位置|城市|在哪个城市/.test(text))
     blocks.push(getGeoWeatherBlock())
-  if (/热点|新闻|热搜|热榜|今天发生|最近发生|微博|知乎|头条/.test(text))
-    blocks.push(getTrendingBlock())
+  // 热点不再按关键词预喂热搜数据：是否取数/开面板交由 Agent 调 hotspot_mode 自决（见 prompt Hotspot Panel 规则）。
   return blocks.filter(Boolean).join('\n\n')
 }
 
@@ -939,9 +879,8 @@ async function runTurn(input, label, msg = null) {
       }
     }
 
-    if (!isTick && await tryHandleDirectWeatherTurn(input, msg, { finishTurn })) {
-      return
-    }
+    // 天气不再走"绕开 LLM 的快速路径"：交回 LLM，由 Agent 依 prompt 的 "Weather Surface Rules"
+    //   自行 fetch_url(wttr.in) + ui_set(weather kind)。决策归 Agent，不再由 isWeatherQuery 正则代办整轮。
 
     // 1. Injector
     const injection = await runInjector({ message: input, state })
@@ -1105,10 +1044,9 @@ async function runTurn(input, label, msg = null) {
     })
     throwIfAborted(controller.signal)
 
-    // 注：旧版在此硬编码自动弹一张 ACUI WeatherCard。现已删除——天气走 LLM 回合时，
-    //   Agent 会依 prompt 的 "Weather Surface Rules" 自行 ui_set 一个 weather surface
-    //   (决策归 Agent)；无 LLM 的天气快速路径(tryHandleDirectWeatherTurn)则直接放 surface。
-    //   两条路径各自负责，避免同一次查询重复出两张天气卡。
+    // 注：旧版在此硬编码自动弹一张 ACUI WeatherCard，且另有一条绕开 LLM 的天气快速路径。
+    //   两者均已删除——天气统一走 LLM 回合，Agent 依 prompt 的 "Weather Surface Rules"
+    //   自行 fetch_url(wttr.in) + ui_set(weather kind)，决策完全归 Agent。
 
     // 用户跨渠道可达性快照（让 L2 主动消息能选对渠道：用户在外面就发微信，在电脑前就发本地）
     const presenceText = formatPresenceForPrompt(PRIMARY_USER_ID)

@@ -135,6 +135,20 @@ const WEATHER_SCENE_RULES_BLOCK = `### Weather Surface Rules
 - Call: ui_set({ id: "weather-<city>", kind: "weather", data: { city, temp, condition, forecast }, intent: "ambient" })
 - To refresh, call ui_set again with the same id.`
 
+// 3b) Hotspot Panel —— 关键词命中只注入"规则"，开不开面板由 Agent 自决（keyword 不再自动加载工具）
+const HOTSPOT_KEYWORD_RE = /热点|热搜|热门|新闻|今日|趋势|榜单|头条|热议|微博热搜|trending|headline/i
+const HOTSPOT_PANEL_BLOCK = `### Hotspot Panel
+- You have a hotspot_mode tool that opens a visual hotspot / trending-topics panel. It is NOT pre-loaded each turn — if it is not in your current tool list, call find_tool("热点 面板 hotspot") first to load it, then call it.
+- Open it (action="show") only when the user actually wants to browse trending topics, or a demo/scene needs it; close it (action="hide") when asked. Do not open it for ordinary Q&A.
+- While the panel is open, current hotspot data is injected into your context automatically — answer from that rather than guessing.`
+
+// 3c) World Cup Panel —— 同上，规则注入 + Agent 自决
+const WORLDCUP_KEYWORD_RE = /世界杯|赛况|比分|赛程|对阵|积分榜|小组赛|淘汰赛|揭幕战|进球|几比几|world ?cup|worldcup|fifa/i
+const WORLDCUP_PANEL_BLOCK = `### World Cup Panel
+- You have a worldcup_mode tool that opens a panel with live scores, schedule and group standings (FIFA World Cup, Beijing time). It is NOT pre-loaded each turn — if it is not in your current tool list, call find_tool("世界杯 比分 worldcup") first to load it, then call it.
+- Open it (action="show") when the user asks about World Cup matches, scores or schedule and a visual panel helps; close it (action="hide") when asked.
+- While the panel is open, current match data is injected into your context automatically; for deeper details (lineups, scorers) use web tools.`
+
 // 4) WeChat Connection —— 用户明确要求"连接微信/接入微信"
 const WECHAT_CONNECT_KEYWORD_RE = /连接微信|接入微信|绑定微信|用微信|connect.*wechat/i
 const WECHAT_CONNECTION_BLOCK = `## WeChat Connection
@@ -194,6 +208,12 @@ function shouldInjectAIVideoGen(userMessage) {
 }
 function shouldInjectWeatherCard(userMessage) {
   return !!(userMessage && WEATHER_KEYWORD_RE.test(String(userMessage)))
+}
+function shouldInjectHotspotPanel(userMessage) {
+  return !!(userMessage && HOTSPOT_KEYWORD_RE.test(String(userMessage)))
+}
+function shouldInjectWorldcupPanel(userMessage) {
+  return !!(userMessage && WORLDCUP_KEYWORD_RE.test(String(userMessage)))
 }
 function shouldInjectWeChatConnect(userMessage) {
   return !!(userMessage && WECHAT_CONNECT_KEYWORD_RE.test(String(userMessage)))
@@ -590,6 +610,14 @@ Sandbox status is injected every turn in <context><runtime> as "Sandbox Status".
   // Weather Surface Rules —— Visual Surfaces 主段下的子段，注入到 Kinds & Composition 之后位置
   if (shouldInjectWeatherCard(userMessage)) {
     prompt += `\n\n${WEATHER_SCENE_RULES_BLOCK}`
+  }
+
+  // Hotspot / World Cup 面板规则 —— 关键词命中只递规则，开不开面板由 Agent 自决（工具靠 find_tool 发现）
+  if (shouldInjectHotspotPanel(userMessage)) {
+    prompt += `\n\n${HOTSPOT_PANEL_BLOCK}`
+  }
+  if (shouldInjectWorldcupPanel(userMessage)) {
+    prompt += `\n\n${WORLDCUP_PANEL_BLOCK}`
   }
 
   // Video Mode

@@ -11,7 +11,7 @@ export const shellSchemas = {
         properties: {
           query: { type: 'string', description: 'Software name or search query, e.g. "QQ", "微信", "Chrome".' },
           package_id: { type: 'string', description: 'Optional exact winget package id if already known, e.g. Tencent.QQ.NT.' },
-          silent: { type: 'boolean', description: 'Request silent install when supported. Use true only when the user explicitly asked for silent/no UI installation.' }
+          silent: { type: 'boolean', description: 'Run the installer silently with no setup-wizard clicks. Silent is the DEFAULT, so normally omit this. Pass false only if the user explicitly wants to see/click the installer UI. Note: silent covers the installer wizard only; a machine-scope package may still raise a Windows UAC elevation prompt unless the app itself runs elevated.' }
         },
         required: []
       }

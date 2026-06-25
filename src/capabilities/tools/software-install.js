@@ -712,6 +712,20 @@ function startBackgroundInstallJob(job) {
   return t
 }
 
+// 静默安装默认开:--silent 把静默开关传给安装器,免向导点击(Next→Next→Finish)。
+// 显式 args.silent(true/false)优先;否则查 config 键 install_silent_default(=false/0/off 才关)。
+// 注:这只免「安装向导」点击;机器范围包的 UAC 提权是 Windows 安全边界,不受此影响(需 app 提权运行)。
+function resolveSilent(explicit) {
+  if (typeof explicit === 'boolean') return explicit
+  if (!sideEffectsEnabled) return true   // 测试态不碰 db
+  try {
+    const v = getConfig('install_silent_default')
+    return !(v === 'false' || v === '0' || v === 'off')
+  } catch {
+    return true
+  }
+}
+
 export async function execInstallSoftware(args = {}, context = {}) {
   loadPersistedSnapshotsOnce()
   if (!IS_WIN && context.allowNonWindowsForTest !== true) {
@@ -724,7 +738,7 @@ export async function execInstallSoftware(args = {}, context = {}) {
 
   const query = String(args.query || args.name || '').trim()
   const packageId = String(args.package_id || args.id || '').trim()
-  const silent = args.silent === true
+  const silent = resolveSilent(args.silent)
   if (!query && !packageId) {
     return toolJson({ ok: false, tool: 'install_software', error: 'query or package_id is required' })
   }

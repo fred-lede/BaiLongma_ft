@@ -1,7 +1,7 @@
 {
   "name": "bailongma",
   "productName": "Bailongma",
-  "version": "2.1.449",
+  "version": "2.1.451",
   "description": "A continuously running digital consciousness framework",
   "type": "module",
   "main": "electron/main.cjs",
@@ -48,6 +48,8 @@
     "d3": "^7.9.0",
     "electron-updater": "^6.3.9",
     "openai": "^6.34.0",
+    "sherpa-onnx-node": "^1.13.3",
+    "undici": "^6.25.0",
     "wechat-ilink-client": "^0.1.0",
     "ws": "^8.20.1"
   },
@@ -67,6 +69,10 @@
       "**/node_modules/better-sqlite3/**",
       "**/node_modules/@huggingface/transformers/**",
       "**/node_modules/onnxruntime-node/**",
+      "**/node_modules/sherpa-onnx-node/**",
+      "**/node_modules/sherpa-onnx-win-x64/**",
+      "**/node_modules/sherpa-onnx-darwin-x64/**",
+      "**/node_modules/sherpa-onnx-darwin-arm64/**",
       "build/native-speech-recognizer",
       "src/voice/**"
     ],

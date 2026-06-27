@@ -255,6 +255,8 @@ async function executeToolUnchecked(name, args, context = {}) {
         return execUISet(args)
       case 'focus_banner':
         return execFocusBanner(args)
+      case 'voice_retire':
+        return execVoiceRetire(args)
       case 'set_location':
         return execSetLocation(args)
       case 'set_agent_name':
@@ -978,6 +980,13 @@ function execFocusBanner({ action, task = '', current_step = '', tasks = [] }) {
     : []
   bridge.emit('command', { action, task: String(task), current_step: String(current_step), tasks: cleanTasks })
   return toolJson({ ok: true, action, task, current_step, tasks: cleanTasks })
+}
+
+// 收起悬浮语音球：发 SSE 事件给渲染层(voice-wake.js)，由它在说完话后播退场动画收起。
+// 只退场屏幕上的球，不停 app、不影响可达性。无球在场时渲染层自动忽略（幂等）。
+function execVoiceRetire({ reason = '' } = {}) {
+  emitEvent('voice_retire', { reason: typeof reason === 'string' ? reason : '' })
+  return toolJson({ ok: true, tool: 'voice_retire', retired: true, reason: String(reason || '') })
 }
 
 function execSetLocation({ city }) {

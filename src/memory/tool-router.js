@@ -40,6 +40,9 @@ const CORE_TOOLS = [
   // 工具（比如关键词没命中导致 generate_image / exec_command 没进来），可调 find_tool 搜出来并当场装载。
   'find_tool',
   'ui_set',
+  // voice_retire：收起悬浮语音球。常驻很轻（一个小 schema），但保证语音对话轮一定可用；
+  // 何时调由 prompt 的 Voice Orb 段（仅语音轮注入）指导，非语音轮虽在工具表但不会被提示使用。
+  'voice_retire',
 ]
 
 const TASK_CTRL_FULL    = ['set_task', 'complete_task', 'update_task_step', 'review_work']

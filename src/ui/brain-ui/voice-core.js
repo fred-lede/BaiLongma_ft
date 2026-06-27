@@ -171,6 +171,10 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
   let lastVol = 0;              // 分析帧比绘制帧密，绘制段用最近一次分析到的音量
   let ttsData = null;
   let lastTTSVol = 0;
+  // 外部音量注入：悬浮球窗口没有自己的麦克风/TTS 分析器，由主窗口每帧把真实音量
+  // （麦克风音量 / TTS 音量）经 IPC 推过来，注入这里驱动球体跳动，复刻 brain-ui 的动画。
+  // 主窗口自己渲染时不用它（保持 null），行为不变。
+  let externalVol = null;       // null = 未注入；数值 = 用它当本帧的视觉音量
 
   // 画面节流档位：返回 0 = 不限（跟随显示器刷新率）
   function targetDrawFps(ts) {
@@ -197,6 +201,8 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
 
   function setStatus(newSk) { sk = newSk; }
   const getStatus = () => sk;
+  // 注入外部音量（悬浮球窗口用）；传 null 取消注入，回到自带麦克风/TTS 音量逻辑。
+  function setExternalVol(v) { externalVol = (v == null ? null : Number(v) || 0); }
 
   function triggerDone() {
     setStatus('done');
@@ -292,8 +298,11 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
       lerpArr(s.col[2], cfg.b, ls * 1.5),
     ];
 
-    // 有声时放大振幅/转速（音量来自上方分析段，可能比本绘制帧新）
-    const visualVol = sk === 'speaking' ? ttsVol : (micData ? lastVol : 0);
+    // 有声时放大振幅/转速（音量来自上方分析段，可能比本绘制帧新）。
+    // externalVol 已注入（悬浮球窗口）则优先用它——主窗口推来的真实音量。
+    const visualVol = externalVol != null
+      ? externalVol
+      : (sk === 'speaking' ? ttsVol : (micData ? lastVol : 0));
     if (visualVol > QUIET_VOL) {
       s.amp = lerp(s.amp, 0.08 + visualVol * 1.2, 0.4);
       s.spd = lerp(s.spd, 1.0 + visualVol * 5.0, 0.2);
@@ -350,6 +359,11 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
 
   function startRenderLoop() {
     if (!rafId) drawFrame();
+  }
+
+  // 停止渲染循环（悬浮球退场后调用：隐藏窗口里没必要继续空转 rAF）。
+  function stopRenderLoop() {
+    if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
   }
 
   // ─── 会话运行时状态（两个模式共用的单一会话） ───
@@ -925,6 +939,8 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
     getStatus,
     triggerDone,
     startRenderLoop,
+    stopRenderLoop,
+    setExternalVol,
     // 会话生命周期
     startSession,
     stopSession,

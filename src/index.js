@@ -1,3 +1,4 @@
+import './network-proxy.js'
 import { config, getMinimaxKey as _getMinimaxKey, getSecurity } from './config.js'
 import { callLLM } from './llm.js'
 import { buildSystemPrompt, buildContextBlock, combinePromptForPreview } from './prompt.js'
@@ -1163,6 +1164,7 @@ async function runTurn(input, label, msg = null) {
       birthTime,
       userMessage: msg?.content || input || '',
       currentChannel: msg ? normalizeChannel(msg.channel || '') : '',
+      isVoiceTurn: isVoiceChannel(msg?.channel),
       hasWechatHistory: false,
       hasActiveFocus: false,
       currentCountryCode: geoResult?.location?.country_code || '',

@@ -1,5 +1,5 @@
 import OpenAI from 'openai'
-import { config, MIMO_PROVIDER, ZHIPU_PROVIDER, getProviderModelFallbacks, shouldOmitSamplingForProviderModel, shouldSendThinkingDisabledForProviderModel, switchModel } from './config.js'
+import { config, MIMO_PROVIDER, ZHIPU_PROVIDER, getProviderModelFallbacks, shouldOmitSamplingForProviderModel, shouldSendThinkingDisabledForProviderModel, shouldUseMaxCompletionTokensForProviderModel, switchModel } from './config.js'
 import { executeTool } from './capabilities/executor.js'
 import { getToolSchemas } from './capabilities/schemas.js'
 import { recordUsage, shouldThrottle } from './quota.js'
@@ -103,7 +103,13 @@ function buildChatCompletionRequestParams({ messages, toolSchemas = [], temperat
   } else if (!thinking && shouldSendThinkingDisabledForProviderModel(config.provider, model)) {
     requestParams.thinking = { type: 'disabled' }
   }
-  if (maxTokens) requestParams.max_tokens = maxTokens
+  if (maxTokens) {
+    if (shouldUseMaxCompletionTokensForProviderModel(config.provider, model)) {
+      requestParams.max_completion_tokens = maxTokens
+    } else {
+      requestParams.max_tokens = maxTokens
+    }
+  }
   if (toolSchemas.length > 0) {
     requestParams.tools = toolSchemas
     requestParams.tool_choice = 'auto'

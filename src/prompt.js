@@ -159,6 +159,13 @@ const FOCUS_BANNER_BLOCK = `## Focus Banner
 - When the user says the focus task is done or asks to exit/close the banner, call action=hide.
 - While the banner exists, if the user mentions progress related to the current task, update it naturally without extra confirmation.`
 
+// 6c) Voice Orb —— 仅语音对话轮注入（这一轮由语音进来，屏幕上很可能有悬浮语音球在听）
+const VOICE_RETIRE_BLOCK = `## Voice Orb (floating voice ball)
+This turn came in by voice, so a floating voice orb is likely on screen, listening. After you finish answering this turn, judge whether it should retire:
+- Retire it — call voice_retire — when the user tells you to leave / stop / that's all (e.g. 退下 / 没事了 / 不用了 / 再见 / 先这样), OR when you have fully done what they asked and no follow-up is expected. It collapses gracefully after you finish speaking; if there is nothing more to do, retiring keeps things tidy.
+- Keep it (do NOT call voice_retire) when the conversation is clearly still going: a question is open, the user is mid-task, or you expect them to keep talking. When unsure, leave it — it auto-closes after a minute of silence.
+- voice_retire only retires the on-screen ball; it never ends the app or stops you from being reachable.`
+
 // 6b) Complex Task Mode —— 多步任务的 ReAct 纪律（关键词命中 OR 已有 active task 时注入）
 const COMPLEX_TASK_KEYWORD_RE = /帮我做一[套整个]|做一[套整]|完整(的)?(流程|方案|步骤|项目)|批量|依次|逐个|逐一|一步一步|分(成|几|多)步|多个步骤|整个(流程|项目|过程)|做一个.{0,10}(系统|项目|工具|网站|应用|脚本|程序)|搭(一个|个|建)|step\s*by\s*step|multi-?step|end\s*to\s*end|从头到尾|全流程/i
 const COMPLEX_TASK_BLOCK = `## Complex Task Mode
@@ -258,6 +265,7 @@ export function buildSystemPrompt({
   currentTools: _currentTools = [],  // 当前轮 injection.tools，未来用于按工具裁 Visual Surfaces 子段
   currentTaskText = '',        // 当前 active task 描述文本（编程纪律段的信号源之二）
   recentActionsSummary = '',   // 最近动作摘要拼接（编程纪律段的信号源之三：write_file+exec 模式）
+  isVoiceTurn = false,         // 本轮是否语音对话进来（用于 Voice Orb 段：是否提示 voice_retire）
   // The following are accepted for backward compatibility but no longer
   // affect the system string — they belong in buildContextBlock now.
   memories: _memories,
@@ -578,6 +586,11 @@ Sandbox status is injected every turn in <context><runtime> as "Sandbox Status".
   // Focus Banner —— 关键词 OR 当前已经在专注态
   if (shouldInjectFocusBanner(userMessage, hasActiveFocus)) {
     prompt += `\n\n${FOCUS_BANNER_BLOCK}`
+  }
+
+  // Voice Orb —— 仅语音对话轮（这一轮由语音进来，屏幕上可能有悬浮球，需判断是否退场）
+  if (isVoiceTurn) {
+    prompt += `\n\n${VOICE_RETIRE_BLOCK}`
   }
 
   // Complex Task Mode —— 关键词命中 OR 已有 active 多步任务

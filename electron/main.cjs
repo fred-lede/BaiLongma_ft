@@ -23,6 +23,8 @@ const http = require('http')
 const { EventEmitter } = require('events')
 const { pathToFileURL } = require('url')
 const { autoUpdater } = require('electron-updater')
+const wakeWord = require('./wake-word.cjs')
+const devLight = require('./dev-board-light.cjs')
 
 const IS_DEV = !app.isPackaged
 const WINDOWS_APP_USER_MODEL_ID = 'com.xiaoyuanda.bailongma'
@@ -132,6 +134,8 @@ let mainWindow = null
 let backendPort = 0
 let tray = null
 let focusBannerWindow = null
+let wakeProbeWindow = null
+let voiceOrbWindow = null
 
 // 后端通过 global.focusBannerBridge 控制横幅窗口
 const focusBannerBridge = new EventEmitter()
@@ -232,6 +236,13 @@ async function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       preload: path.join(__dirname, 'preload.cjs'),
+      // 后台唤醒会话：主窗口隐藏到托盘时仍在跑实时 ASR + 唤醒计时器(10s 监听/自动发送/看门狗)。
+      // 默认隐藏窗口的 timer/rAF 会被节流到 ~1Hz，会拖垮这些计时器 —— 关掉节流保证后台照常工作。
+      backgroundThrottling: false,
+      // 唤醒由后台命中触发(无用户手势),开麦的 AudioContext 默认会因自动播放策略停在 suspended、
+      // 采不到音频。放开手势要求,保证后台唤醒能直接开麦(与 wake-probe 耳朵窗同理);
+      // 顺带让语音助手的 TTS 也能无手势自动播放。
+      autoplayPolicy: 'no-user-gesture-required',
     },
   })
 
@@ -429,6 +440,111 @@ focusBannerBridge.on('hide', () => {
   }
 })
 
+// ─── 语音唤醒:隐藏"耳朵"窗口 + 主进程 KWS ───
+// 隐藏窗口常开麦克风 → AudioWorklet 出 16kHz Float32 → IPC → 主进程 KeywordSpotter。
+// 第一步只检测+写日志(USER_DIR/logs/wake-word.log),命中"白龙马"不做其他动作。
+function createWakeProbeWindow() {
+  if (wakeProbeWindow && !wakeProbeWindow.isDestroyed()) return
+  wakeProbeWindow = new BrowserWindow({
+    width: 220,
+    height: 120,
+    show: false,           // 始终隐藏:它只是"耳朵"
+    skipTaskbar: true,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      preload: path.join(__dirname, 'wake-probe-preload.cjs'),
+      autoplayPolicy: 'no-user-gesture-required', // 隐藏窗口无用户手势也能启动 AudioContext
+      backgroundThrottling: false,                // 后台不降频,保证常开采集不被节流
+    },
+  })
+
+  wakeProbeWindow.webContents.session.setPermissionRequestHandler((wc, permission, callback) => {
+    callback(permission === 'media')
+  })
+  wakeProbeWindow.webContents.session.setPermissionCheckHandler((wc, permission) => permission === 'media')
+
+  wakeProbeWindow.loadFile(path.join(__dirname, 'wake-probe.html'))
+  wakeProbeWindow.on('closed', () => { wakeProbeWindow = null })
+}
+
+ipcMain.on('wake:pcm', (_e, buffer) => {
+  if (!buffer) return
+  wakeWord.feedPcm(buffer) // 原样转发 ArrayBuffer 给 KWS 子进程
+})
+
+ipcMain.on('wake:status', (_e, info) => {
+  console.log('[wake-probe] 耳朵状态:', info?.status, info?.detail || '')
+})
+
+// ─── 语音唤醒第二步:独立置顶悬浮球窗口 ───
+// 命中「小白龙」→ 主窗口渲染层(voice-wake.js)开会话 + 经下列 IPC 驱动这个纯视觉球窗:
+// 入场动画 → 镜像球状态 → 10s 无话退场。球窗没有麦克风,真正的开麦/识别/对话仍在主窗口跑。
+// 透明/无边框/置顶/不抢焦点;首次唤醒时懒建,之后 hide 不销毁(下次唤醒即时入场)。
+// backgroundThrottling:false 让隐藏时也能立刻起动画(与主窗口同理)。
+function createVoiceOrbWindow() {
+  if (voiceOrbWindow && !voiceOrbWindow.isDestroyed()) return
+  const { workArea } = require('electron').screen.getPrimaryDisplay()
+  const W = 640, H = 380, topMargin = 8 // 球 264px(较初版翻倍) + 球下两行识别文字
+  voiceOrbWindow = new BrowserWindow({
+    width: W,
+    height: H,
+    x: workArea.x + Math.round((workArea.width - W) / 2), // 屏幕正上方居中
+    y: workArea.y + topMargin,
+    show: false,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    focusable: false, // 纯视觉,绝不抢占前台应用的焦点
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      preload: path.join(__dirname, 'voice-orb-preload.cjs'),
+      backgroundThrottling: false,
+    },
+  })
+  // 复用 brain-ui 的静态路由(/src/ui/brain-ui/*),voice-orb.html 的 import './voice-core.js' 才能解析
+  voiceOrbWindow.loadURL(`http://127.0.0.1:${backendPort}/src/ui/brain-ui/voice-orb.html`)
+  voiceOrbWindow.on('closed', () => { voiceOrbWindow = null })
+}
+
+function sendToOrb(channel, payload) {
+  if (!voiceOrbWindow || voiceOrbWindow.isDestroyed()) return
+  voiceOrbWindow.webContents.send(channel, payload)
+}
+
+// 主窗口渲染层 → 主进程:入场(显示球窗,不抢焦点)/ 状态镜像 / 退场
+ipcMain.on('wake:orb-enter', () => {
+  createVoiceOrbWindow()
+  const show = () => {
+    if (!voiceOrbWindow || voiceOrbWindow.isDestroyed()) return
+    voiceOrbWindow.showInactive() // 显示但不获焦,不打扰用户当前应用
+    sendToOrb('orb:enter')
+  }
+  // 首次创建需等页面加载完再下发命令;已加载则立即
+  if (voiceOrbWindow.webContents.isLoading()) {
+    voiceOrbWindow.webContents.once('did-finish-load', show)
+  } else {
+    show()
+  }
+})
+
+ipcMain.on('wake:orb-frame', (_e, payload) => { sendToOrb('orb:frame', payload) })
+
+ipcMain.on('wake:orb-text', (_e, payload) => { sendToOrb('orb:text', payload) })
+
+ipcMain.on('wake:orb-exit', () => { sendToOrb('orb:exit') })
+
+// 球窗:退场动画播完 → 真正隐藏(保活,下次唤醒复用)
+ipcMain.on('wake:orb-exit-done', () => {
+  if (voiceOrbWindow && !voiceOrbWindow.isDestroyed()) voiceOrbWindow.hide()
+})
+
 function setupAutoUpdater() {
   autoUpdater.autoDownload = false
   // Avoid applying an already downloaded update while Windows is shutting down.
@@ -547,6 +663,27 @@ app.whenReady().then(async () => {
   await createWindow()
   setupTray()
   setupAutoUpdater()
+
+  // 语音唤醒:初始化主进程 KWS 引擎,成功则开启隐藏"耳朵"窗口常驻监听。
+  // 失败(如缺模型/原生模块)不影响 app 其余功能 —— initWakeWord 内部已吞错。
+  try {
+    const wakeReady = wakeWord.initWakeWord({ codeRoot: CODE_ROOT, logDir: LOG_DIR })
+    if (wakeReady) {
+      // 命中"小白龙"→ ① 开发板灯 0.6s 内闪三次后灭(灯离线则静默忽略);
+      //              ② 通知主窗口渲染层启动唤醒会话(开麦+悬浮球入场+10s 监听,见 voice-wake.js)。
+      wakeWord.setOnHit(() => {
+        devLight.blink()
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('wake:hit')
+      })
+      createWakeProbeWindow()
+      createVoiceOrbWindow() // 预建悬浮球窗(隐藏),首次唤醒即时入场
+      console.log('[main] 语音唤醒已启用,隐藏耳朵窗口已开启')
+    } else {
+      console.warn('[main] 语音唤醒未启用(引擎初始化失败,见 wake-word.log)')
+    }
+  } catch (err) {
+    console.error('[main] 语音唤醒启动异常(忽略):', err?.message || err)
+  }
   // 不再注册任何系统级 globalShortcut；F11 / F12 / Ctrl+R 已由 mainWindow
   // 的 before-input-event 处理（见 createWindow），只在窗口获焦时生效，
   // 不会劫持浏览器/IDE 等其他应用的同键操作。

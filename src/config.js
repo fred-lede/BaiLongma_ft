@@ -1,3 +1,4 @@
+import './network-proxy.js'
 import fs from 'fs'
 import path from 'path'
 import { paths } from './paths.js'
@@ -13,7 +14,7 @@ export const MIMO_PROVIDER = 'mimo'
 
 export const DEFAULT_DEEPSEEK_MODEL = 'deepseek-v4-pro'
 export const DEFAULT_MINIMAX_MODEL = 'MiniMax-M2.7'
-export const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini'
+export const DEFAULT_OPENAI_MODEL = 'gpt-5.5'
 export const DEFAULT_QWEN_MODEL = 'qwen-turbo'
 export const DEFAULT_MOONSHOT_MODEL = 'kimi-k2.6'
 export const DEFAULT_ZHIPU_MODEL = 'glm-5.1'
@@ -57,13 +58,113 @@ export const MINIMAX_MODELS = [
 
 export const OPENAI_MODELS = [
   {
-    id: 'gpt-4o-mini',
-    label: 'gpt-4o-mini',
+    id: 'gpt-5.5',
+    label: 'GPT-5.5',
+    deprecated: false,
+  },
+  {
+    id: 'gpt-5.5-2026-04-23',
+    label: 'GPT-5.5 (2026-04-23)',
+    deprecated: false,
+  },
+  {
+    id: 'gpt-5.4',
+    label: 'GPT-5.4',
+    deprecated: false,
+  },
+  {
+    id: 'gpt-5.4-2026-03-05',
+    label: 'GPT-5.4 (2026-03-05)',
+    deprecated: false,
+  },
+  {
+    id: 'gpt-5.4-mini',
+    label: 'GPT-5.4 mini',
+    deprecated: false,
+  },
+  {
+    id: 'gpt-5.4-nano',
+    label: 'GPT-5.4 nano',
+    deprecated: false,
+  },
+  {
+    id: 'gpt-5.3-chat-latest',
+    label: 'GPT-5.3 Chat latest',
+    deprecated: false,
+  },
+  {
+    id: 'gpt-5.2',
+    label: 'GPT-5.2',
+    deprecated: false,
+  },
+  {
+    id: 'gpt-5.2-chat-latest',
+    label: 'GPT-5.2 Chat latest',
+    deprecated: true,
+  },
+  {
+    id: 'gpt-5.1',
+    label: 'GPT-5.1',
+    deprecated: false,
+  },
+  {
+    id: 'gpt-5.1-chat-latest',
+    label: 'GPT-5.1 Chat latest',
+    deprecated: false,
+  },
+  {
+    id: 'gpt-5',
+    label: 'GPT-5',
+    deprecated: false,
+  },
+  {
+    id: 'gpt-5-chat-latest',
+    label: 'GPT-5 Chat latest',
+    deprecated: true,
+  },
+  {
+    id: 'gpt-5-mini',
+    label: 'GPT-5 mini',
+    deprecated: false,
+  },
+  {
+    id: 'gpt-5-nano',
+    label: 'GPT-5 nano',
+    deprecated: false,
+  },
+  {
+    id: 'gpt-4.1',
+    label: 'GPT-4.1',
+    deprecated: false,
+  },
+  {
+    id: 'gpt-4.1-mini',
+    label: 'GPT-4.1 mini',
+    deprecated: false,
+  },
+  {
+    id: 'gpt-4.1-nano',
+    label: 'GPT-4.1 nano',
     deprecated: false,
   },
   {
     id: 'gpt-4o',
-    label: 'gpt-4o',
+    label: 'GPT-4o',
+    deprecated: false,
+  },
+  {
+    id: 'gpt-4o-mini',
+    label: 'GPT-4o mini',
+    deprecated: false,
+  },
+  {
+    id: 'o3',
+    label: 'o3',
+    deprecated: false,
+  },
+  {
+    id: 'o4-mini',
+    label: 'o4-mini',
     deprecated: false,
   },
 ]
@@ -319,7 +420,18 @@ function isMoonshotThinkingToggleSupportedModel(model) {
 }
 
 export function shouldOmitSamplingForProviderModel(provider, model) {
+  if (provider === OPENAI_PROVIDER && isOpenAIDefaultSamplingModel(model)) return true
   return provider === MOONSHOT_PROVIDER && isMoonshotKimiModel(model)
+}
+
+function isOpenAIDefaultSamplingModel(model) {
+  const value = String(model || '').trim().toLowerCase()
+  return value.startsWith('gpt-5') || /^o\d/.test(value)
+}
+
+export function shouldUseMaxCompletionTokensForProviderModel(provider, model) {
+  if (provider !== OPENAI_PROVIDER) return false
+  return isOpenAIDefaultSamplingModel(model)
 }
 
 export function shouldSendThinkingDisabledForProviderModel(provider, model) {
@@ -374,8 +486,12 @@ function buildPingParams(provider, model) {
   const pingParams = {
     model,
     messages: [{ role: 'user', content: 'Reply with exactly: hello' }],
-    max_tokens: 8,
     stream: false,
+  }
+  if (shouldUseMaxCompletionTokensForProviderModel(provider, model)) {
+    pingParams.max_completion_tokens = 32
+  } else {
+    pingParams.max_tokens = 8
   }
   if (!shouldOmitSamplingForProviderModel(provider, model)) {
     pingParams.temperature = 0
@@ -1597,5 +1713,6 @@ export const __internals = {
   isThinkingEnabledForModel,
   shouldOmitSamplingForProviderModel,
   shouldSendThinkingDisabledForProviderModel,
+  shouldUseMaxCompletionTokensForProviderModel,
   buildPingParams,
 }

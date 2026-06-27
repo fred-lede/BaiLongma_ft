@@ -121,4 +121,19 @@ export const uiSchemas = {
       }
     }
   },
+
+  voice_retire: {
+    type: 'function',
+    function: {
+      name: 'voice_retire',
+      description: 'Gracefully collapse the floating voice orb — the listening ball shown on screen during a voice conversation. Call it when, in a voice conversation, the user asks you to leave / stop / says that is all (退下 / 没事了 / 再见 / 先这样), OR the task is fully complete and no follow-up is expected. It retires only the on-screen ball after you finish speaking; it does NOT end the app or stop you from being reachable. No-op if no orb is currently showing.',
+      parameters: {
+        type: 'object',
+        properties: {
+          reason: { type: 'string', description: 'Optional short reason, e.g. user said goodbye / task done.' },
+        },
+        required: []
+      }
+    }
+  },
 }

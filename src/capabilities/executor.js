@@ -36,12 +36,13 @@ import { execManageReminder } from './tools/reminders.js'
 import { execGenerateImage, execGenerateLyrics, execGenerateMusic, execGenerateVideo, execMediaMode, execMusic, execSpeak } from './tools/media.js'
 import { execManageRule } from './tools/rules.js'
 import { runWorkReview } from '../review/reviewer.js'
+import { CAPABILITY_DEMO_INTRO, runCapabilityDemo } from '../capability-demo.js'
 export { calculateNextDueAt } from './tools/reminders.js'
 export { autoSpeakForVoiceReply } from './tools/media.js'
 
 import { config, setSecurity } from '../config.js'
 import { paths } from '../paths.js'
-import { lookupReplyTarget, normalizeChannel, suggestProactiveChannel, isVoiceChannel } from '../identity.js'
+import { lookupReplyTarget, normalizeChannel, suggestProactiveChannel, isVoiceChannel, isExternalChannel } from '../identity.js'
 import { sanitizeAssistantReplyForDelivery } from '../runtime/markers.js'
 
 // P0-2：识别 send_message 末尾是否留了"非澄清型 follow-up question"。
@@ -422,6 +423,8 @@ async function executeToolUnchecked(name, args, context = {}) {
         return execManageRule(args)
       case 'ui_set':
         return execUISet(args)
+      case 'capability_demo':
+        return execCapabilityDemo(args, context)
       case 'focus_banner':
         return execFocusBanner(args)
       case 'terminal_stream':
@@ -858,6 +861,38 @@ function execSetTickInterval({ seconds, ttl, reason }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // 面板 · 界面控制工具
 // ─────────────────────────────────────────────────────────────────────────────
+function execCapabilityDemo(args = {}, context = {}) {
+  if (isExternalChannel(context.currentChannel)) {
+    return toolJson({
+      ok: false,
+      tool: 'capability_demo',
+      error: 'capability_demo is local-only. For external channels, answer the capability question in text instead of opening local UI or speech.',
+    })
+  }
+  const spokenText = runCapabilityDemo({
+    to: context.currentTargetId || '',
+    channel: context.currentChannel || 'TUI',
+    speak: true,
+    message: true,
+  })
+  emitEvent('action', {
+    tool: 'capability_demo',
+    summary: '启动能力展示',
+    detail: args.reason || context.currentUserMessage || '',
+  })
+  return toolJson({
+    ok: true,
+    tool: 'capability_demo',
+    started: true,
+    delivered: true,
+    message_sent: true,
+    spoken: true,
+    spoken_text: spokenText,
+    intro_text: CAPABILITY_DEMO_INTRO,
+    final_reply_guidance: 'The intro message has already been sent and spoken while the visual demo starts. End the round now; do not send or speak another introduction.',
+  })
+}
+
 function execHotspotMode(args = {}) {
   const action = String(args.action || 'status').trim().toLowerCase()
   if (!['show', 'open', 'hide', 'close', 'toggle', 'status'].includes(action)) {

@@ -20,6 +20,7 @@ const TOOL_RISK = {
   manage_prefetch_task: 'medium',
   manage_rule: 'medium',
   ui_set: 'medium',
+  capability_demo: 'medium',
   terminal_stream: 'medium',
   set_tick_interval: 'medium',
   media_mode: 'low',

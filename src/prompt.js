@@ -2,6 +2,7 @@ import { nowTimestamp } from './time.js'
 import { buildAgentContextBlock } from './agents/registry.js'
 import { CODING_BLOCK, DIAGNOSE_BLOCK, shouldInjectCoding, shouldInjectDiagnose } from './prompt-blocks/coding-discipline.js'
 import { capabilityContextBlocks } from './capabilities/capability-registry.js'
+import { CAPABILITY_DEMO_PROMPT_BLOCK, shouldInjectCapabilityDemo } from './capability-demo-intent.js'
 import { formatUserProfileForPrompt } from './profile/format.js'
 import { getAppVersion } from './version.js'
 
@@ -229,6 +230,11 @@ function shouldInjectPlatformRouting(currentCountryCode, currentTimezone) {
   // 保守路径：geo 缺失 → 也走 CN 注入（与 PLATFORM_ROUTING_BLOCK 内"unknown → default to CN"一致）
   if (!cc && !tz) return true
   return false
+}
+
+function isLocalVisualChannel(currentChannel) {
+  const ch = String(currentChannel || 'TUI').toUpperCase()
+  return !['WECHAT', 'DISCORD', 'FEISHU', 'WECOM'].includes(ch)
 }
 
 function formatBirthDate(birthTimeISO) {
@@ -613,6 +619,11 @@ Sandbox status is injected every turn in <context><runtime> as "Sandbox Status".
   }
   if (shouldInjectDiagnose(disciplineSignals)) {
     prompt += `\n\n${DIAGNOSE_BLOCK}`
+  }
+
+  // 能力展示是按需工具：regex 只决定是否把工具/规则递给模型，最终是否调用由模型按意图判断。
+  if (isLocalVisualChannel(currentChannel) && shouldInjectCapabilityDemo(userMessage)) {
+    prompt += `\n\n${CAPABILITY_DEMO_PROMPT_BLOCK}`
   }
 
   // 能力工作流块 —— 已迁能力（weather / hotspot / worldcup / software-install）的 context

@@ -870,6 +870,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
   let lastToolResult = null
   let sawToolCall = false
   let sentMessage = false
+  let toolDeliveredFinalReply = false
   // delivered 语义：本次 callLLM 调用中是否**真正投递过**至少一条回复给用户。
   //   = 「≥1 次未被 silent / closer 拦截、且未熔断的 send_message 执行过」。
   //   这是"用户到底有没有收到实质回复"的**单一权威信号**，调用方不准再从 toolCallLog 二次推导。
@@ -1172,10 +1173,19 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
           // 真正开始执行前通知 UI —— 让用户知道当前停留在哪一步的工具上
           onToolExecute?.(tc.name, normalizedArgs)
           result = await executeTool(tc.name, normalizedArgs, { ...toolContext, signal })
+          let deliveredByToolResult = false
+          try {
+            const parsedResult = JSON.parse(String(result || '{}'))
+            deliveredByToolResult = parsedResult?.delivered === true && parsedResult?.message_sent === true
+          } catch {}
           recordToolLoopOutcome(toolLoopState, tc.name, fingerprint, result)
           // 单一权威：一次未被 silent/closer 拦截、未熔断的 send_message 真正执行过 →
           //   用户确实收到了回复。这是 delivered 唯一被置 true 的地方（除文末协议兜底外）。
           if (tc.name === 'send_message' && !strictSuppressed) delivered = true
+          if (deliveredByToolResult && !strictSuppressed) {
+            delivered = true
+            toolDeliveredFinalReply = true
+          }
           // find_tool 动态装载：把搜到的工具 schema 当场注入本轮 toolSchemas（数组原地 push，
           // 下一轮 streamOnceWithRetry 即带上），模型下一步就能直接调用搜出来的工具。
           if (tc.name === 'find_tool') injectFoundToolSchemas(result, toolSchemas, strictEvaluation)
@@ -1188,7 +1198,12 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
       // 这样 line ~641 的"沉默退出 nudge"才能在该补刀时正确触发。
       // 被 closer dedup 拦截的 send_message 也算 sentMessage=true（最后一个动作意图是
       // 发消息，主回复已经发过——下一轮注入 "默认结束本轮" nudge 是合适的）。
-      if (tc.name === 'send_message' && !strictSuppressed) {
+      let deliveredByToolResultForTurn = false
+      try {
+        const parsedResult = JSON.parse(String(result || '{}'))
+        deliveredByToolResultForTurn = parsedResult?.delivered === true && parsedResult?.message_sent === true
+      } catch {}
+      if ((tc.name === 'send_message' || deliveredByToolResultForTurn) && !strictSuppressed) {
         sentMessage = true
         // 仅对真实发出的（未被 dedup 拦截的）send_message 记录到 turn 历史，避免被拦截的
         // closer / silent signal / media-closer 反过来污染后续判断（已经被拦截的就当没发生）。
@@ -1281,6 +1296,14 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
       }
     }
     throwIfAborted(signal)
+    if (toolDeliveredFinalReply) {
+      return {
+        content: '',
+        toolResult: lastToolResult,
+        aborted: signal?.aborted ?? false,
+        delivered: true,
+      }
+    }
 
     // 将本轮 assistant 消息（含工具调用）加入对话
     // 若是 XML 解析的工具调用，assistant 消息用文本形式（避免 MiniMax 不支持 tool_calls 格式回放）

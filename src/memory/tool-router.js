@@ -22,6 +22,7 @@
 //   - recentActionLog      最近 N 条 action_log（保活源）
 //   - installedToolNames   marketplace 已安装的扩展工具
 //   - startupSelfCheckActive  启动自检激活标志
+//   - localVisualTurn      是否能安全展示本机 UI / TTS（TUI/voice 是 true，微信等外部渠道是 false）
 //   - fastUserPath         可选——是否实时用户消息（用于"再激进省一点"，未传按 false）
 //
 // 输出：去重后的 tools: string[]
@@ -29,6 +30,7 @@
 import { getStatus as getTickerStatus } from '../ticker.js'
 // 已迁能力的工具名 + 工具注入选择器由能力注册表提供（单向依赖：registry 不 import 本文件）。
 import { WEB_TOOLS, HOTSPOT_TOOLS, capabilityToolsFor } from '../capabilities/capability-registry.js'
+import { shouldInjectCapabilityDemo } from '../capability-demo-intent.js'
 
 // ---- 工具分组 ----
 //
@@ -72,6 +74,7 @@ const STARTUP_SELF_CHECK_TOOLS = [
 const PERSON_CARD_TOOLS = ['person_card_mode']
 const FOCUS_BANNER_TOOLS = ['focus_banner']
 const TERMINAL_STREAM_TOOLS = ['terminal_stream']
+const CAPABILITY_DEMO_TOOLS = ['capability_demo']
 const ADMIN_TOOLS       = [
   'manage_tool_factory', 'install_tool', 'uninstall_tool', 'list_tools',
   'set_security', 'connect_wechat', 'connect_feishu',
@@ -148,6 +151,12 @@ const TERMINAL_STREAM_TRIGGERS = [
   'visible progress', 'show progress', 'work log window',
 ]
 
+const CAPABILITY_DEMO_TRIGGERS = [
+  '你能做什么', '你会做什么', '你可以做什么', '你有什么能力', '你有哪些能力',
+  '能力展示', '功能展示', '能力演示', '功能演示',
+  'what can you do', 'capability demo', 'show capability',
+]
+
 const ADMIN_TRIGGERS = [
   '装一下', '安装', '装个', '卸载', '装好', '装上', '工具市场', '插件',
   '自写工具', '自己写工具', '工具工厂', '工具审核', '生成工具', '注册工具',
@@ -211,6 +220,7 @@ export const TOOL_GROUPS = [
   { triggers: PERSON_CARD_TRIGGERS,  tools: PERSON_CARD_TOOLS },
   { triggers: FOCUS_BANNER_TRIGGERS, tools: FOCUS_BANNER_TOOLS },
   { triggers: TERMINAL_STREAM_TRIGGERS, tools: TERMINAL_STREAM_TOOLS },
+  { triggers: CAPABILITY_DEMO_TRIGGERS, tools: CAPABILITY_DEMO_TOOLS },
   { triggers: ADMIN_TRIGGERS,        tools: ADMIN_TOOLS },
   { triggers: TTS_TRIGGERS,          tools: [MM_GEN_TOOLS.tts] },
   { triggers: LYRICS_TRIGGERS,       tools: [MM_GEN_TOOLS.lyrics] },
@@ -295,6 +305,7 @@ export function selectTools(ctx = {}) {
     recentActionLog = [],
     installedToolNames = [],
     startupSelfCheckActive = false,
+    localVisualTurn = true,
     fastUserPath = false,
   } = ctx
 
@@ -370,6 +381,9 @@ export function selectTools(ctx = {}) {
   }
   if (hits(body, TERMINAL_STREAM_TRIGGERS)) {
     for (const t of TERMINAL_STREAM_TOOLS) out.add(t)
+  }
+  if (!isTick && localVisualTurn !== false && shouldInjectCapabilityDemo(messageBody)) {
+    for (const t of CAPABILITY_DEMO_TOOLS) out.add(t)
   }
   if (hits(body, ADMIN_TRIGGERS)) {
     for (const t of ADMIN_TOOLS) out.add(t)

@@ -10,6 +10,7 @@ export const CHANNEL_NORMALIZE = {
   voice: 'TUI',
   VOICE: 'TUI',
   '语音识别': 'TUI',
+  '语音对话': 'TUI',
   FocusBanner: 'TUI',
   REMINDER: 'SYSTEM',
   SYSTEM: 'SYSTEM',
@@ -19,7 +20,7 @@ export const CHANNEL_NORMALIZE = {
 // LLM 可选的 channel 枚举（send_message 工具用）
 export const PUBLIC_CHANNELS = ['WECHAT', 'DISCORD', 'FEISHU', 'WECOM', 'TUI', 'AUTO']
 
-export const VOICE_CHANNELS = new Set(['voice', 'VOICE', '语音识别', 'FocusBanner'])
+export const VOICE_CHANNELS = new Set(['voice', 'VOICE', '语音识别', '语音对话', 'FocusBanner'])
 
 export function normalizeChannel(channel) {
   if (!channel) return 'TUI'

@@ -954,7 +954,11 @@ async function runTurn(input, label, msg = null) {
     // 但天气 surface 是确定性 UI 能力,不能完全依赖模型是否记得调用 ui_set。
 
     // 1. Injector
-    const injection = await runInjector({ message: input, state })
+    const injection = await runInjector({
+      message: input,
+      state,
+      currentChannel: msg ? normalizeChannel(msg.channel || '') : '',
+    })
     throwIfAborted(controller.signal)
 
     // 1b. 线索模型（DynamicMemoryPool.md 第 8 章）—— 专注栈的继任者。
@@ -1381,6 +1385,12 @@ async function runTurn(input, label, msg = null) {
     if (voiceTurn && !silentSignal && !voiceTurnNeedsSendMessage(input)) {
       turnTools = turnTools.filter(t => t !== 'send_message')
     }
+    // 能力展示是本地可视化动作。若 capability_demo 已按需注入，保留 send_message 会让模型
+    // 走成"只发一句看屏幕"的普通回复；本地轮次最终文字本来就能用 plain text 投递。
+    if (localReply && turnTools.includes('capability_demo')) {
+      turnTools = turnTools.filter(t => t !== 'send_message')
+    }
+    const capabilityDemoTurn = localReply && turnTools.includes('capability_demo')
     // thinking 不用"消息是否 trivial"的正则判定来开关 reasoning：浅层模式不该替模型决定"这题用不用想"
     // ——复合意图下会把需要 reasoning 的部分误判。是否思考由「用户在设置里的显式选择」(config.thinking) 决定，
     // 默认关闭、用户主动开启才思考；这是用户的选择，不是 runtime 按难度替它判定。
@@ -1440,6 +1450,7 @@ async function runTurn(input, label, msg = null) {
       onStream: ({ event, mode, text, name }) => {
         if (event === 'start') {
           curStreamMode = mode
+          if (capabilityDemoTurn && mode === 'text') return
           // plainReply：本地渠道（语音 / TUI，非社交）下正文流即用户可见回复——前端据此把正文实时
           //   打进聊天气泡（社交渠道回复在 send_message 工具参数里，正文流非回复，不实时显示）。
           // speak：语音轮才自动播报——前端据此对正文流逐句流式合成。
@@ -1449,9 +1460,16 @@ async function runTurn(input, label, msg = null) {
             speak: mode === 'text' && voiceTurn && !silentSignal,
           })
         } else if (event === 'chunk') {
+          if (capabilityDemoTurn && curStreamMode === 'text') return
           if (curStreamMode === 'text') sawTextStream = true
           emitEvent('stream_chunk', { text, mode: curStreamMode })
-        } else if (event === 'end') emitEvent('stream_end', { mode: curStreamMode })
+        } else if (event === 'end') {
+          if (capabilityDemoTurn && curStreamMode === 'text') {
+            curStreamMode = null
+            return
+          }
+          emitEvent('stream_end', { mode: curStreamMode })
+        }
         else if (event === 'tool_preparing') emitEvent('tool_preparing', { name })
       },
     })

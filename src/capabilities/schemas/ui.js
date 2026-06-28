@@ -2,6 +2,21 @@
 // person_card_mode / focus_banner
 // （声明式 Scene 的 ui_set 在 schemas/scene.js）
 export const uiSchemas = {
+  capability_demo: {
+    type: 'function',
+    function: {
+      name: 'capability_demo',
+      description: 'Start BaiLongma\'s visual and spoken capability showcase. When the user is asking what you/BaiLongma can do, or explicitly requests a capability/function demo/showcase, call this tool; it sends and speaks the intro itself while the visual sequence starts, so do not send a second introduction. Do not call for ordinary feasibility questions like "这个能做吗" or "能不能做 X". The demo runs as a paced sequence: weather card, streamed Chinese article writing, a maximized real Windows CMD window filling the screen with harmless random numbers for about 5 seconds, hotspot panel, then cleanup.',
+      parameters: {
+        type: 'object',
+        properties: {
+          reason: { type: 'string', description: 'Short reason why this message is a capability-showcase request.' },
+        },
+        required: []
+      }
+    }
+  },
+
   worldcup_mode: {
     type: 'function',
     function: {

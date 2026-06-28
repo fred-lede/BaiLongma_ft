@@ -15,7 +15,7 @@ import {
   searchMemories,
 } from '../db.js'
 import { getInstalledToolNames } from '../capabilities/marketplace/index.js'
-import { PRIMARY_USER_ID } from '../identity.js'
+import { PRIMARY_USER_ID, isExternalChannel } from '../identity.js'
 import { extractKeywords } from './keywords.js'
 import { stripTemporalWords } from './temporal-parser.js'
 import { selectTools } from './tool-router.js'
@@ -51,7 +51,7 @@ export { formatActivePoliciesForPrompt } from './active-policies.js'
 const L2_CONTEXT_HOURS = 24 * 7
 
 // hint：一层思考器的输出文本，用于扩展 L2 的记忆检索范围
-export async function runInjector({ message, state, hint = '' }) {
+export async function runInjector({ message, state, hint = '', currentChannel = '' }) {
   const injectorStartedAt = Date.now()
   const lastToolResult = state?.lastToolResult || null
   if (lastToolResult) state.lastToolResult = null
@@ -206,6 +206,7 @@ export async function runInjector({ message, state, hint = '' }) {
     recentActionLog: actionLog,
     installedToolNames: installedNames,
     startupSelfCheckActive: !!state?.startupSelfCheck?.active,
+    localVisualTurn: !currentChannel || !isExternalChannel(currentChannel),
     // fastUserPath 留作未来扩展——目前从 state 上拿不到，selectTools 接受未传即 false
   })
 

@@ -2372,7 +2372,7 @@ function initTTSSettings() {
     });
     if (provider === "custom-openai" || provider === "aethermesh") {
       if (voiceSel) voiceSel.style.display = "none";
-      if (customVoiceId) customVoiceId.style.display = provider === "custom-openai" ? "" : "none";
+      if (customVoiceId) customVoiceId.style.display = "";
     } else {
       if (voiceSel) voiceSel.style.display = "";
       if (customVoiceId) customVoiceId.style.display = "none";

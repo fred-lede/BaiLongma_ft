@@ -685,6 +685,16 @@ const createSettingsModal = () => `
                   <input class="settings-input" type="text" id="tts-aethermesh-voice-id" placeholder="可留空，通过人物卡片指定每位用户的声音" style="flex:1;">
                 </div>
               </div>
+              <div class="settings-row">
+                <label class="settings-label" for="tts-aethermesh-lang">TTS 语言</label>
+                <select class="settings-input" id="tts-aethermesh-lang">
+                  <option value="zh-tw">中文（繁体）</option>
+                  <option value="zh-cn">中文（简体）</option>
+                  <option value="en">English</option>
+                  <option value="ja">日本語</option>
+                  <option value="ko">한국어</option>
+                </select>
+              </div>
               <p class="settings-hint">AetherMesh 本地语音克隆服务。可在此填入默认声音 ID，或通过人物卡片为每位用户独立克隆和指定声音。</p>
             </div>
 

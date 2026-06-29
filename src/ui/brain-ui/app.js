@@ -2433,6 +2433,8 @@ function initTTSSettings() {
     }
     const aethermeshBaseEl = document.getElementById("tts-aethermesh-baseurl");
     if (aethermeshBaseEl && tts?.aethermeshBaseURL) aethermeshBaseEl.value = tts.aethermeshBaseURL;
+    const aethermeshLangEl = document.getElementById("tts-aethermesh-lang");
+    if (aethermeshLangEl && tts?.aethermeshLanguage) aethermeshLangEl.value = tts.aethermeshLanguage;
     showCredSection(provider);
   }).catch(() => { showCredSection(providerSel.value); });
 
@@ -2483,6 +2485,8 @@ function initTTSSettings() {
       if (aethermeshKey) ttsBody.aethermeshKey = aethermeshKey;
       const aethermeshBaseURL = document.getElementById("tts-aethermesh-baseurl")?.value?.trim();
       if (aethermeshBaseURL) ttsBody.aethermeshBaseURL = aethermeshBaseURL;
+      const aethermeshLang = document.getElementById("tts-aethermesh-lang")?.value?.trim();
+      if (aethermeshLang) ttsBody.aethermeshLanguage = aethermeshLang;
 
       fetch(`${API}/settings/tts`, {
         method: "POST",

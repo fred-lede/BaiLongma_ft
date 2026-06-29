@@ -1278,7 +1278,7 @@ const TTS_CONFIG_KEYS = [
   'elevenLabsKey',
   'volcanoAppId', 'volcanoToken',
   'customTtsKey', 'customTtsBaseURL', 'customTtsModel',
-  'aethermeshKey', 'aethermeshBaseURL',
+  'aethermeshKey', 'aethermeshBaseURL', 'aethermeshLanguage',
 ]
 
 export function getTTSConfig() {
@@ -1304,6 +1304,7 @@ export function getTTSConfig() {
     customTtsModel:   stored.customTtsModel || '',
     aethermeshKey:   { configured: !!(stored.aethermeshKey) },
     aethermeshBaseURL: stored.aethermeshBaseURL || 'http://localhost:8001',
+    aethermeshLanguage: stored.aethermeshLanguage || 'zh-tw',
   }
 }
 
@@ -1331,6 +1332,7 @@ export function getTTSCredentials() {
     customTtsModel: stored.customTtsModel || '',
     aethermeshKey:   stored.aethermeshKey  || '',
     aethermeshBaseURL: stored.aethermeshBaseURL || 'http://localhost:8001',
+    aethermeshLanguage: stored.aethermeshLanguage || 'zh-tw',
   }
 }
 

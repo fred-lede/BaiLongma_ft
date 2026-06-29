@@ -661,6 +661,10 @@ const createSettingsModal = () => `
 
             <div id="tts-creds-aethermesh" style="display:none;">
               <div class="settings-row">
+                <label class="settings-label" for="tts-aethermesh-key">API Key</label>
+                <input class="settings-input" type="password" id="tts-aethermesh-key" placeholder="留空则不使用（本地部署通常不需要）">
+              </div>
+              <div class="settings-row">
                 <label class="settings-label" for="tts-aethermesh-baseurl">Base URL</label>
                 <input class="settings-input" type="text" id="tts-aethermesh-baseurl" placeholder="http://localhost:8001">
               </div>

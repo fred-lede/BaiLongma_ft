@@ -416,10 +416,12 @@ async function streamCustomOpenAI({ text, voiceId = 'nova', apiKey, baseURL, mod
 // 服务地址默认为 http://localhost:8001
 // GET /v1/audio/speech?text=...&voice_id=...  合成语音
 // POST /v1/voices                             注册/克隆声音
-async function streamAetherMesh({ text, voiceId, baseURL = 'http://localhost:8001' }) {
+async function streamAetherMesh({ text, voiceId, baseURL = 'http://localhost:8001', apiKey = '' }) {
   if (!voiceId) throw new Error('AetherMesh TTS: 缺少声音 ID，请先在人物卡片中克隆或指定声音')
   const url = `${baseURL.replace(/\/$/, '')}/v1/audio/speech?text=${encodeURIComponent(text)}&voice_id=${encodeURIComponent(voiceId)}`
-  const resp = await fetch(url)
+  const headers = {}
+  if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`
+  const resp = await fetch(url, { headers })
   if (!resp.ok) {
     const err = await resp.text()
     throw new Error(`AetherMesh TTS 失败 (${resp.status}): ${err.slice(0, 300)}`)
@@ -453,7 +455,7 @@ export async function streamTTS({ text, provider, voiceId, keys = {} }) {
     case 'custom-openai':
       return streamCustomOpenAI({ text, voiceId, apiKey: keys.customTtsKey, baseURL: keys.customTtsBaseURL, model: keys.customTtsModel })
     case 'aethermesh':
-      return streamAetherMesh({ text, voiceId, baseURL: keys.aethermeshBaseURL })
+      return streamAetherMesh({ text, voiceId, baseURL: keys.aethermeshBaseURL, apiKey: keys.aethermeshKey })
     default:
       throw new Error(`未知 TTS 服务商: ${provider}，请在设置中选择一个 TTS 服务商`)
   }

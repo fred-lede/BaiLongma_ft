@@ -1696,6 +1696,7 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
               customTtsKey:  creds.customTtsKey,
               customTtsBaseURL: creds.customTtsBaseURL,
               customTtsModel: creds.customTtsModel,
+              aethermeshKey: creds.aethermeshKey,
               aethermeshBaseURL: creds.aethermeshBaseURL,
             },
           })

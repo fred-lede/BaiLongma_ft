@@ -2475,6 +2475,8 @@ function initTTSSettings() {
       if (customBaseURL) ttsBody.customTtsBaseURL = customBaseURL;
       const customModel = document.getElementById("tts-custom-model")?.value?.trim();
       if (customModel) ttsBody.customTtsModel = customModel;
+      const aethermeshKey = document.getElementById("tts-aethermesh-key")?.value?.trim();
+      if (aethermeshKey) ttsBody.aethermeshKey = aethermeshKey;
       const aethermeshBaseURL = document.getElementById("tts-aethermesh-baseurl")?.value?.trim();
       if (aethermeshBaseURL) ttsBody.aethermeshBaseURL = aethermeshBaseURL;
 

@@ -367,7 +367,7 @@ function resolveDeliveryTarget(resolvedId, channelPref, context = {}) {
   const pref = (channelPref || 'AUTO').toUpperCase()
 
   // resolvedId 本身就是带渠道前缀的外部 ID（少见，但保留兼容）—— 直接当外部投递
-  if (/^(wechat|discord|feishu|wecom):/i.test(resolvedId)) {
+  if (/^(wechat|discord|feishu|wecom|telegram):/i.test(resolvedId)) {
     return { externalTargetId: resolvedId, deliveryChannel: '', isLocal: false }
   }
 

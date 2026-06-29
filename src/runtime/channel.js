@@ -5,6 +5,7 @@ export const CHANNEL_NORMALIZE = {
   WECOM: 'WECOM',
   DISCORD: 'DISCORD',
   FEISHU: 'FEISHU',
+  TELEGRAM: 'TELEGRAM',
   TUI: 'TUI',
   API: 'TUI',
   voice: 'TUI',
@@ -16,7 +17,7 @@ export const CHANNEL_NORMALIZE = {
 }
 
 // LLM 可选的 channel 枚举（send_message 工具用）
-export const PUBLIC_CHANNELS = ['WECHAT', 'DISCORD', 'FEISHU', 'WECOM', 'TUI', 'AUTO']
+export const PUBLIC_CHANNELS = ['WECHAT', 'DISCORD', 'FEISHU', 'WECOM', 'TELEGRAM', 'TUI', 'AUTO']
 
 export function normalizeChannel(channel) {
   if (!channel) return 'TUI'

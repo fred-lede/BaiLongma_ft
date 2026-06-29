@@ -198,6 +198,22 @@ export function getPersonCardVoice(personName) {
   return card?.preferredVoice || ''
 }
 
+export function setPersonCardLanguage(personName, language) {
+  const store = loadCardStore()
+  const normalized = normalizeText(personName)
+  const existing = store[normalized]
+  if (!existing && !hasUsefulCardData({ name: personName })) return false
+  const card = existing ? { ...existing } : { name: personName }
+  card.preferredLanguage = language || ''
+  card.updatedAt = new Date().toISOString()
+  return !!savePersonCard(card)
+}
+
+export function getPersonCardLanguage(personName) {
+  const card = findPersonCard(personName)
+  return card?.preferredLanguage || ''
+}
+
 function mergeCardData(existing = {}, incoming = {}) {
   const merged = normalizeCard({
     ...existing,

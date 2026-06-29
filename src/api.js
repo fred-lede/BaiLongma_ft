@@ -25,7 +25,7 @@ import { getClawbotQR, logoutClawbot } from './social/wechat-clawbot.js'
 import { createCloudASRSession } from './voice/cloud-asr.js'
 import { getHotspots, setHotspotPanelState, getHotspotPanelState } from './hotspots.js'
 import { getWorldcup, setWorldcupPanelState, getWorldcupPanelState } from './worldcup.js'
-import { getPersonCard, setPersonCardPanelState, getPersonCardPanelState, setPersonCardVoice } from './person-cards.js'
+import { getPersonCard, setPersonCardPanelState, getPersonCardPanelState, setPersonCardVoice, setPersonCardLanguage, getPersonCardLanguage } from './person-cards.js'
 import { setDocPanelState, getDocPanelState, DOC_TOPICS } from './docs.js'
 import { getTraces, getTrace, clearTraces, getTraceStatus } from './runtime/turn-trace.js'
 
@@ -695,6 +695,17 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
         .then((body) => {
           const ok = setPersonCardVoice(body.name, body.voiceId)
           jsonResponse(res, 200, { ok, voice_id: body.voiceId })
+        })
+        .catch((err) => jsonResponse(res, 400, { ok: false, error: err.message }))
+      return
+    }
+
+    // POST /person-card/language - save per-user language preference
+    if (req.method === 'POST' && url.pathname === '/person-card/language') {
+      readJsonBody(req)
+        .then((body) => {
+          const ok = setPersonCardLanguage(body.name, body.language)
+          jsonResponse(res, 200, { ok, language: body.language })
         })
         .catch((err) => jsonResponse(res, 400, { ok: false, error: err.message }))
       return
@@ -1700,6 +1711,7 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
               customTtsModel: creds.customTtsModel,
               aethermeshKey: creds.aethermeshKey,
               aethermeshBaseURL: creds.aethermeshBaseURL,
+              aethermeshLanguage: creds.aethermeshLanguage,
             },
           })
           let headersWritten = false

@@ -27,6 +27,19 @@ export const createPersonCardPanel = () => `
         <button class="settings-save-btn" id="pc-clone-voice-btn" type="button" style="padding:0 10px;font-size:11px;white-space:nowrap;">克隆</button>
         <button class="settings-save-btn" id="pc-test-voice-btn" type="button" style="padding:0 10px;font-size:11px;white-space:nowrap;">试听</button>
       </div>
+      <div class="pc-voice-row" style="margin-top:6px;">
+        <label class="settings-label" for="pc-language" style="font-size:11px;white-space:nowrap;">语言</label>
+        <select class="settings-input" id="pc-language" style="flex:1;font-size:11px;">
+          <option value="">跟随系统</option>
+          <option value="zh-tw">中文（繁体）</option>
+          <option value="zh-cn">中文（简体）</option>
+          <option value="en">English</option>
+          <option value="ja">日本語</option>
+          <option value="ko">한국어</option>
+          <option value="es">Español</option>
+          <option value="th">ภาษาไทย</option>
+        </select>
+      </div>
       <input type="file" id="pc-clone-file" accept="audio/*" style="display:none;">
       <span id="pc-clone-status" style="font-size:11px;color:var(--ink2);"></span>
     </div>

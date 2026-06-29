@@ -16,7 +16,8 @@ import { pushMessage } from '../../queue.js'
 import { callCapability } from '../../providers/registry.js'
 import { isDailyLimitReached } from '../../quota.js'
 import { getTTSCredentials, getSeedanceConfig } from '../../config.js'
-import { getPersonCardVoice } from '../../person-cards.js'
+import { getPersonCardVoice, getPersonCardLanguage } from '../../person-cards.js'
+import { callLLM } from '../../llm.js'
 import { streamTTS, TTS_VOICES, validateTTSConfig } from '../../voice/tts-providers.js'
 import { paths } from '../../paths.js'
 import { SANDBOX_ROOT } from '../sandbox.js'
@@ -122,18 +123,23 @@ export async function execSpeak(args) {
   if (!check.ok) return `语音合成还不能用：${check.guide}`
 
   let requestedVoiceId = args.voice_id || args.voice
-  if (!requestedVoiceId) {
-    const targetPerson = args.target_person || args.targetPerson || args.target_name
-    if (targetPerson) {
-      const personVoice = getPersonCardVoice(targetPerson)
-      if (personVoice) requestedVoiceId = personVoice
-    }
+  let targetLang = ''
+  const targetPerson = args.target_person || args.targetPerson || args.target_name
+  if (!requestedVoiceId && targetPerson) {
+    const personVoice = getPersonCardVoice(targetPerson)
+    if (personVoice) requestedVoiceId = personVoice
+    targetLang = getPersonCardLanguage(targetPerson) || ''
   }
   const voiceId = resolveProviderVoiceId(creds.provider, requestedVoiceId, creds.voiceId)
 
+  // 如果目标人物偏好語言與目前文字不符，先翻譯再合成
+  const ttsLang = creds.aethermeshLanguage || ''
+  const textNeedsTranslate = targetLang && ttsLang && targetLang !== ttsLang
+  const textToSpeak = textNeedsTranslate ? await translateForTTS(text, targetLang) : text
+
   let buffer
   try {
-    buffer = await synthSpeechBuffer({ text, provider: creds.provider, voiceId, creds })
+    buffer = await synthSpeechBuffer({ text: textToSpeak, provider: creds.provider, voiceId, creds })
   } catch (err) {
     if (err.name === 'AbortError') throw err
     console.warn(`[speak] 合成失败: ${err.message}`)
@@ -147,7 +153,7 @@ export async function execSpeak(args) {
   fs.writeFileSync(resolved, buffer)
 
   const relPath = `audio/${fname}`
-  emitEvent('audio_created', { path: relPath, text: text.slice(0, 60), autoPlay: true })
+  emitEvent('audio_created', { path: relPath, text: textToSpeak.slice(0, 60), autoPlay: true })
   console.log(`[speak] 已生成: ${relPath}`)
   return `语音已生成：${relPath}`
 }
@@ -167,6 +173,26 @@ export function stripMarkdownForSpeech(text) {
     .replace(/\*\*/g, '') // 加粗记号被流式切句切成两半时残留的半截
     .replace(/\n+/g, ' ')
     .trim()
+}
+
+// Translate text for TTS: when the target person prefers a different language,
+// translate the text before sending to TTS so the synthesized voice sounds natural.
+async function translateForTTS(text, targetLang) {
+  if (!text || !targetLang) return text
+  try {
+    const langLabel = { 'zh-tw': '繁體中文', 'zh-cn': '简体中文', en: 'English', ja: '日本語', ko: '한국어', es: 'Español', th: 'ภาษาไทย' }[targetLang] || targetLang
+    const result = await callLLM({
+      systemPrompt: `你是一個專業的翻譯助手。將以下文字翻譯成 ${langLabel}。只輸出翻譯後的文字，不要加任何說明、備註或引號。`,
+      message: text,
+      temperature: 0.3,
+      maxTokens: 800,
+      thinking: false,
+    })
+    if (result?.content?.trim()) return result.content.trim()
+  } catch (err) {
+    console.warn('[translateForTTS] 翻譯失敗:', err.message)
+  }
+  return text
 }
 
 // 语音消息自动回复 TTS：检测到用户用语音输入时，通知前端播放语音

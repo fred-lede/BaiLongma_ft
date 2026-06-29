@@ -138,6 +138,8 @@ function renderPersonCard(card = {}) {
 
   const voiceInput = $('pc-voice-id');
   if (voiceInput) voiceInput.value = card.preferredVoice || '';
+  const langSelect = $('pc-language');
+  if (langSelect) langSelect.value = card.preferredLanguage || '';
   const cloneStatus = $('pc-clone-status');
   if (cloneStatus) cloneStatus.textContent = '';
 
@@ -336,6 +338,27 @@ export function initPersonCard() {
     voiceInput.addEventListener('change', () => {
       const vid = voiceInput.value.trim();
       if (vid) saveVoiceId(vid);
+    });
+  }
+
+  async function saveLanguage(language) {
+    if (!currentCard?.name) return;
+    try {
+      await fetch(apiUrl('/person-card/language'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: currentCard.name, language }),
+      });
+      currentCard.preferredLanguage = language;
+    } catch (err) {
+      console.warn('[PersonCard] 保存语言失败:', err.message);
+    }
+  }
+
+  const langSelect = $('pc-language');
+  if (langSelect) {
+    langSelect.addEventListener('change', () => {
+      saveLanguage(langSelect.value);
     });
   }
 

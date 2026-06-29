@@ -15,9 +15,8 @@ import { emitEvent } from '../../events.js'
 import { pushMessage } from '../../queue.js'
 import { callCapability } from '../../providers/registry.js'
 import { isDailyLimitReached } from '../../quota.js'
-import { getTTSCredentials, getSeedanceConfig } from '../../config.js'
+import { getTTSCredentials, getSeedanceConfig, config as llmConfig } from '../../config.js'
 import { getPersonCardVoice, getPersonCardLanguage } from '../../person-cards.js'
-import { callLLM } from '../../llm.js'
 import { streamTTS, TTS_VOICES, validateTTSConfig } from '../../voice/tts-providers.js'
 import { paths } from '../../paths.js'
 import { SANDBOX_ROOT } from '../sandbox.js'
@@ -177,27 +176,39 @@ export function stripMarkdownForSpeech(text) {
 
 // Translate text for TTS: when the target person prefers a different language,
 // translate the text before sending to TTS so the synthesized voice sounds natural.
-// 超時 10s，防止 LLM 卡住導致 TTS 完全失效。
+// 10s 超時，翻譯失敗時返回原文，不阻斷 TTS。
 async function translateForTTS(text, targetLang) {
   if (!text || !targetLang) return text
   try {
     const langLabel = { 'zh-tw': '繁體中文', 'zh-cn': '简体中文', en: 'English', ja: '日本語', ko: '한국어', es: 'Español', th: 'ภาษาไทย' }[targetLang] || targetLang
+    const apiKey = llmConfig.apiKey
+    const baseURL = llmConfig.baseURL
+    if (!apiKey || !baseURL) return text
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 10000)
-    const result = await callLLM({
-      systemPrompt: `你是一個專業的翻譯助手。將以下文字翻譯成 ${langLabel}。只輸出翻譯後的文字，不要加任何說明、備註或引號。`,
-      message: text,
-      temperature: 0.3,
-      maxTokens: 800,
-      thinking: false,
+    const resp = await fetch(`${baseURL.replace(/\/$/, '')}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model: llmConfig.model || 'gpt-4o-mini',
+        messages: [
+          { role: 'system', content: `你是一個專業的翻譯助手。將以下文字翻譯成 ${langLabel}。只輸出翻譯後的文字，不要加任何說明、備註或引號。` },
+          { role: 'user', content: text },
+        ],
+        max_tokens: 800,
+        temperature: 0.3,
+      }),
       signal: controller.signal,
     })
     clearTimeout(timeout)
-    if (result?.content?.trim()) return result.content.trim()
+    if (!resp.ok) return text
+    const data = await resp.json()
+    const content = data.choices?.[0]?.message?.content?.trim()
+    return content || text
   } catch (err) {
     console.warn('[translateForTTS] 翻譯失敗:', err.message)
+    return text
   }
-  return text
 }
 
 // 语音消息自动回复 TTS：检测到用户用语音输入时，通知前端播放语音

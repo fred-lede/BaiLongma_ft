@@ -1463,7 +1463,7 @@ function handle({ type, data = {} }) {
       const ch = String(data.channel || "").toUpperCase();
       const isExternal =
         (ch && ch !== "TUI" && ch !== "API" && ch !== "SYSTEM" && ch !== "REMINDER" && ch !== "APP_SIGNAL" && ch !== "VOICE" && ch !== "语音识别")
-        || (data.from_id && /^(wechat|discord|feishu|wecom):/i.test(data.from_id));
+        || (data.from_id && /^(wechat|discord|feishu|wecom|telegram):/i.test(data.from_id));
       if (isExternal) {
         const label = friendlyChannelLabel(data.channel) || data.from_id || "External";
         addMsg("external", data.content, { label, alert: false });
@@ -2281,12 +2281,100 @@ function initTTSSettings() {
     openai:     document.getElementById("tts-creds-openai"),
     elevenlabs: document.getElementById("tts-creds-elevenlabs"),
     volcano:    document.getElementById("tts-creds-volcano"),
+    "custom-openai": document.getElementById("tts-creds-custom-openai"),
   };
+
+  const customVoiceId = document.getElementById("tts-custom-voice-id");
+  const customModelInput = document.getElementById("tts-custom-model");
+  const customRefreshModelsBtn = document.getElementById("tts-custom-refresh-models");
+  const customRefreshVoicesBtn = document.getElementById("tts-custom-refresh-voices");
+
+  if (customRefreshModelsBtn) {
+    customRefreshModelsBtn.addEventListener("click", async () => {
+      const baseURL = document.getElementById("tts-custom-baseurl")?.value?.trim();
+      const apiKey = document.getElementById("tts-custom-key")?.value?.trim();
+      if (!baseURL) { alert("请先填写 Base URL"); return; }
+      customRefreshModelsBtn.disabled = true;
+      customRefreshModelsBtn.textContent = "获取中…";
+      try {
+        const headers = {};
+        if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
+        const res = await fetch(`${baseURL.replace(/\/$/, "")}/v1/models`, { headers });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const json = await res.json();
+        const models = (json.data || []).filter(m => {
+          const caps = m.capabilities || m.metadata?.capabilities || [];
+          return caps.includes("audio") || /tts|speech|audio|voice/i.test(m.id);
+        });
+        if (models.length === 0) {
+          customRefreshModelsBtn.textContent = "未找到 TTS 模型";
+          setTimeout(() => { customRefreshModelsBtn.textContent = "刷新"; }, 2000);
+          return;
+        }
+        const ids = models.map(m => m.id);
+        if (customModelInput && ids.length) {
+          customModelInput.value = ids[0];
+          if (ids.length > 1) {
+            customModelInput.placeholder = `可用的模型: ${ids.join(", ")}`;
+          }
+        }
+        customRefreshModelsBtn.textContent = `找到 ${models.length} 个`;
+      } catch (err) {
+        customRefreshModelsBtn.textContent = "获取失败";
+        console.error("[TTS] 刷新模型失败:", err.message);
+      } finally {
+        customRefreshModelsBtn.disabled = false;
+        setTimeout(() => { customRefreshModelsBtn.textContent = "刷新"; }, 3000);
+      }
+    });
+  }
+
+  if (customRefreshVoicesBtn) {
+    customRefreshVoicesBtn.addEventListener("click", async () => {
+      const baseURL = document.getElementById("tts-custom-baseurl")?.value?.trim();
+      const apiKey = document.getElementById("tts-custom-key")?.value?.trim();
+      if (!baseURL) { alert("请先填写 Base URL"); return; }
+      customRefreshVoicesBtn.disabled = true;
+      customRefreshVoicesBtn.textContent = "获取中…";
+      try {
+        const headers = {};
+        if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
+        const res = await fetch(`${baseURL.replace(/\/$/, "")}/v1/voices`, { headers });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const json = await res.json();
+        const voices = json.data || json.voices || [];
+        if (voices.length === 0) {
+          customRefreshVoicesBtn.textContent = "未找到声音";
+          setTimeout(() => { customRefreshVoicesBtn.textContent = "刷新"; }, 2000);
+          return;
+        }
+        if (customVoiceId && voices.length) {
+          customVoiceId.value = voices[0].voice_id || voices[0].id || "";
+          const names = voices.map(v => `${v.voice_id || v.id} (${v.name || v.language || ""})`).join(", ");
+          customVoiceId.placeholder = names;
+        }
+        customRefreshVoicesBtn.textContent = `找到 ${voices.length} 个`;
+      } catch (err) {
+        customRefreshVoicesBtn.textContent = "获取失败";
+        console.error("[TTS] 刷新声音失败:", err.message);
+      } finally {
+        customRefreshVoicesBtn.disabled = false;
+        setTimeout(() => { customRefreshVoicesBtn.textContent = "刷新"; }, 3000);
+      }
+    });
+  }
 
   function showCredSection(provider) {
     Object.entries(credSections).forEach(([k, el]) => {
       if (el) el.style.display = k === provider ? "" : "none";
     });
+    if (provider === "custom-openai") {
+      if (voiceSel) voiceSel.style.display = "none";
+      if (customVoiceId) customVoiceId.style.display = "";
+    } else {
+      if (voiceSel) voiceSel.style.display = "";
+      if (customVoiceId) customVoiceId.style.display = "none";
+    }
   }
 
   function updateVoiceOptions(provider, savedId) {
@@ -2330,6 +2418,13 @@ function initTTSSettings() {
     }
     const baseurlEl = document.getElementById("tts-openai-baseurl");
     if (baseurlEl && tts?.openaiTtsBaseURL) baseurlEl.value = tts.openaiTtsBaseURL;
+    const customBaseEl = document.getElementById("tts-custom-baseurl");
+    if (customBaseEl && tts?.customTtsBaseURL) customBaseEl.value = tts.customTtsBaseURL;
+    const customModelEl = document.getElementById("tts-custom-model");
+    if (customModelEl && tts?.customTtsModel) customModelEl.value = tts.customTtsModel;
+    if (customVoiceId && tts?.ttsVoiceId && provider === "custom-openai") {
+      customVoiceId.value = tts.ttsVoiceId;
+    }
     showCredSection(provider);
   }).catch(() => {});
 
@@ -2339,7 +2434,12 @@ function initTTSSettings() {
   if (origSaveBtn) {
     origSaveBtn.addEventListener("click", () => {
       const ttsBody = { ttsProvider: providerSel.value };
-      const voiceId  = voiceSel?.value?.trim();
+      let voiceId;
+      if (providerSel.value === "custom-openai") {
+        voiceId = customVoiceId?.value?.trim();
+      } else {
+        voiceId = voiceSel?.value?.trim();
+      }
       if (voiceId) { ttsBody.ttsVoiceId = voiceId; activeTTSVoiceId = voiceId; }
       const minimaxKey = document.getElementById("tts-minimax-key")?.value?.trim();
       if (minimaxKey) ttsBody.minimaxKey = minimaxKey;
@@ -2365,13 +2465,19 @@ function initTTSSettings() {
       if (volcanoAppId) ttsBody.volcanoAppId = volcanoAppId;
       const volcanoToken = document.getElementById("tts-volcano-token")?.value?.trim();
       if (volcanoToken) ttsBody.volcanoToken = volcanoToken;
+      const customKey = document.getElementById("tts-custom-key")?.value?.trim();
+      if (customKey) ttsBody.customTtsKey = customKey;
+      const customBaseURL = document.getElementById("tts-custom-baseurl")?.value?.trim();
+      if (customBaseURL) ttsBody.customTtsBaseURL = customBaseURL;
+      const customModel = document.getElementById("tts-custom-model")?.value?.trim();
+      if (customModel) ttsBody.customTtsModel = customModel;
 
       fetch(`${API}/settings/tts`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(ttsBody),
       }).then(() => {
-        ["tts-minimax-key", "tts-doubao-key", "tts-doubao-access-key", "tts-openai-key", "tts-elevenlabs-key", "tts-volcano-token"].forEach(id => {
+        ["tts-minimax-key", "tts-doubao-key", "tts-doubao-access-key", "tts-openai-key", "tts-elevenlabs-key", "tts-volcano-token", "tts-custom-key"].forEach(id => {
           const el = document.getElementById(id);
           if (el) el.value = "";
         });
@@ -2385,8 +2491,13 @@ function initTTSSettings() {
       if (testStatus) testStatus.textContent = "保存配置中…";
       try {
         const preBody = { ttsProvider: providerSel.value };
-        const currentVoice = voiceSel?.value?.trim();
-        if (currentVoice) { preBody.ttsVoiceId = currentVoice; activeTTSVoiceId = currentVoice; }
+        let previewVoice;
+        if (providerSel.value === "custom-openai") {
+          previewVoice = customVoiceId?.value?.trim();
+        } else {
+          previewVoice = voiceSel?.value?.trim();
+        }
+        if (previewVoice) { preBody.ttsVoiceId = previewVoice; activeTTSVoiceId = previewVoice; }
         const minimaxKey2 = document.getElementById("tts-minimax-key")?.value?.trim();
         if (minimaxKey2) preBody.minimaxKey = minimaxKey2;
         const doubaoKey = document.getElementById("tts-doubao-key")?.value?.trim();
@@ -2409,6 +2520,12 @@ function initTTSSettings() {
         if (volcanoAppId) preBody.volcanoAppId = volcanoAppId;
         const volcanoToken = document.getElementById("tts-volcano-token")?.value?.trim();
         if (volcanoToken) preBody.volcanoToken = volcanoToken;
+        const customKey2 = document.getElementById("tts-custom-key")?.value?.trim();
+        if (customKey2) preBody.customTtsKey = customKey2;
+        const customBaseURL2 = document.getElementById("tts-custom-baseurl")?.value?.trim();
+        if (customBaseURL2) preBody.customTtsBaseURL = customBaseURL2;
+        const customModel2 = document.getElementById("tts-custom-model")?.value?.trim();
+        if (customModel2) preBody.customTtsModel = customModel2;
         await fetch(`${API}/settings/tts`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -2636,6 +2753,7 @@ function initTTSSettings() {
     "social-wechat-token":   "WECHAT_OFFICIAL_TOKEN",
     "social-wecom-botkey":   "WECOM_BOT_KEY",
     "social-wecom-token":    "WECOM_INCOMING_TOKEN",
+    "social-telegram-token": "TELEGRAM_BOT_TOKEN",
   };
 
   const SOCIAL_PLATFORM_STATUS = {
@@ -2643,6 +2761,7 @@ function initTTSSettings() {
     "social-status-feishu":  ["FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_VERIFICATION_TOKEN"],
     "social-status-wechat":  ["WECHAT_OFFICIAL_APP_ID", "WECHAT_OFFICIAL_APP_SECRET", "WECHAT_OFFICIAL_TOKEN"],
     "social-status-wecom":   ["WECOM_BOT_KEY", "WECOM_INCOMING_TOKEN"],
+    "social-status-telegram": ["TELEGRAM_BOT_TOKEN"],
   };
 
   async function loadSocialSettings() {

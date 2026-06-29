@@ -182,6 +182,22 @@ function storedKeysForCard(card = {}) {
   return [...new Set(names.map(normalizeText).filter(Boolean))]
 }
 
+export function setPersonCardVoice(personName, voiceId) {
+  const store = loadCardStore()
+  const normalized = normalizeText(personName)
+  const existing = store[normalized]
+  if (!existing && !hasUsefulCardData({ name: personName })) return false
+  const card = existing ? { ...existing } : { name: personName }
+  card.preferredVoice = voiceId || ''
+  card.updatedAt = new Date().toISOString()
+  return !!savePersonCard(card)
+}
+
+export function getPersonCardVoice(personName) {
+  const card = findPersonCard(personName)
+  return card?.preferredVoice || ''
+}
+
 function mergeCardData(existing = {}, incoming = {}) {
   const merged = normalizeCard({
     ...existing,

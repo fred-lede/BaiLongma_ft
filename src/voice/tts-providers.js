@@ -9,6 +9,8 @@ export const TTS_PROVIDERS = [
   { id: 'openai',      label: 'OpenAI TTS',   streaming: true  },
   { id: 'elevenlabs',  label: 'ElevenLabs',   streaming: true  },
   { id: 'volcano',     label: '火山引擎',       streaming: false },
+  { id: 'custom-openai', label: '自定义 OpenAI 兼容', streaming: true },
+  { id: 'aethermesh',    label: 'AetherMesh 语音克隆', streaming: false },
 ]
 
 export const TTS_VOICES = {
@@ -57,6 +59,8 @@ export const TTS_VOICES = {
     { id: 'BV001_streaming',         label: '通用女声' },
     { id: 'BV002_streaming',         label: '通用男声' },
   ],
+  'custom-openai': [],
+  aethermesh: [],
 }
 
 // ── 各服务商凭证要求（合成前预检的单一权威）──────────────────────────────────
@@ -92,6 +96,22 @@ export const TTS_PROVIDER_REQUIREMENTS = {
       { keys: ['volcanoToken'], label: 'Token' },
     ],
     guide: '请在「语音设置 → 语音合成」里选择火山引擎，并同时填写 AppId 和 Token 两项。',
+  },
+  'custom-openai': {
+    label: '自定义 OpenAI 兼容',
+    groups: [
+      { keys: ['customTtsKey'], label: 'API Key' },
+      { keys: ['customTtsBaseURL'], label: 'Base URL' },
+      { keys: ['customTtsModel'], label: '模型名' },
+    ],
+    guide: '请在「语音设置 → 语音合成」里选择自定义 OpenAI 兼容，并填写 API Key、Base URL 和模型名。该服务商使用 POST /v1/audio/speech 接口，兼容 OpenAI TTS 格式。',
+  },
+  aethermesh: {
+    label: 'AetherMesh 语音克隆',
+    groups: [
+      { keys: ['aethermeshBaseURL'], label: 'Base URL' },
+    ],
+    guide: '请在「语音设置 → 语音合成」里选择 AetherMesh 语音克隆，并确认服务已启动。默认为 http://localhost:8001。可在人物卡片中克隆声音并分配给指定用户。',
   },
 }
 
@@ -366,6 +386,47 @@ async function streamVolcano({ text, voiceId = 'BV001_streaming', appId, token }
   return Readable.from([buf])
 }
 
+// ── 自定义 OpenAI 兼容 TTS ──────────────────────────────────────────────────
+// 适用于任何实现了 POST /v1/audio/speech 接口的服务（如自定义部署、Fish Speech、Groq 等）
+async function streamCustomOpenAI({ text, voiceId = 'nova', apiKey, baseURL, model = 'tts-1' }) {
+  if (!apiKey) throw new Error('自定义 TTS: 缺少 API Key，请在设置中填写')
+  if (!baseURL) throw new Error('自定义 TTS: 缺少 Base URL，请在设置中填写')
+  if (!model) throw new Error('自定义 TTS: 缺少模型名，请在设置中填写')
+  const resp = await fetch(`${baseURL.replace(/\/$/, '')}/v1/audio/speech`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      input: text,
+      voice: voiceId,
+      response_format: 'mp3',
+    }),
+  })
+  if (!resp.ok) {
+    const err = await resp.text()
+    throw new Error(`自定义 TTS 失败 (${resp.status}): ${err.slice(0, 300)}`)
+  }
+  return webStreamToNode(resp.body)
+}
+
+// ── AetherMesh TTS ──────────────────────────────────────────────────────────
+// 服务地址默认为 http://localhost:8001
+// GET /v1/audio/speech?text=...&voice_id=...  合成语音
+// POST /v1/voices                             注册/克隆声音
+async function streamAetherMesh({ text, voiceId, baseURL = 'http://localhost:8001' }) {
+  if (!voiceId) throw new Error('AetherMesh TTS: 缺少声音 ID，请先在人物卡片中克隆或指定声音')
+  const url = `${baseURL.replace(/\/$/, '')}/v1/audio/speech?text=${encodeURIComponent(text)}&voice_id=${encodeURIComponent(voiceId)}`
+  const resp = await fetch(url)
+  if (!resp.ok) {
+    const err = await resp.text()
+    throw new Error(`AetherMesh TTS 失败 (${resp.status}): ${err.slice(0, 300)}`)
+  }
+  return webStreamToNode(resp.body)
+}
+
 // ── 通用入口 ────────────────────────────────────────────────────────────────
 export async function streamTTS({ text, provider, voiceId, keys = {} }) {
   if (!text?.trim()) throw new Error('TTS: 文本为空')
@@ -389,6 +450,10 @@ export async function streamTTS({ text, provider, voiceId, keys = {} }) {
       return streamElevenLabs({ text, voiceId, apiKey: keys.elevenLabsKey })
     case 'volcano':
       return streamVolcano({ text, voiceId, appId: keys.volcanoAppId, token: keys.volcanoToken })
+    case 'custom-openai':
+      return streamCustomOpenAI({ text, voiceId, apiKey: keys.customTtsKey, baseURL: keys.customTtsBaseURL, model: keys.customTtsModel })
+    case 'aethermesh':
+      return streamAetherMesh({ text, voiceId, baseURL: keys.aethermeshBaseURL })
     default:
       throw new Error(`未知 TTS 服务商: ${provider}，请在设置中选择一个 TTS 服务商`)
   }

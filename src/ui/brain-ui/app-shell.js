@@ -379,6 +379,14 @@ const createSettingsModal = () => `
             </div>
             <span class="settings-feedback" id="clawbot-feedback"></span>
           </div>
+          <div class="settings-section">
+            <div class="settings-section-label">Telegram</div>
+            <div class="settings-platform-status" id="social-status-telegram"></div>
+            <div class="settings-row">
+              <label class="settings-label" for="social-telegram-token">Bot Token</label>
+              <input class="settings-input" id="social-telegram-token" type="password" placeholder="留空保持原值不变…" autocomplete="new-password">
+            </div>
+          </div>
           <div class="settings-section settings-section-action">
             <button class="settings-save-btn" id="settings-save-social" type="button">保存所有</button>
             <span class="settings-feedback" id="settings-social-feedback"></span>
@@ -507,6 +515,7 @@ const createSettingsModal = () => `
               <select class="settings-select" id="tts-provider-select">
                 <option value="doubao">豆包（方舟，流式，中文最自然）</option>
                 <option value="openai">OpenAI TTS（流式，$0.015/千字）</option>
+                <option value="custom-openai">自定义 OpenAI 兼容（流式）</option>
                 <option value="elevenlabs">ElevenLabs（流式，高质量）</option>
                 <option value="volcano">火山引擎（中文，有免费额度）</option>
                 <option value="minimax">MiniMax（已有配置）</option>
@@ -621,6 +630,32 @@ const createSettingsModal = () => `
                 <input class="settings-input" type="password" id="tts-volcano-token" placeholder="留空则不修改">
               </div>
               <p class="settings-hint">可用声音：BV001_streaming（通用女声）· BV002_streaming（通用男声）等，在火山引擎控制台查看全部。</p>
+            </div>
+
+            <div id="tts-creds-custom-openai" style="display:none;">
+              <div class="settings-row">
+                <label class="settings-label" for="tts-custom-key">API Key</label>
+                <input class="settings-input" type="password" id="tts-custom-key" placeholder="留空则不修改">
+              </div>
+              <div class="settings-row">
+                <label class="settings-label" for="tts-custom-baseurl">Base URL</label>
+                <input class="settings-input" type="text" id="tts-custom-baseurl" placeholder="如 https://api.openai.com">
+              </div>
+              <div class="settings-row">
+                <label class="settings-label" for="tts-custom-model">模型名</label>
+                <div style="display:flex;gap:6px;flex:1;">
+                  <input class="settings-input" type="text" id="tts-custom-model" placeholder="如 tts-1 / xtts-v2" style="flex:1;">
+                  <button class="settings-save-btn" id="tts-custom-refresh-models" type="button" style="padding:0 10px;font-size:11px;white-space:nowrap;">刷新</button>
+                </div>
+              </div>
+              <div class="settings-row">
+                <label class="settings-label" for="tts-custom-voice-id">声音 ID</label>
+                <div style="display:flex;gap:6px;flex:1;">
+                  <input class="settings-input" type="text" id="tts-custom-voice-id" placeholder="如 nova / alloy" style="flex:1;">
+                  <button class="settings-save-btn" id="tts-custom-refresh-voices" type="button" style="padding:0 10px;font-size:11px;white-space:nowrap;">刷新</button>
+                </div>
+              </div>
+              <p class="settings-hint">适用于任何实现 <code>POST /v1/audio/speech</code> 接口的服务。填入 API Key、Base URL 和模型名即可使用。点「刷新」从远端自动拉取模型列表和已注册的声音 ID。</p>
             </div>
 
             <div class="settings-row" style="margin-top:8px;">

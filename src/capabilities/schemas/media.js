@@ -11,6 +11,7 @@ export const mediaSchemas = {
           text: { type: 'string', description: 'Text to convert to speech.' },
           voice_id: { type: 'string', description: 'Optional voice ID. Omit this unless the user explicitly asks for a specific known voice. The system uses the configured TTS voice by default; a voice ID must belong to the current TTS provider.' },
           filename: { type: 'string', description: 'Optional output filename without extension.' },
+          target_person: { type: 'string', description: 'Optional. Name of the person this speech is for. If the person profile has a preferred voice set, that voice will be used automatically.' },
         },
         required: ['text']
       }

@@ -2,6 +2,7 @@ import { requestJson } from './http.js'
 import { parseSocialTarget } from './targets.js'
 import { env } from './utils.js'
 import { sendClawbotMessage } from './wechat-clawbot.js'
+import { sendTelegramMessage } from './telegram.js'
 
 let feishuTenantToken = null
 let feishuTokenExpiresAt = 0
@@ -144,6 +145,8 @@ export async function dispatchSocialMessage(targetId, payload) {
       return rejectUnsupportedMedia('wecom-webhook', message) || await sendWeComWebhook(target, message.text)
     case 'wechat-clawbot':
       return sendClawbot(target, message)
+    case 'telegram':
+      return rejectUnsupportedMedia('telegram', message) || await sendTelegramMessage(target.chatId, message.text)
     default:
       return null
   }

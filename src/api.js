@@ -25,7 +25,7 @@ import { getClawbotQR, logoutClawbot } from './social/wechat-clawbot.js'
 import { createCloudASRSession } from './voice/cloud-asr.js'
 import { getHotspots, setHotspotPanelState, getHotspotPanelState } from './hotspots.js'
 import { getWorldcup, setWorldcupPanelState, getWorldcupPanelState } from './worldcup.js'
-import { getPersonCard, setPersonCardPanelState, getPersonCardPanelState } from './person-cards.js'
+import { getPersonCard, setPersonCardPanelState, getPersonCardPanelState, setPersonCardVoice } from './person-cards.js'
 import { setDocPanelState, getDocPanelState, DOC_TOPICS } from './docs.js'
 import { getTraces, getTrace, clearTraces, getTraceStatus } from './runtime/turn-trace.js'
 
@@ -689,6 +689,43 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
       }
     }
 
+    // POST /person-card/voice - save per-user voice preference
+    if (req.method === 'POST' && url.pathname === '/person-card/voice') {
+      readJsonBody(req)
+        .then((body) => {
+          const ok = setPersonCardVoice(body.name, body.voiceId)
+          jsonResponse(res, 200, { ok, voice_id: body.voiceId })
+        })
+        .catch((err) => jsonResponse(res, 400, { ok: false, error: err.message }))
+      return
+    }
+
+    // POST /person-card/clone-voice - upload audio to AetherMesh clone (proxied directly)
+    if (req.method === 'POST' && url.pathname === '/person-card/clone-voice') {
+      ;(async () => {
+        try {
+          const { getTTSCredentials } = await import('./config.js')
+          const creds = getTTSCredentials()
+          const baseURL = (creds.aethermeshBaseURL || 'http://localhost:8001').replace(/\/$/, '')
+          const proxyRes = await fetch(`${baseURL}/v1/voices`, {
+            method: 'POST',
+            headers: { 'Content-Type': req.headers['content-type'] },
+            duplex: 'half',
+            body: req,
+          })
+          if (!proxyRes.ok) {
+            const errText = await proxyRes.text()
+            throw new Error(`AetherMesh 克隆失败 (${proxyRes.status}): ${errText.slice(0, 200)}`)
+          }
+          const data = await proxyRes.json()
+          jsonResponse(res, 200, { ok: true, voice_id: data.voice_id || data.id || data.voiceId || '' })
+        } catch (err) {
+          jsonResponse(res, 500, { ok: false, error: err.message })
+        }
+      })()
+      return
+    }
+
     if (req.method === 'GET' && url.pathname === '/system-prompt-preview') {
       Promise.resolve()
         .then(() => buildHeartbeatSystemPromptPreview({
@@ -1208,6 +1245,7 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
           // Restart the connector for each platform whose key was updated
           const PLATFORM_KEYS = {
             discord: ['DISCORD_BOT_TOKEN'],
+            telegram: ['TELEGRAM_BOT_TOKEN'],
           }
           for (const [platform, keys] of Object.entries(PLATFORM_KEYS)) {
             if (keys.some(k => updates[k])) {
@@ -1655,6 +1693,10 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
               elevenLabsKey: creds.elevenLabsKey,
               volcanoAppId:  creds.volcanoAppId,
               volcanoToken:  creds.volcanoToken,
+              customTtsKey:  creds.customTtsKey,
+              customTtsBaseURL: creds.customTtsBaseURL,
+              customTtsModel: creds.customTtsModel,
+              aethermeshBaseURL: creds.aethermeshBaseURL,
             },
           })
           let headersWritten = false

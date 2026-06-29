@@ -16,6 +16,7 @@ import { pushMessage } from '../../queue.js'
 import { callCapability } from '../../providers/registry.js'
 import { isDailyLimitReached } from '../../quota.js'
 import { getTTSCredentials, getSeedanceConfig } from '../../config.js'
+import { getPersonCardVoice } from '../../person-cards.js'
 import { streamTTS, TTS_VOICES, validateTTSConfig } from '../../voice/tts-providers.js'
 import { paths } from '../../paths.js'
 import { SANDBOX_ROOT } from '../sandbox.js'
@@ -120,7 +121,14 @@ export async function execSpeak(args) {
   const check = validateTTSConfig(creds)
   if (!check.ok) return `语音合成还不能用：${check.guide}`
 
-  const requestedVoiceId = args.voice_id || args.voice
+  let requestedVoiceId = args.voice_id || args.voice
+  if (!requestedVoiceId) {
+    const targetPerson = args.target_person || args.targetPerson || args.target_name
+    if (targetPerson) {
+      const personVoice = getPersonCardVoice(targetPerson)
+      if (personVoice) requestedVoiceId = personVoice
+    }
+  }
   const voiceId = resolveProviderVoiceId(creds.provider, requestedVoiceId, creds.voiceId)
 
   let buffer

@@ -1149,6 +1149,7 @@ const SOCIAL_ENV_KEYS = [
   'FEISHU_APP_ID', 'FEISHU_APP_SECRET', 'FEISHU_VERIFICATION_TOKEN',
   'WECHAT_OFFICIAL_APP_ID', 'WECHAT_OFFICIAL_APP_SECRET', 'WECHAT_OFFICIAL_TOKEN',
   'WECOM_BOT_KEY', 'WECOM_INCOMING_TOKEN',
+  'TELEGRAM_BOT_TOKEN',
 ]
 
 // ── WeChat ClawBot credentials (written automatically after QR scan, not exposed in SOCIAL_ENV_KEYS) ──
@@ -1272,6 +1273,8 @@ const TTS_CONFIG_KEYS = [
   'openaiTtsKey', 'openaiTtsBaseURL',
   'elevenLabsKey',
   'volcanoAppId', 'volcanoToken',
+  'customTtsKey', 'customTtsBaseURL', 'customTtsModel',
+  'aethermeshBaseURL',
 ]
 
 export function getTTSConfig() {
@@ -1292,6 +1295,10 @@ export function getTTSConfig() {
     elevenLabsKey:   { configured: !!(stored.elevenLabsKey) },
     volcanoAppId:    { configured: !!(stored.volcanoAppId), value: stored.volcanoAppId || '' },
     volcanoToken:    { configured: !!(stored.volcanoToken) },
+    customTtsKey:    { configured: !!(stored.customTtsKey) },
+    customTtsBaseURL: stored.customTtsBaseURL || '',
+    customTtsModel:   stored.customTtsModel || '',
+    aethermeshBaseURL: stored.aethermeshBaseURL || 'http://localhost:8001',
   }
 }
 
@@ -1314,6 +1321,10 @@ export function getTTSCredentials() {
     elevenLabsKey:  stored.elevenLabsKey || '',
     volcanoAppId:   stored.volcanoAppId  || '',
     volcanoToken:   stored.volcanoToken  || '',
+    customTtsKey:   stored.customTtsKey  || '',
+    customTtsBaseURL: stored.customTtsBaseURL || '',
+    customTtsModel: stored.customTtsModel || '',
+    aethermeshBaseURL: stored.aethermeshBaseURL || 'http://localhost:8001',
   }
 }
 

@@ -8,6 +8,7 @@ export function friendlyChannelLabel(channel) {
   if (c === "WECOM") return "WeCom";
   if (c === "DISCORD") return "Discord";
   if (c === "FEISHU") return "Feishu";
+  if (c === "TELEGRAM") return "Telegram";
   return "";
 }
 
@@ -169,7 +170,7 @@ export function initChat({
           const isExternal =
             r.role === "user"
             && ((channel && channel !== "TUI" && channel !== "API" && channel !== "SYSTEM" && channel !== "REMINDER" && channel !== "APP_SIGNAL" && channel !== "VOICE" && channel !== "语音识别")
-                || /^(wechat|discord|feishu|wecom):/i.test(r.from_id || ""));
+                || /^(wechat|discord|feishu|wecom|telegram):/i.test(r.from_id || ""));
           if (isExternal) {
             const label = friendlyChannelLabel(r.channel) || r.from_id;
             return { role: "external", text: r.content, label };

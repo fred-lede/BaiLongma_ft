@@ -1,5 +1,6 @@
 import { startDiscordConnector } from './discord.js'
 import { startClawbotConnector } from './wechat-clawbot.js'
+import { startTelegramConnector } from './telegram.js'
 
 const running = new Map() // platform → connector
 
@@ -7,6 +8,7 @@ export async function startSocialConnectors({ pushMessage, emitEvent } = {}) {
   const starters = [
     { platform: 'discord', start: () => startDiscordConnector({ pushMessage, emitEvent }) },
     { platform: 'wechat-clawbot', start: () => startClawbotConnector({ pushMessage, emitEvent }) },
+    { platform: 'telegram', start: () => startTelegramConnector({ pushMessage, emitEvent }) },
   ]
 
   for (const { platform, start } of starters) {
@@ -36,6 +38,7 @@ export async function restartConnector(platform, { pushMessage, emitEvent } = {}
   const starters = {
     discord: () => startDiscordConnector({ pushMessage, emitEvent }),
     'wechat-clawbot': () => startClawbotConnector({ pushMessage, emitEvent }),
+    telegram: () => startTelegramConnector({ pushMessage, emitEvent }),
   }
 
   const start = starters[platform]

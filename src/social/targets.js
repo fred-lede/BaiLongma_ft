@@ -18,6 +18,10 @@ export function parseSocialTarget(targetId = '') {
   if (raw.startsWith('wechat:clawbot:')) {
     return { platform: 'wechat-clawbot', userId: raw.slice('wechat:clawbot:'.length), raw }
   }
+  if (raw.startsWith('telegram:')) {
+    const chatId = raw.slice('telegram:'.length)
+    return chatId ? { platform: 'telegram', chatId, raw } : null
+  }
   return null
 }
 

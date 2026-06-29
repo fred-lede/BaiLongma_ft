@@ -345,7 +345,11 @@ async function execExpress({ target_id, content, channel = 'AUTO', format = 'tex
     // 语音表达：先发文字消息再生成语音
     const sendResult = await execSendMessage({ target_id, content, channel }, context)
     if (sendResult.startsWith('错误：') || sendResult.startsWith('执行失败：')) return sendResult
-    return await execSpeak({ text: content })
+    const speakArgs = { text: content }
+    if (context.target_name || context.target_display_name) {
+      speakArgs.target_person = context.target_name || context.target_display_name
+    }
+    return await execSpeak(speakArgs)
   }
   // 默认：文字表达
   return await execSendMessage({ target_id, content, channel }, context)

@@ -136,6 +136,11 @@ function renderPersonCard(card = {}) {
   setText('pc-updated', formatUpdatedAt(card.updatedAt));
   scheduleHeroImageLookup(card);
 
+  const voiceInput = $('pc-voice-id');
+  if (voiceInput) voiceInput.value = card.preferredVoice || '';
+  const cloneStatus = $('pc-clone-status');
+  if (cloneStatus) cloneStatus.textContent = '';
+
   const knownList = $('pc-known-list');
   if (knownList) {
     const knownFor = normalizeList(card.knownFor);
@@ -299,4 +304,98 @@ export function initPersonCard() {
 
   const exitBtn = $('pc-exit-btn');
   if (exitBtn) exitBtn.addEventListener('click', () => setPersonCardMode(false, { source: 'brain-ui' }));
+
+  const voiceInput = $('pc-voice-id');
+  const cloneBtn = $('pc-clone-voice-btn');
+  const cloneFile = $('pc-clone-file');
+  const testBtn = $('pc-test-voice-btn');
+  const cloneStatus = $('pc-clone-status');
+
+  function showCloneStatus(msg, isError = false) {
+    if (!cloneStatus) return;
+    cloneStatus.textContent = msg;
+    cloneStatus.style.color = isError ? '#e05050' : 'var(--ink2)';
+    if (!isError) setTimeout(() => { cloneStatus.textContent = ''; }, 4000);
+  }
+
+  async function saveVoiceId(voiceId) {
+    if (!currentCard?.name || !voiceId) return;
+    try {
+      await fetch(apiUrl('/person-card/voice'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: currentCard.name, voiceId }),
+      });
+      currentCard.preferredVoice = voiceId;
+    } catch (err) {
+      console.warn('[PersonCard] 保存声音失败:', err.message);
+    }
+  }
+
+  if (voiceInput) {
+    voiceInput.addEventListener('change', () => {
+      const vid = voiceInput.value.trim();
+      if (vid) saveVoiceId(vid);
+    });
+  }
+
+  if (cloneBtn && cloneFile) {
+    cloneBtn.addEventListener('click', () => cloneFile.click());
+    cloneFile.addEventListener('change', async () => {
+      const file = cloneFile.files?.[0];
+      if (!file) return;
+      showCloneStatus('上传中…');
+      cloneBtn.disabled = true;
+      try {
+        const formData = new FormData();
+        formData.append('audio', file);
+        const res = await fetch(apiUrl('/person-card/clone-voice'), {
+          method: 'POST',
+          body: formData,
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || '克隆失败');
+        const voiceId = data.voice_id;
+        if (voiceInput) voiceInput.value = voiceId;
+        showCloneStatus(`克隆成功：${voiceId}`);
+        saveVoiceId(voiceId);
+      } catch (err) {
+        showCloneStatus(err.message, true);
+      } finally {
+        cloneBtn.disabled = false;
+        cloneFile.value = '';
+      }
+    });
+  }
+
+  if (testBtn) {
+    testBtn.addEventListener('click', async () => {
+      const vid = voiceInput?.value?.trim();
+      if (!vid || !currentCard?.name) { showCloneStatus('请先输入或克隆声音 ID', true); return; }
+      showCloneStatus('试听中…');
+      testBtn.disabled = true;
+      try {
+        await saveVoiceId(vid);
+        const ttsResp = await fetch(apiUrl('/tts/stream'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text: `你好，这是为 ${currentCard.name} 设定的声音试听。`,
+            voiceId: vid,
+          }),
+        });
+        if (!ttsResp.ok) throw new Error(`HTTP ${ttsResp.status}`);
+        const blob = await ttsResp.blob();
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        audio.onended = () => { URL.revokeObjectURL(url); showCloneStatus(''); };
+        audio.play();
+        showCloneStatus('播放中…');
+      } catch (err) {
+        showCloneStatus(`试听失败: ${err.message}`, true);
+      } finally {
+        testBtn.disabled = false;
+      }
+    });
+  }
 }

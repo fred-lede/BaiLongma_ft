@@ -508,9 +508,11 @@ function createAetherMeshSession(config, lang, onTranscript, onError, onClose) {
         if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`
         log(`flush: POSTing to ${baseURL}/v1/audio/transcriptions`)
 
+        const controller = new AbortController()
+        const timeoutId = setTimeout(() => controller.abort(), 15000) // 15s timeout
         const res = await fetch(`${baseURL}/v1/audio/transcriptions`, {
-          method: 'POST', headers, body,
-        })
+          method: 'POST', headers, body, signal: controller.signal,
+        }).finally(() => clearTimeout(timeoutId))
         log(`flush: response status ${res.status}`)
 
         if (!res.ok) {

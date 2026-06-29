@@ -1813,7 +1813,11 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
       } else {
         try {
           const msg = JSON.parse(raw.toString())
-          if (msg.type === 'flush') session?.flush()
+          if (msg.type === 'flush') {
+            // MUST await: AetherMesh flush() does async HTTP fetch
+            const p = session?.flush()
+            if (p && typeof p.then === 'function') p.catch(e => console.error('[WS] flush error:', e))
+          }
         } catch {}
       }
     })

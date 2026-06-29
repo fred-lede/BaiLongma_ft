@@ -421,7 +421,7 @@ async function streamAetherMesh({ text, voiceId, baseURL = 'http://localhost:800
   const url = `${baseURL.replace(/\/$/, '')}/v1/audio/speech`
   const headers = { 'Content-Type': 'application/json' }
   if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`
-  const body = JSON.stringify({ model, input: text, voice: voiceId, language: 'zh-cn' })
+  const body = JSON.stringify({ model, input: text, voice: voiceId, language: 'zh-tw' })
   const resp = await fetch(url, { method: 'POST', headers, body })
   if (!resp.ok) {
     const err = await resp.text()

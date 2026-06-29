@@ -469,6 +469,7 @@ function createAetherMeshSession(config, lang, onTranscript, onError, onClose) {
   const model = config.aethermeshAsrModel || 'whisper-large-v3'
   let chunks = []
   let closed = false
+  let pendingFlush = null
 
   function log(...args) { console.error('[AetherMesh-ASR]', ...args) }
   log(`session created (baseURL=${baseURL}, model=${model}, apiKey=${apiKey ? 'set' : 'unset'})`)
@@ -485,59 +486,70 @@ function createAetherMeshSession(config, lang, onTranscript, onError, onClose) {
       const pcmData = Buffer.concat(chunks)
       chunks = []
       log(`flush: sending ${pcmData.length} bytes PCM → WAV to ${baseURL}/v1/audio/transcriptions`)
-      try {
-        const boundary = '----AetherMeshASR' + Math.random().toString(36).slice(2)
-        const wavBuf = pcmToWav(pcmData)
-        log(`flush: WAV size ${wavBuf.length} bytes`)
-
-        // Build multipart body manually (avoids Node.js FormData/Blob interop issues)
-        const encoder = new TextEncoder()
-        function part(disposition, contentType, data) {
-          const header = `--${boundary}\r\nContent-Disposition: form-data; ${disposition}\r\n${contentType ? `Content-Type: ${contentType}\r\n` : ''}\r\n`
-          return Buffer.concat([Buffer.from(header), data, Buffer.from('\r\n')])
-        }
-        const body = Buffer.concat([
-          part(`name="file"; filename="audio.wav"`, 'audio/wav', wavBuf),
-          part(`name="model"`, null, Buffer.from(model)),
-          part(`name="language"`, null, Buffer.from(lang || 'zh')),
-          Buffer.from(`--${boundary}--\r\n`),
-        ])
-        log(`flush: multipart body ${body.length} bytes`)
-
-        const headers = { 'Content-Type': `multipart/form-data; boundary=${boundary}` }
-        if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`
-        log(`flush: POSTing to ${baseURL}/v1/audio/transcriptions`)
-
-        const controller = new AbortController()
-        const timeoutId = setTimeout(() => controller.abort(), 15000) // 15s timeout
-        const res = await fetch(`${baseURL}/v1/audio/transcriptions`, {
-          method: 'POST', headers, body, signal: controller.signal,
-        }).finally(() => clearTimeout(timeoutId))
-        log(`flush: response status ${res.status}`)
-
-        if (!res.ok) {
-          const errText = await res.text().catch(() => '')
-          log(`flush: error ${res.status}: ${errText}`)
-          onError(`AetherMesh ASR error ${res.status}: ${errText}`)
-          return
-        }
-        const data = await res.json()
-        log(`flush: response data = ${JSON.stringify(data)}`)
-        if (data?.text) {
-          onTranscript(data.text, true, 'am')
-        } else {
-          log('flush: empty result')
-          onError('AetherMesh ASR returned empty result')
-        }
-      } catch (err) {
-        log(`flush: exception: ${err.message}`)
-        onError(`AetherMesh ASR failed: ${err.message}`)
+      const promise = doFlush(pcmData)
+      pendingFlush = promise
+      await promise
+      if (pendingFlush === promise) pendingFlush = null
+    },
+    async close() {
+      log('close (awaiting pending flush...)')
+      closed = true
+      // Wait for any in-flight flush to complete before tearing down
+      if (pendingFlush) {
+        try { await Promise.race([pendingFlush, new Promise(r => setTimeout(r, 20000))]) } catch {}
       }
+      chunks = []
+      onClose()
     },
-    close() {
-      log('close')
-      closed = true; chunks = []; onClose()
-    },
+  }
+
+  async function doFlush(pcmData) {
+    try {
+      const boundary = '----AetherMeshASR' + Math.random().toString(36).slice(2)
+      const wavBuf = pcmToWav(pcmData)
+      log(`flush: WAV size ${wavBuf.length} bytes`)
+
+      function part(disposition, contentType, data) {
+        const header = `--${boundary}\r\nContent-Disposition: form-data; ${disposition}\r\n${contentType ? `Content-Type: ${contentType}\r\n` : ''}\r\n`
+        return Buffer.concat([Buffer.from(header), data, Buffer.from('\r\n')])
+      }
+      const body = Buffer.concat([
+        part(`name="file"; filename="audio.wav"`, 'audio/wav', wavBuf),
+        part(`name="model"`, null, Buffer.from(model)),
+        part(`name="language"`, null, Buffer.from(lang || 'zh')),
+        Buffer.from(`--${boundary}--\r\n`),
+      ])
+      log(`flush: multipart body ${body.length} bytes`)
+
+      const headers = { 'Content-Type': `multipart/form-data; boundary=${boundary}` }
+      if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`
+      log(`flush: POSTing to ${baseURL}/v1/audio/transcriptions`)
+
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 15000)
+      const res = await fetch(`${baseURL}/v1/audio/transcriptions`, {
+        method: 'POST', headers, body, signal: controller.signal,
+      }).finally(() => clearTimeout(timeoutId))
+      log(`flush: response status ${res.status}`)
+
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '')
+        log(`flush: error ${res.status}: ${errText}`)
+        if (!closed) onError(`AetherMesh ASR error ${res.status}: ${errText}`)
+        return
+      }
+      const data = await res.json()
+      log(`flush: response data = ${JSON.stringify(data)}`)
+      if (data?.text) {
+        if (!closed) onTranscript(data.text, true, 'am')
+      } else {
+        log('flush: empty result')
+        if (!closed) onError('AetherMesh ASR returned empty result')
+      }
+    } catch (err) {
+      log(`flush: exception: ${err.message}`)
+      if (!closed) onError(`AetherMesh ASR failed: ${err.message}`)
+    }
   }
 }
 

@@ -177,17 +177,22 @@ export function stripMarkdownForSpeech(text) {
 
 // Translate text for TTS: when the target person prefers a different language,
 // translate the text before sending to TTS so the synthesized voice sounds natural.
+// 超時 10s，防止 LLM 卡住導致 TTS 完全失效。
 async function translateForTTS(text, targetLang) {
   if (!text || !targetLang) return text
   try {
     const langLabel = { 'zh-tw': '繁體中文', 'zh-cn': '简体中文', en: 'English', ja: '日本語', ko: '한국어', es: 'Español', th: 'ภาษาไทย' }[targetLang] || targetLang
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 10000)
     const result = await callLLM({
       systemPrompt: `你是一個專業的翻譯助手。將以下文字翻譯成 ${langLabel}。只輸出翻譯後的文字，不要加任何說明、備註或引號。`,
       message: text,
       temperature: 0.3,
       maxTokens: 800,
       thinking: false,
+      signal: controller.signal,
     })
+    clearTimeout(timeout)
     if (result?.content?.trim()) return result.content.trim()
   } catch (err) {
     console.warn('[translateForTTS] 翻譯失敗:', err.message)

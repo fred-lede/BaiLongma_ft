@@ -90,11 +90,11 @@ export function createPttController(core, { toggleVoice, cancelAutoSend }) {
       }
     };
 
-    // 给云端 800ms 把最终结果吐出来
+    // 给云端最多 10s 把最终结果吐出来（AetherMesh HTTP batch 需更久）
     let waited = 0;
     const tick = () => {
       if (core.getText()) { finalize(); return; }
-      if (waited >= 800) { finalize(); return; }
+      if (waited >= 10000) { finalize(); return; }
       waited += 100;
       setTimeout(tick, 100);
     };

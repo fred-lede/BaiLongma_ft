@@ -668,7 +668,13 @@ const createSettingsModal = () => `
                 <label class="settings-label" for="tts-aethermesh-baseurl">Base URL</label>
                 <input class="settings-input" type="text" id="tts-aethermesh-baseurl" placeholder="http://localhost:8001">
               </div>
-              <p class="settings-hint">AetherMesh 本地语音克隆服务。声音通过人物卡片克隆和管理，此处只需填写服务地址即可。</p>
+              <div class="settings-row">
+                <label class="settings-label" for="tts-aethermesh-voice-id">声音 ID</label>
+                <div style="display:flex;gap:6px;flex:1;">
+                  <input class="settings-input" type="text" id="tts-aethermesh-voice-id" placeholder="可留空，通过人物卡片指定每位用户的声音" style="flex:1;">
+                </div>
+              </div>
+              <p class="settings-hint">AetherMesh 本地语音克隆服务。可在此填入默认声音 ID，或通过人物卡片为每位用户独立克隆和指定声音。</p>
             </div>
 
             <div class="settings-row" style="margin-top:8px;">

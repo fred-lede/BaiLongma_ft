@@ -2286,6 +2286,7 @@ function initTTSSettings() {
   };
 
   const customVoiceId = document.getElementById("tts-custom-voice-id");
+  const aethermeshVoiceId = document.getElementById("tts-aethermesh-voice-id");
   const customModelInput = document.getElementById("tts-custom-model");
   const customRefreshModelsBtn = document.getElementById("tts-custom-refresh-models");
   const customRefreshVoicesBtn = document.getElementById("tts-custom-refresh-voices");
@@ -2372,7 +2373,7 @@ function initTTSSettings() {
     });
     if (provider === "custom-openai" || provider === "aethermesh") {
       if (voiceSel) voiceSel.style.display = "none";
-      if (customVoiceId) customVoiceId.style.display = "";
+      if (customVoiceId) customVoiceId.style.display = provider === "custom-openai" ? "" : "none";
     } else {
       if (voiceSel) voiceSel.style.display = "";
       if (customVoiceId) customVoiceId.style.display = "none";
@@ -2427,6 +2428,9 @@ function initTTSSettings() {
     if (customVoiceId && tts?.ttsVoiceId && provider === "custom-openai") {
       customVoiceId.value = tts.ttsVoiceId;
     }
+    if (aethermeshVoiceId && tts?.ttsVoiceId && provider === "aethermesh") {
+      aethermeshVoiceId.value = tts.ttsVoiceId;
+    }
     const aethermeshBaseEl = document.getElementById("tts-aethermesh-baseurl");
     if (aethermeshBaseEl && tts?.aethermeshBaseURL) aethermeshBaseEl.value = tts.aethermeshBaseURL;
     showCredSection(provider);
@@ -2440,7 +2444,7 @@ function initTTSSettings() {
       if (providerSel.value === "custom-openai") {
         voiceId = customVoiceId?.value?.trim();
       } else if (providerSel.value === "aethermesh") {
-        voiceId = customVoiceId?.value?.trim();
+        voiceId = aethermeshVoiceId?.value?.trim();
       } else {
         voiceId = voiceSel?.value?.trim();
       }

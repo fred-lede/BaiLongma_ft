@@ -478,7 +478,6 @@ function createAetherMeshSession(config, lang, onTranscript, onError, onClose) {
     sendAudio(pcmBuffer) {
       if (closed) { log('sendAudio: closed, drop'); return }
       chunks.push(Buffer.from(pcmBuffer))
-      log(`sendAudio: buffered chunk ${chunks.length} (total ~${chunks.reduce((s, c) => s + c.length, 0)} bytes)`)
     },
     async flush() {
       if (closed) { log('flush: closed, skip'); return }

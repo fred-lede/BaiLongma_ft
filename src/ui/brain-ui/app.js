@@ -2282,6 +2282,7 @@ function initTTSSettings() {
     elevenlabs: document.getElementById("tts-creds-elevenlabs"),
     volcano:    document.getElementById("tts-creds-volcano"),
     "custom-openai": document.getElementById("tts-creds-custom-openai"),
+    aethermesh: document.getElementById("tts-creds-aethermesh"),
   };
 
   const customVoiceId = document.getElementById("tts-custom-voice-id");
@@ -2303,8 +2304,9 @@ function initTTSSettings() {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const json = await res.json();
         const models = (json.data || []).filter(m => {
-          const caps = m.capabilities || m.metadata?.capabilities || [];
-          return caps.includes("audio") || /tts|speech|audio|voice/i.test(m.id);
+          const raw = m.capabilities ?? m.metadata?.capabilities;
+          const caps = Array.isArray(raw) ? raw : (raw ? Object.keys(raw) : []);
+          return caps.includes("audio") || caps.includes("tts") || /tts|speech|audio|voice/i.test(m.id);
         });
         if (models.length === 0) {
           customRefreshModelsBtn.textContent = "未找到 TTS 模型";
@@ -2342,7 +2344,7 @@ function initTTSSettings() {
         const res = await fetch(`${baseURL.replace(/\/$/, "")}/v1/voices`, { headers });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const json = await res.json();
-        const voices = json.data || json.voices || [];
+        const voices = json.data || json.voices || json.voice_ids || json.voice_id || json.models || [];
         if (voices.length === 0) {
           customRefreshVoicesBtn.textContent = "未找到声音";
           setTimeout(() => { customRefreshVoicesBtn.textContent = "刷新"; }, 2000);
@@ -2368,9 +2370,9 @@ function initTTSSettings() {
     Object.entries(credSections).forEach(([k, el]) => {
       if (el) el.style.display = k === provider ? "" : "none";
     });
-    if (provider === "custom-openai") {
+    if (provider === "custom-openai" || provider === "aethermesh") {
       if (voiceSel) voiceSel.style.display = "none";
-      if (customVoiceId) customVoiceId.style.display = "";
+      if (customVoiceId) customVoiceId.style.display = provider === "custom-openai" ? "" : "none";
     } else {
       if (voiceSel) voiceSel.style.display = "";
       if (customVoiceId) customVoiceId.style.display = "none";
@@ -2425,10 +2427,10 @@ function initTTSSettings() {
     if (customVoiceId && tts?.ttsVoiceId && provider === "custom-openai") {
       customVoiceId.value = tts.ttsVoiceId;
     }
+    const aethermeshBaseEl = document.getElementById("tts-aethermesh-baseurl");
+    if (aethermeshBaseEl && tts?.aethermeshBaseURL) aethermeshBaseEl.value = tts.aethermeshBaseURL;
     showCredSection(provider);
-  }).catch(() => {});
-
-  showCredSection(providerSel.value);
+  }).catch(() => { showCredSection(providerSel.value); });
 
   const origSaveBtn = document.getElementById("settings-save-voice");
   if (origSaveBtn) {
@@ -2436,6 +2438,8 @@ function initTTSSettings() {
       const ttsBody = { ttsProvider: providerSel.value };
       let voiceId;
       if (providerSel.value === "custom-openai") {
+        voiceId = customVoiceId?.value?.trim();
+      } else if (providerSel.value === "aethermesh") {
         voiceId = customVoiceId?.value?.trim();
       } else {
         voiceId = voiceSel?.value?.trim();
@@ -2471,6 +2475,8 @@ function initTTSSettings() {
       if (customBaseURL) ttsBody.customTtsBaseURL = customBaseURL;
       const customModel = document.getElementById("tts-custom-model")?.value?.trim();
       if (customModel) ttsBody.customTtsModel = customModel;
+      const aethermeshBaseURL = document.getElementById("tts-aethermesh-baseurl")?.value?.trim();
+      if (aethermeshBaseURL) ttsBody.aethermeshBaseURL = aethermeshBaseURL;
 
       fetch(`${API}/settings/tts`, {
         method: "POST",

@@ -519,6 +519,7 @@ const createSettingsModal = () => `
                 <option value="elevenlabs">ElevenLabs（流式，高质量）</option>
                 <option value="volcano">火山引擎（中文，有免费额度）</option>
                 <option value="minimax">MiniMax（已有配置）</option>
+                <option value="aethermesh">AetherMesh 语音克隆（本地部署）</option>
               </select>
             </div>
             <div class="settings-row">
@@ -656,6 +657,14 @@ const createSettingsModal = () => `
                 </div>
               </div>
               <p class="settings-hint">适用于任何实现 <code>POST /v1/audio/speech</code> 接口的服务。填入 API Key、Base URL 和模型名即可使用。点「刷新」从远端自动拉取模型列表和已注册的声音 ID。</p>
+            </div>
+
+            <div id="tts-creds-aethermesh" style="display:none;">
+              <div class="settings-row">
+                <label class="settings-label" for="tts-aethermesh-baseurl">Base URL</label>
+                <input class="settings-input" type="text" id="tts-aethermesh-baseurl" placeholder="http://localhost:8001">
+              </div>
+              <p class="settings-hint">AetherMesh 本地语音克隆服务。声音通过人物卡片克隆和管理，此处只需填写服务地址即可。</p>
             </div>
 
             <div class="settings-row" style="margin-top:8px;">

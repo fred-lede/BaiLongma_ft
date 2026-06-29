@@ -18,9 +18,11 @@
 ## Confirmed Working
 - AetherMesh 語音合成已通（POST /v1/audio/speech, xtts-v2 model）
 - 語音克隆代理（POST /v1/voices）已接入
-- AetherMesh ASR 伺服器端已對接 FasterWhisper
+- AetherMesh ASR 完整鏈路已通（緩衝 PCM → WAV → POST /v1/audio/transcriptions）
+  - 3 次修正：WS 路由邏輯（JSON 優先）、15s HTTP timeout、close() 等 pending flush
+- 語音對話可按住空白鍵發話 + AetherMesh 轉錄 + Jarvis 回覆 + AetherMesh TTS
 
 ## Pending
 - 人物卡片聲音試聽按鈕測試
 - 逐人語音偏好 execSpeak 整合（target_person → preferredVoice）
-- AetherMesh ASR 前端測試（語音對話切 AetherMesh ASR 服務商）
+- 語音克隆代理端對端驗證

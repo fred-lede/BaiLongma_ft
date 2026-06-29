@@ -217,6 +217,7 @@ const ASR_PROVIDER_DEFS = [
   { id: 'volcengine', label: '火山豆包' },
   { id: 'tencent', label: '腾讯云' },
   { id: 'xunfei',  label: '科大讯飞' },
+  { id: 'aethermesh', label: 'AetherMesh（自建）' },
 ]
 
 const ASR_FIELDS = {
@@ -237,6 +238,10 @@ const ASR_FIELDS = {
     { key: 'xunfeiAppId',     label: 'AppID',     type: 'text',     ph: '' },
     { key: 'xunfeiApiKey',    label: 'APIKey',    type: 'password', ph: '' },
     { key: 'xunfeiApiSecret', label: 'APISecret', type: 'password', ph: '' },
+  ],
+  aethermesh: [
+    { key: 'aethermeshKey',    label: 'API Key',  type: 'password', ph: '留空則用 TTS 的 Key' },
+    { key: 'aethermeshBaseURL', label: 'Base URL', type: 'text',    ph: 'http://192.168.1.200:8001' },
   ],
 }
 

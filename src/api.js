@@ -1780,9 +1780,14 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
         try {
           const msg = JSON.parse(raw.toString())
           if (msg.type !== 'config') return
-          // Read raw credentials from config.json
+          // Read raw credentials from config.json (voice + merge tts for aethermesh)
           let rawCfg = {}
           try { rawCfg = JSON.parse(fs.readFileSync(paths.configFile, 'utf-8'))?.voice || {} } catch {}
+          try {
+            const ttsCfg = JSON.parse(fs.readFileSync(paths.configFile, 'utf-8'))?.tts || {}
+            rawCfg.aethermeshKey = rawCfg.aethermeshKey || ttsCfg.aethermeshKey || ''
+            rawCfg.aethermeshBaseURL = rawCfg.aethermeshBaseURL || ttsCfg.aethermeshBaseURL || 'http://192.168.1.200:8001'
+          } catch {}
           const provider = rawCfg.voiceProvider || msg.provider || 'aliyun'
           session = createCloudASRSession(
             { provider, lang: msg.lang || 'zh', ...rawCfg },

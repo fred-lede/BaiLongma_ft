@@ -3036,6 +3036,7 @@ function initTTSSettings() {
       volcengine: "voice-cred-volcengine",
       tencent: "voice-cred-tencent",
       xunfei: "voice-cred-xunfei",
+      aethermesh: "voice-cred-aethermesh",
       local: null,
     };
     for (const [key, id] of Object.entries(panels)) {
@@ -3318,6 +3319,10 @@ function initTTSSettings() {
       if (volcAppKey) body.volcAsrAppKey = volcAppKey;
       const volcAccessKey = document.getElementById("voice-volc-accesskey")?.value?.trim();
       if (volcAccessKey) body.volcAsrAccessKey = volcAccessKey;
+      const aethermeshKey = document.getElementById("voice-aethermesh-key")?.value?.trim();
+      if (aethermeshKey) body.aethermeshKey = aethermeshKey;
+      const aethermeshBaseURL = document.getElementById("voice-aethermesh-baseurl")?.value?.trim();
+      if (aethermeshBaseURL) body.aethermeshBaseURL = aethermeshBaseURL;
 
       if (Object.keys(body).length > 0) {
         try {
@@ -3337,6 +3342,7 @@ function initTTSSettings() {
             "voice-volc-apikey",
             "voice-volc-appkey",
             "voice-volc-accesskey",
+            "voice-aethermesh-key",
           ].forEach(id => {
             const el = document.getElementById(id);
             if (el) el.value = "";

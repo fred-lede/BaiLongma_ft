@@ -435,10 +435,85 @@ function createVolcengineSession(config, lang, onTranscript, onError, onClose) {
   }
 }
 
+// ─── AetherMesh ASR ───
+// Batch HTTP API (OpenAI-compatible): 缓冲所有 PCM 音频, flush 时拼成 WAV 发 POST
+function pcmToWav(pcmBuffer, sampleRate = 16000) {
+  const numChannels = 1
+  const bitsPerSample = 16
+  const byteRate = sampleRate * numChannels * bitsPerSample / 8
+  const blockAlign = numChannels * bitsPerSample / 8
+  const dataSize = pcmBuffer.length
+  const headerSize = 44
+  const totalSize = headerSize + dataSize
+  const wav = Buffer.alloc(totalSize)
+  wav.write('RIFF', 0)
+  wav.writeUInt32LE(totalSize - 8, 4)
+  wav.write('WAVE', 8)
+  wav.write('fmt ', 12)
+  wav.writeUInt32LE(16, 16)
+  wav.writeUInt16LE(1, 20)
+  wav.writeUInt16LE(numChannels, 22)
+  wav.writeUInt32LE(sampleRate, 24)
+  wav.writeUInt32LE(byteRate, 28)
+  wav.writeUInt16LE(blockAlign, 32)
+  wav.writeUInt16LE(bitsPerSample, 34)
+  wav.write('data', 36)
+  wav.writeUInt32LE(dataSize, 40)
+  pcmBuffer.copy(wav, 44)
+  return wav
+}
+
+function createAetherMeshSession(config, lang, onTranscript, onError, onClose) {
+  const baseURL = (config.aethermeshBaseURL || 'http://192.168.1.200:8001').replace(/\/+$/, '')
+  const apiKey = config.aethermeshKey || ''
+  const model = config.aethermeshAsrModel || 'whisper-large-v3'
+  let chunks = []
+  let closed = false
+
+  return {
+    sendAudio(pcmBuffer) {
+      if (!closed) chunks.push(Buffer.from(pcmBuffer))
+    },
+    async flush() {
+      if (closed || chunks.length === 0) return
+      const pcmData = Buffer.concat(chunks)
+      chunks = []
+      try {
+        const form = new FormData()
+        form.append('file', new Blob([pcmToWav(pcmData)], { type: 'audio/wav' }), 'audio.wav')
+        form.append('model', model)
+        form.append('language', lang || 'zh')
+        const headers = {}
+        if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`
+        const res = await fetch(`${baseURL}/v1/audio/transcriptions`, {
+          method: 'POST', headers, body: form,
+        })
+        if (!res.ok) {
+          const errText = await res.text().catch(() => '')
+          onError(`AetherMesh ASR error ${res.status}: ${errText}`)
+          return
+        }
+        const data = await res.json()
+        if (data?.text) {
+          onTranscript(data.text, true, 'am')
+        } else {
+          onError('AetherMesh ASR returned empty result')
+        }
+      } catch (err) {
+        onError(`AetherMesh ASR failed: ${err.message}`)
+      }
+    },
+    close() {
+      closed = true; chunks = []; onClose()
+    },
+  }
+}
+
 // ─── 工厂函数 ───
 // config: { provider, lang, aliyunApiKey?, tencentSecretId?, tencentSecretKey?,
 //           tencentAppId?, xunfeiAppId?, xunfeiApiKey?,
-//           volcAsrApiKey?, volcAsrAppKey?, volcAsrAccessKey?, volcAsrResourceId? }
+//           volcAsrApiKey?, volcAsrAppKey?, volcAsrAccessKey?, volcAsrResourceId?,
+//           aethermeshKey?, aethermeshBaseURL?, aethermeshAsrModel? }
 export function createCloudASRSession(config, onTranscript, onError, onClose, onEvent) {
   const { provider = 'aliyun', lang = 'zh' } = config
 
@@ -480,6 +555,10 @@ export function createCloudASRSession(config, onTranscript, onError, onClose, on
       return null
     }
     return createVolcengineSession(config, lang, onTranscript, onError, onClose)
+  }
+
+  if (provider === 'aethermesh') {
+    return createAetherMeshSession(config, lang, onTranscript, onError, onClose)
   }
 
   onError(`未知云端 ASR 服务商: ${provider}`)

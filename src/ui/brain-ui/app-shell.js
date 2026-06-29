@@ -410,6 +410,7 @@ const createSettingsModal = () => `
                 <option value="volcengine">火山引擎豆包 ASR</option>
                 <option value="tencent">腾讯云 ASR</option>
                 <option value="xunfei">科大讯飞 RTASR</option>
+                <option value="aethermesh">AetherMesh ASR（自建）</option>
               </select>
             </div>
             <div id="voice-cred-aliyun">
@@ -458,6 +459,16 @@ const createSettingsModal = () => `
               <div class="settings-row">
                 <label class="settings-label" for="voice-xunfei-apikey">ApiKey</label>
                 <input class="settings-input" type="password" id="voice-xunfei-apikey" placeholder="留空则不修改">
+              </div>
+            </div>
+            <div id="voice-cred-aethermesh" style="display:none;">
+              <div class="settings-row">
+                <label class="settings-label" for="voice-aethermesh-key">API Key</label>
+                <input class="settings-input" type="password" id="voice-aethermesh-key" placeholder="留空則使用 TTS 的 Key">
+              </div>
+              <div class="settings-row">
+                <label class="settings-label" for="voice-aethermesh-baseurl">Base URL</label>
+                <input class="settings-input" type="text" id="voice-aethermesh-baseurl" placeholder="http://192.168.1.200:8001">
               </div>
             </div>
           </div>

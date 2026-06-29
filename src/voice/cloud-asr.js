@@ -471,10 +471,13 @@ function createAetherMeshSession(config, lang, onTranscript, onError, onClose) {
   let closed = false
 
   function log(...args) { console.error('[AetherMesh-ASR]', ...args) }
+  log(`session created (baseURL=${baseURL}, model=${model}, apiKey=${apiKey ? 'set' : 'unset'})`)
 
   return {
     sendAudio(pcmBuffer) {
-      if (!closed) chunks.push(Buffer.from(pcmBuffer))
+      if (closed) { log('sendAudio: closed, drop'); return }
+      chunks.push(Buffer.from(pcmBuffer))
+      log(`sendAudio: buffered chunk ${chunks.length} (total ~${chunks.reduce((s, c) => s + c.length, 0)} bytes)`)
     },
     async flush() {
       if (closed) { log('flush: closed, skip'); return }

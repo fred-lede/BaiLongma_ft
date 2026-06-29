@@ -1807,18 +1807,25 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
         } catch {}
         return
       }
-      // Subsequent frames are PCM binary
-      if (raw instanceof Buffer) {
-        session?.sendAudio(raw)
-      } else {
+      // Try JSON control messages first; fallback to PCM binary.
+      // (ws may deliver text frames as Buffer — old instanceof Buffer check would
+      // then misroute flush/config as audio.)
+      let handled = false
+      if (typeof raw === 'string' || raw instanceof Buffer) {
         try {
-          const msg = JSON.parse(raw.toString())
-          if (msg.type === 'flush') {
-            // MUST await: AetherMesh flush() does async HTTP fetch
-            const p = session?.flush()
-            if (p && typeof p.then === 'function') p.catch(e => console.error('[WS] flush error:', e))
+          const txt = typeof raw === 'string' ? raw : raw.toString()
+          if (txt.startsWith('{')) {
+            const msg = JSON.parse(txt)
+            handled = true
+            if (msg.type === 'flush') {
+              const p = session?.flush()
+              if (p && typeof p.then === 'function') p.catch(e => console.error('[WS] flush error:', e))
+            }
           }
         } catch {}
+      }
+      if (!handled && raw instanceof Buffer) {
+        session?.sendAudio(raw)
       }
     })
 

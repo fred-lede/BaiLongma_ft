@@ -707,9 +707,11 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
           const { getTTSCredentials } = await import('./config.js')
           const creds = getTTSCredentials()
           const baseURL = (creds.aethermeshBaseURL || 'http://localhost:8001').replace(/\/$/, '')
+          const proxyHeaders = { 'Content-Type': req.headers['content-type'] }
+          if (creds.aethermeshKey) proxyHeaders['Authorization'] = `Bearer ${creds.aethermeshKey}`
           const proxyRes = await fetch(`${baseURL}/v1/voices`, {
             method: 'POST',
-            headers: { 'Content-Type': req.headers['content-type'] },
+            headers: proxyHeaders,
             duplex: 'half',
             body: req,
           })

@@ -414,14 +414,15 @@ async function streamCustomOpenAI({ text, voiceId = 'nova', apiKey, baseURL, mod
 
 // ── AetherMesh TTS ──────────────────────────────────────────────────────────
 // 服务地址默认为 http://localhost:8001
-// GET /v1/audio/speech?text=...&voice_id=...  合成语音
-// POST /v1/voices                             注册/克隆声音
-async function streamAetherMesh({ text, voiceId, baseURL = 'http://localhost:8001', apiKey = '' }) {
+// POST /v1/audio/speech  合成语音（OpenAI 兼容格式）
+// POST /v1/voices        注册/克隆声音
+async function streamAetherMesh({ text, voiceId, baseURL = 'http://localhost:8001', apiKey = '', model = 'xtts-v2' }) {
   if (!voiceId) throw new Error('AetherMesh TTS: 缺少声音 ID，请先在人物卡片中克隆或指定声音')
-  const url = `${baseURL.replace(/\/$/, '')}/v1/audio/speech?text=${encodeURIComponent(text)}&voice_id=${encodeURIComponent(voiceId)}`
-  const headers = {}
+  const url = `${baseURL.replace(/\/$/, '')}/v1/audio/speech`
+  const headers = { 'Content-Type': 'application/json' }
   if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`
-  const resp = await fetch(url, { headers })
+  const body = JSON.stringify({ model, input: text, voice: voiceId, language: 'zh-cn' })
+  const resp = await fetch(url, { method: 'POST', headers, body })
   if (!resp.ok) {
     const err = await resp.text()
     throw new Error(`AetherMesh TTS 失败 (${resp.status}): ${err.slice(0, 300)}`)

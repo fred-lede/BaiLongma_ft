@@ -676,6 +676,7 @@ function voiceTurnNeedsSendMessage(text) {
 
 function deliverDirectReply(msg, content, finishTurn) {
   const timestamp = nowTimestamp()
+  console.log('[TTS-DEBUG] deliverDirectReply: channel=%s isVoice=%s contentLen=%s', msg?.channel, isVoiceChannel(msg?.channel), String(content || '').length)
   if (isVoiceChannel(msg?.channel)) autoSpeakForVoiceReply(content)
   deliverFallbackReply(msg, content, timestamp)
   finishTurn?.(content)
@@ -1339,6 +1340,7 @@ async function runTurn(input, label, msg = null) {
     // 这是审视独立性的承重墙——主 Agent 无法在 review_work 参数里粉饰或省略它做过的事。
     toolContext.turnToolLog = toolCallLog
     voiceTurn = isVoiceChannel(msg?.channel)
+    console.log('[TTS-DEBUG] voiceTurn=%s channel=%s isVoice=%s', voiceTurn, msg?.channel, isVoiceChannel(msg?.channel || ''))
     // localReply：本地渠道（语音 / TUI，非社交）下纯文本即回复，模型无需调 send_message——
     // runtime 协议兜底会替它真正投递（含语音 TTS）。社交渠道（微信/Discord/飞书/企微）才必须
     // send_message 才能送达外部平台。省掉 send_message 那一整轮额外 LLM 调用是语音提速的关键。
@@ -1404,6 +1406,7 @@ async function runTurn(input, label, msg = null) {
         // 而没流任何正文）时才由后端兜底整段合成，保证语音不会变哑。
         if (name === 'send_message' && args?.content && isVoiceChannel(msg?.channel) && !sawTextStream) {
           const speakText = String(args.content).trim()
+          console.log('[TTS-DEBUG] onToolCall send_message: voiceChannel=%s sawTextStream=%s speakText=%s', isVoiceChannel(msg?.channel), sawTextStream, speakText.slice(0, 40))
           if (speakText) autoSpeakForVoiceReply(speakText)
         }
       },
@@ -1424,6 +1427,7 @@ async function runTurn(input, label, msg = null) {
             plainReply: mode === 'text' && localReply,
             speak: mode === 'text' && voiceTurn && !silentSignal,
           })
+          console.log('[TTS-DEBUG] stream_start: mode=%s speak=%s voiceTurn=%s sawTextStream=%s', mode, mode === 'text' && voiceTurn && !silentSignal, voiceTurn, sawTextStream)
         } else if (event === 'chunk') {
           if (curStreamMode === 'text') sawTextStream = true
           emitEvent('stream_chunk', { text, mode: curStreamMode })

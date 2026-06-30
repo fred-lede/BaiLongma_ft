@@ -711,6 +711,88 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
       return
     }
 
+    // GET /person-card/aethermesh-voices — proxy AetherMesh voice list (avoids CORS)
+    if (req.method === 'GET' && url.pathname === '/person-card/aethermesh-voices') {
+      ;(async () => {
+        try {
+          const { getTTSCredentials } = await import('./config.js')
+          const creds = getTTSCredentials()
+          const baseURL = (creds.aethermeshBaseURL || 'http://localhost:8001').replace(/\/$/, '')
+          const proxyHeaders = {}
+          if (creds.aethermeshKey) proxyHeaders['Authorization'] = `Bearer ${creds.aethermeshKey}`
+          const proxyRes = await fetch(`${baseURL}/v1/voices`, { headers: proxyHeaders })
+          if (!proxyRes.ok) {
+            const errText = await proxyRes.text()
+            throw new Error(`AetherMesh 获取声音列表失败 (${proxyRes.status}): ${errText.slice(0, 200)}`)
+          }
+          const data = await proxyRes.json()
+          const list = Array.isArray(data) ? data : (data.data || data.voices || data.voice_ids || [])
+          jsonResponse(res, 200, { ok: true, voices: list })
+        } catch (err) {
+          jsonResponse(res, 500, { ok: false, error: err.message })
+        }
+      })()
+      return
+    }
+
+    // PATCH /person-card/aethermesh-rename — proxy AetherMesh voice rename (avoids CORS)
+    if (req.method === 'PATCH' && url.pathname === '/person-card/aethermesh-rename') {
+      const chunks = []
+      req.on('data', c => chunks.push(c))
+      req.on('end', async () => {
+        try {
+          const { voiceId, name } = JSON.parse(Buffer.concat(chunks).toString())
+          if (!voiceId || !name) return jsonResponse(res, 400, { ok: false, error: '缺少 voiceId 或 name' })
+          const { getTTSCredentials } = await import('./config.js')
+          const creds = getTTSCredentials()
+          const baseURL = (creds.aethermeshBaseURL || 'http://localhost:8001').replace(/\/$/, '')
+          const proxyHeaders = { 'Content-Type': 'application/json' }
+          if (creds.aethermeshKey) proxyHeaders['Authorization'] = `Bearer ${creds.aethermeshKey}`
+          const proxyRes = await fetch(`${baseURL}/v1/voices/${voiceId}`, {
+            method: 'PATCH',
+            headers: proxyHeaders,
+            body: JSON.stringify({ name }),
+          })
+          if (!proxyRes.ok) {
+            const errText = await proxyRes.text()
+            throw new Error(`AetherMesh 更名失败 (${proxyRes.status}): ${errText.slice(0, 200)}`)
+          }
+          jsonResponse(res, 200, { ok: true })
+        } catch (err) {
+          jsonResponse(res, 500, { ok: false, error: err.message })
+        }
+      })
+      return
+    }
+
+    // POST /person-card/aethermesh-register — proxy AetherMesh voice registration (avoids CORS)
+    if (req.method === 'POST' && url.pathname === '/person-card/aethermesh-register') {
+      ;(async () => {
+        try {
+          const { getTTSCredentials } = await import('./config.js')
+          const creds = getTTSCredentials()
+          const baseURL = (creds.aethermeshBaseURL || 'http://localhost:8001').replace(/\/$/, '')
+          const proxyHeaders = {}
+          if (creds.aethermeshKey) proxyHeaders['Authorization'] = `Bearer ${creds.aethermeshKey}`
+          const proxyRes = await fetch(`${baseURL}/v1/voices`, {
+            method: 'POST',
+            headers: proxyHeaders,
+            duplex: 'half',
+            body: req,
+          })
+          if (!proxyRes.ok) {
+            const errText = await proxyRes.text()
+            throw new Error(`AetherMesh 注册声音失败 (${proxyRes.status}): ${errText.slice(0, 200)}`)
+          }
+          const data = await proxyRes.json()
+          jsonResponse(res, 200, { ok: true, voice_id: data.voice_id || data.id || '' })
+        } catch (err) {
+          jsonResponse(res, 500, { ok: false, error: err.message })
+        }
+      })()
+      return
+    }
+
     // POST /person-card/clone-voice - upload audio to AetherMesh clone (proxied directly)
     if (req.method === 'POST' && url.pathname === '/person-card/clone-voice') {
       ;(async () => {

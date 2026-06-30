@@ -143,3 +143,9 @@ dist
 .yarn/build-state.yml
 .yarn/install-state.gz
 .pnp.*
+
+# Local config with API keys
+config.json
+
+# macOS
+.DS_Store

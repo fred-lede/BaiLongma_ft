@@ -2380,17 +2380,13 @@ function initTTSSettings() {
 
   // ── AetherMesh: refresh voice list ──────────────────────────────
   async function aethermeshRefreshVoices() {
-    const baseURL = document.getElementById("tts-aethermesh-baseurl")?.value?.trim();
-    const apiKey  = document.getElementById("tts-aethermesh-key")?.value?.trim();
-    if (!baseURL) { alert("请先填写 Base URL"); return; }
     if (aethermeshRefreshBtn) { aethermeshRefreshBtn.disabled = true; aethermeshRefreshBtn.textContent = "获取中…"; }
     try {
-      const headers = {};
-      if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
-      const res = await fetch(`${baseURL.replace(/\/$/, "")}/v1/voices`, { headers });
+      const res = await fetch(`${API}/person-card/aethermesh-voices`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const voices = Array.isArray(res.json) ? res.json : await res.json();
-      const list = Array.isArray(voices) ? voices : (voices.data || voices.voices || voices.voice_ids || []);
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || '获取失败');
+      const list = Array.isArray(data.voices) ? data.voices : [];
       aethermeshVoicesList = list;  // 存起來供名稱查詢
       if (aethermeshVoiceId) {
         const prev = aethermeshVoiceId.value;
@@ -2452,20 +2448,17 @@ function initTTSSettings() {
       const newName = aethermeshVoiceName?.value?.trim();
       if (!voiceId) { alert("请先选择一个声音"); return; }
       if (!newName) { alert("名称不能为空"); return; }
-      const baseURL = document.getElementById("tts-aethermesh-baseurl")?.value?.trim();
-      const apiKey  = document.getElementById("tts-aethermesh-key")?.value?.trim();
-      if (!baseURL) { alert("请先填写 Base URL"); return; }
       aethermeshRenameBtn.disabled = true;
       aethermeshRenameBtn.textContent = "更名中…";
       try {
-        const headers = { "Content-Type": "application/json" };
-        if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
-        const res = await fetch(`${baseURL.replace(/\/$/, "")}/v1/voices/${voiceId}`, {
+        const res = await fetch(`${API}/person-card/aethermesh-rename`, {
           method: "PATCH",
-          headers,
-          body: JSON.stringify({ name: newName }),
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ voiceId, name: newName }),
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || '更名失败');
         // 更新本地下拉選單中的名稱
         const sel = aethermeshVoiceId.options[aethermeshVoiceId.selectedIndex];
         if (sel) {
@@ -2499,33 +2492,25 @@ function initTTSSettings() {
   }
   if (aethermeshRegSubmit) {
     aethermeshRegSubmit.addEventListener("click", async () => {
-      const baseURL  = document.getElementById("tts-aethermesh-baseurl")?.value?.trim();
-      const apiKey   = document.getElementById("tts-aethermesh-key")?.value?.trim();
       const name     = aethermeshRegName?.value?.trim();
       const file     = aethermeshRegAudio?.files?.[0];
-      if (!baseURL) { alert("请先填写 Base URL"); return; }
       if (!name)    { alert("请输入声音名称"); return; }
       if (!file)    { alert("请选择音频文件"); return; }
 
       aethermeshRegSubmit.disabled = true;
       aethermeshRegSubmit.textContent = "注册中…";
       try {
-        const headers = {};
-        if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
         const formData = new FormData();
         formData.append("name", name);
         formData.append("audio", file);
-        const res = await fetch(`${baseURL.replace(/\/$/, "")}/v1/voices`, {
+        const res = await fetch(`${API}/person-card/aethermesh-register`, {
           method: "POST",
-          headers,
           body: formData,
         });
-        if (!res.ok) {
-          const errText = await res.text().catch(() => "");
-          throw new Error(`HTTP ${res.status}: ${errText}`);
-        }
-        const result = await res.json().catch(() => ({}));
-        const newId = result.voice_id || result.id || "";
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const result = await res.json();
+        if (!result.ok) throw new Error(result.error || '注册失败');
+        const newId = result.voice_id || "";
         aethermeshRegSubmit.textContent = "注册成功！";
         if (aethermeshRegArea) aethermeshRegArea.style.display = "none";
         if (aethermeshRegName) aethermeshRegName.value = "";

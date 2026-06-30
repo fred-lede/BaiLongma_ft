@@ -2506,7 +2506,7 @@ function initTTSSettings() {
       try {
         const formData = new FormData();
         formData.append("name", name);
-        formData.append("audio", file);
+        formData.append("file", file);  // AetherMesh API expects "file", not "audio"
         const res = await fetch(`${API}/person-card/aethermesh-register`, {
           method: "POST",
           body: formData,

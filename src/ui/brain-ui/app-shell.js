@@ -680,9 +680,36 @@ const createSettingsModal = () => `
                 <input class="settings-input" type="text" id="tts-aethermesh-baseurl" placeholder="http://localhost:8001">
               </div>
               <div class="settings-row">
-                <label class="settings-label" for="tts-aethermesh-voice-id">声音 ID</label>
-                <div style="display:flex;gap:6px;flex:1;">
-                  <input class="settings-input" type="text" id="tts-aethermesh-voice-id" placeholder="可留空，通过人物卡片指定每位用户的声音" style="flex:1;">
+                <label class="settings-label">声音</label>
+                <div style="display:flex;gap:6px;flex:1;flex-direction:column;">
+                  <div style="display:flex;gap:6px;">
+                    <select class="settings-input" id="tts-aethermesh-voice-id" style="flex:1;">
+                      <option value="">— 点「刷新」获取声音列表 —</option>
+                    </select>
+                    <button class="settings-save-btn" id="tts-aethermesh-refresh-voices" type="button" style="padding:0 10px;font-size:11px;white-space:nowrap;">刷新</button>
+                    <button class="settings-save-btn" id="tts-aethermesh-register-voice" type="button" style="padding:0 10px;font-size:11px;white-space:nowrap;">注册</button>
+                  </div>
+                  <div style="display:flex;gap:6px;align-items:center;">
+                    <label style="font-size:11px;color:var(--ink2);white-space:nowrap;">名称</label>
+                    <input class="settings-input" type="text" id="tts-aethermesh-voice-name" placeholder="选择声音后可编辑名称" style="flex:1;font-size:12px;">
+                    <button class="settings-save-btn" id="tts-aethermesh-rename-voice" type="button" style="padding:0 10px;font-size:11px;white-space:nowrap;display:none;">更名</button>
+                  </div>
+                </div>
+              </div>
+              <div id="tts-aethermesh-register-area" style="display:none;padding:8px 0 4px 0;">
+                <div class="settings-row">
+                  <label class="settings-label" for="tts-aethermesh-reg-name">声音名称</label>
+                  <input class="settings-input" type="text" id="tts-aethermesh-reg-name" placeholder="如：小明" style="flex:1;">
+                </div>
+                <div class="settings-row">
+                  <label class="settings-label" for="tts-aethermesh-reg-audio">音频文件</label>
+                  <input class="settings-input" type="file" id="tts-aethermesh-reg-audio" accept="audio/*" style="flex:1;">
+                </div>
+                <div class="settings-row">
+                  <div style="flex:1;text-align:right;">
+                    <button class="settings-save-btn" id="tts-aethermesh-reg-submit" type="button" style="padding:0 16px;font-size:11px;white-space:nowrap;">提交注册</button>
+                    <button class="settings-save-btn" id="tts-aethermesh-reg-cancel" type="button" style="padding:0 10px;font-size:11px;white-space:nowrap;margin-left:4px;">取消</button>
+                  </div>
                 </div>
               </div>
               <div class="settings-row">
@@ -695,7 +722,7 @@ const createSettingsModal = () => `
                   <option value="ko">한국어</option>
                 </select>
               </div>
-              <p class="settings-hint">AetherMesh 本地语音克隆服务。可在此填入默认声音 ID，或通过人物卡片为每位用户独立克隆和指定声音。</p>
+              <p class="settings-hint">AetherMesh 本地语音克隆服务。点「刷新」从服务端获取已注册声音列表；点「注册」可克隆新声音。</p>
             </div>
 
             <div class="settings-row" style="margin-top:8px;">

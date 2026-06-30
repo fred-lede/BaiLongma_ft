@@ -371,7 +371,10 @@ export function initPersonCard() {
       cloneBtn.disabled = true;
       try {
         const formData = new FormData();
-        formData.append('audio', file);
+        // Generate a default name from the voice input label or timestamp
+        const voiceName = voiceInput?.value?.trim() || ('clone-' + Date.now());
+        formData.append('name', voiceName);
+        formData.append('file', file);  // AetherMesh API expects "file", not "audio"
         const res = await fetch(apiUrl('/person-card/clone-voice'), {
           method: 'POST',
           body: formData,

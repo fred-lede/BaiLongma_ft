@@ -14,8 +14,8 @@ Bailongma 是一个持续运行的桌面 AI Agent 项目。它不是一次问答
 - 多模型接入：通过 OpenAI 兼容接口连接 DeepSeek、MiniMax、OpenAI、Qwen、Moonshot、Zhipu、MiMo 以及自定义服务。
 - 工具系统：按需注入工具，支持通信、文件系统、Shell、网页读取、搜索、媒体生成、记忆管理、UI 卡片、任务、提醒、本地 Agent 委托和系统操作。
 - Brain UI：提供聊天、思考流、记忆图、焦点线程、热点面板、文档面板、人物卡片、语音控制、设置页和 ACUI 卡片渲染。
-- 语音能力：支持云端 ASR（阿里云百炼、腾讯云、科大讯飞、火山引擎）和本地 ASR（AetherMesh Whisper），TTS 支持豆包语音合成 2.0、MiniMax、OpenAI、ElevenLabs、火山引擎基础版、自定义 OpenAI 兼容服务和 AetherMesh 语音克隆（XTTS-v2 等本地模型），可在 UI 中配置语音输入、语音输出和声音参数。
-- 社交连接器：支持 Discord 与微信桥接，外部消息进入同一个主循环，回复按渠道路由返回。
+- 语音能力：支持云端 ASR（阿里云百炼、腾讯云、科大讯飞、火山引擎）和本地 ASR（AetherMesh Whisper），TTS 支持豆包语音合成 2.0、MiniMax、OpenAI、ElevenLabs、火山引擎基础版、自定义 OpenAI 兼容服务和 AetherMesh 语音克隆（XTTS-v2 等本地模型），可在 UI 中配置语音输入、语音输出和声音参数。支持逐人语音偏好，可在人物卡片中为每个角色指定独立的 TTS 语言和音色。
+- 社交连接器：支持 Discord、微信和 Telegram 桥接，外部消息进入同一个主循环，回复按渠道路由返回。
 - 本地资源感知：启动时收集系统信息、桌面信息、已安装软件、本地 Agent、SSH 与 Git 资源、地理天气和热点内容。
 - 桌面集成：Electron 窗口、托盘、自动更新状态、日志落盘、单实例运行和焦点横幅。
 
@@ -190,6 +190,44 @@ http://127.0.0.1:3721
 ```
 
 > ⚠️ XTTS-v2 需要先通过 `POST /v1/voices` 注册/克隆声音，`ttsVoiceId` 应使用注册后返回的 UUID，而非模型名。
+
+### 逐人语音偏好
+
+在人物卡片中可以为每个角色指定独立的 TTS 语言和音色。当 Agent 对该角色说话时，会自动使用其对应的语言和音色进行合成。如果角色配了非其语言的文本，系统会自动翻译后再合成语音。
+
+配置方式：在 Brain UI 的人物卡片面板中，选择 TTS 服务商（如 AetherMesh），填写该角色的声音 ID 和语言代码（如 `zh-tw`、`en`、`ja` 等）。
+
+## 社交连接器
+
+### Discord
+
+通过 Discord Bot 接收和发送消息，支持多频道和多服务器。
+
+### 微信
+
+通过微信客户端桥接（Clawbot），扫码连接后自动收发消息。
+
+### Telegram
+
+通过 Telegram Bot API 长轮询方式接收消息，回复自动路由回对应聊天。
+
+配置步骤：
+
+1. 在 Telegram 中通过 [@BotFather](https://t.me/BotFather) 创建 Bot，获取 Token
+2. 设置环境变量：
+
+```text
+TELEGRAM_BOT_TOKEN=<your-bot-token>
+```
+
+3. 启动 Bailongma 后自动开始轮询消息
+
+特性：
+
+- 长轮询模式，适配 NAT/家庭网络环境
+- 自动重连（指数退避，2s → 60s）
+- 消息进入主循环统一处理，回复按渠道路由返回 Telegram
+- 支持 SSE 事件流推送社交状态变化
 
 ## 数据与持久化
 

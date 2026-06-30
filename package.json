@@ -19,6 +19,9 @@
     "build:mac": "node scripts/build-mac.mjs",
     "build:mac:x64": "node scripts/build-mac.mjs x64",
     "build:mac:arm64": "node scripts/build-mac.mjs arm64",
+    "build:linux": "node scripts/build-linux.mjs",
+    "build:linux:x64": "node scripts/build-linux.mjs x64",
+    "build:linux:arm64": "node scripts/build-linux.mjs arm64",
     "publish": "node scripts/prebuild-clean.mjs && node scripts/build-macos-speech.mjs && node ./node_modules/@electron/rebuild/lib/cli.js -f -w better-sqlite3 -v 33.4.11 && node ./node_modules/electron-builder/cli.js --publish always",
     "postinstall": "node ./node_modules/electron-builder/cli.js install-app-deps",
     "test:rule-context": "electron ./src/test-rule-context.js",
@@ -142,6 +145,31 @@
         "NSSpeechRecognitionUsageDescription": "Bailongma may use speech recognition for voice input features."
       },
       "artifactName": "${productName}-${version}-mac-${arch}.${ext}"
+    },
+    "linux": {
+      "icon": "build/icon.png",
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "category": "Utility",
+      "artifactName": "${productName}-${version}-linux-${arch}.${ext}",
+      "desktop": {
+        "Name": "Bailongma",
+        "Comment": "A continuously running digital consciousness framework",
+        "Categories": "Utility;Network;",
+        "StartupWMClass": "Bailongma"
+      }
     },
     "publish": [
       {

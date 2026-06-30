@@ -1785,7 +1785,7 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
           // 合成前预检：服务商未选/凭证未配齐时给出可执行引导，而非冲到 streamTTS 才裸抛
           const check = validateTTSConfig(creds)
           if (!check.ok) { jsonResponse(res, 400, { ok: false, error: check.guide, needsConfig: true, provider: check.provider }); return }
-          const audioStream = await streamTTS({
+          const ttsResult = await streamTTS({
             text: text.slice(0, 800),
             provider: creds.provider,
             voiceId:  body.voiceId || creds.voiceId || undefined,
@@ -1810,6 +1810,10 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
               aethermeshLanguage: creds.aethermeshLanguage,
             },
           })
+          // streamTTS may return { stream, contentType } (AetherMesh) or a raw stream (other providers)
+          const audioStream = ttsResult?.stream || ttsResult
+          const audioContentType = ttsResult?.contentType || 'audio/mpeg'
+          console.log('[TTS-DEBUG] /tts/stream: contentType=', audioContentType, 'isWrapped=', !!ttsResult?.stream)
           let headersWritten = false
           let responseDone = false
           let streamError = null
@@ -1819,7 +1823,7 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
             if (!headersWritten) {
               headersWritten = true
               res.writeHead(200, {
-                'Content-Type': 'audio/mpeg',
+                'Content-Type': audioContentType,
                 'Transfer-Encoding': 'chunked',
                 'Cache-Control': 'no-cache',
                 'Access-Control-Allow-Origin': '*',

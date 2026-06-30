@@ -421,16 +421,18 @@ async function streamAetherMesh({ text, voiceId, baseURL = 'http://localhost:800
   const url = `${baseURL.replace(/\/$/, '')}/v1/audio/speech`
   const headers = { 'Content-Type': 'application/json' }
   if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`
-  const body = JSON.stringify({ model, input: text, voice: voiceId, language })
+  const body = JSON.stringify({ model, input: text, voice: voiceId, language, response_format: 'mp3' })
   const resp = await fetch(url, { method: 'POST', headers, body })
   if (!resp.ok) {
     const err = await resp.text()
     throw new Error(`AetherMesh TTS 失败 (${resp.status}): ${err.slice(0, 300)}`)
   }
-  return webStreamToNode(resp.body)
+  const contentType = resp.headers.get('content-type') || 'audio/mpeg'
+  return { stream: webStreamToNode(resp.body), contentType }
 }
 
 // ── 通用入口 ────────────────────────────────────────────────────────────────
+// Returns { stream, contentType } — contentType defaults to 'audio/mpeg' for providers that only return a stream
 export async function streamTTS({ text, provider, voiceId, keys = {} }) {
   if (!text?.trim()) throw new Error('TTS: 文本为空')
   switch (provider) {
@@ -455,8 +457,11 @@ export async function streamTTS({ text, provider, voiceId, keys = {} }) {
       return streamVolcano({ text, voiceId, appId: keys.volcanoAppId, token: keys.volcanoToken })
     case 'custom-openai':
       return streamCustomOpenAI({ text, voiceId, apiKey: keys.customTtsKey, baseURL: keys.customTtsBaseURL, model: keys.customTtsModel })
-    case 'aethermesh':
-      return streamAetherMesh({ text, voiceId, baseURL: keys.aethermeshBaseURL, apiKey: keys.aethermeshKey, language: keys.aethermeshLanguage })
+    case 'aethermesh': {
+      const amResult = await streamAetherMesh({ text, voiceId, baseURL: keys.aethermeshBaseURL, apiKey: keys.aethermeshKey, language: keys.aethermeshLanguage })
+      // streamAetherMesh returns { stream, contentType } — we need to unwrap it
+      return amResult
+    }
     default:
       throw new Error(`未知 TTS 服务商: ${provider}，请在设置中选择一个 TTS 服务商`)
   }

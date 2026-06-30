@@ -397,7 +397,6 @@ export function attachJarvisAudioGraph(audioEl, voiceId) {
   const ctx = ensureCtx()
   if (!ctx) return null
   if (ctx.state !== 'running') {
-    console.warn('[TTS-FX] attachJarvisAudioGraph: AudioContext state=', ctx.state, '— returning null graph, audio will play via element directly');
     ctx.resume?.().catch(() => {})
     return null
   }

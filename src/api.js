@@ -793,20 +793,6 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
       return
     }
 
-    // POST /debug/log — receive debug logs from frontend (prints to backend console)
-    if (req.method === 'POST' && url.pathname === '/debug/log') {
-      const chunks = []
-      req.on('data', c => chunks.push(c))
-      req.on('end', () => {
-        try {
-          const body = JSON.parse(Buffer.concat(chunks).toString('utf-8') || '{}')
-          console.log('[FRONTEND]', ...body.args)
-          jsonResponse(res, 200, { ok: true })
-        } catch { jsonResponse(res, 400, { ok: false }) }
-      })
-      return
-    }
-
     // POST /person-card/clone-voice - upload audio to AetherMesh clone (proxied directly)
     if (req.method === 'POST' && url.pathname === '/person-card/clone-voice') {
       ;(async () => {
@@ -1813,7 +1799,6 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
           // streamTTS may return { stream, contentType } (AetherMesh) or a raw stream (other providers)
           const audioStream = ttsResult?.stream || ttsResult
           const audioContentType = ttsResult?.contentType || 'audio/mpeg'
-          console.log('[TTS-DEBUG] /tts/stream: contentType=', audioContentType, 'isWrapped=', !!ttsResult?.stream)
           let headersWritten = false
           let responseDone = false
           let streamError = null

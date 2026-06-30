@@ -214,13 +214,12 @@ async function translateForTTS(text, targetLang) {
 // 语音消息自动回复 TTS：检测到用户用语音输入时，通知前端播放语音
 // 由 index.js 调用，前端收到 tts_reply 事件后调用 /tts/stream 完成实际合成
 export function autoSpeakForVoiceReply(text) {
-  if (!text) { console.warn('[autoSpeakForVoiceReply] called with empty text'); return }
+  if (!text) return
   const plain = stripMarkdownForSpeech(text)
-  if (!plain) { console.warn('[autoSpeakForVoiceReply] plain text empty after stripMarkdown'); return }
+  if (!plain) return
   // 纯表情 / 标点（没有任何可读文字）不合成语音：播放确认现在用单个 emoji 代替，
   // 语音模式下不该把它念出来（\p{L}=字母含汉字，\p{N}=数字）。
-  if (!/[\p{L}\p{N}]/u.test(plain)) { console.warn('[autoSpeakForVoiceReply] no readable chars, skip'); return }
-  console.log('[autoSpeakForVoiceReply] emit tts_reply, text length:', plain.length)
+  if (!/[\p{L}\p{N}]/u.test(plain)) return
   emitEvent('tts_reply', { text: plain })
 }
 

@@ -14,6 +14,12 @@ import { attachJarvisAudioGraph, attachJarvisFx, isFxEnabledForVoice, setFxEnabl
 import { initAudioOutputRouting, applyOutputSink, listOutputDevices, getOutputPreference, setOutputPreference } from "./audio-output.js";
 renderBrainUiApp(document.body);
 const THEME_KEY = "jarvis-brain-ui-theme";
+
+// Debug helper: send frontend log to backend console (so it appears in the terminal)
+function beaconLog(...args) {
+  console.log('[TTS]', ...args);
+  try { navigator.sendBeacon(`${API}/debug/log`, JSON.stringify({ args: args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)) })); } catch {}
+}
 const PHYSICS_STORAGE_KEY = "jarvis-brain-ui-physics";
 const ACTIVATION_WARMUP_KEY = "bailongma_activation_warmup_until";
 const UI_ZOOM_STORAGE_KEY = "bailongma_ui_zoom_factor";
@@ -1308,7 +1314,7 @@ function handle({ type, data = {} }) {
       // 只在尚未开始时建气泡，后续段累积进同一个。speak 轮（语音）额外开启逐句流式合成。
       if (data.mode === "text" && data.plainReply) {
         if (data.speak) liveTurnSpeak = true;
-        console.log('[TTS] stream_start: speak=', data.speak, 'liveTurnSpeak=', liveTurnSpeak, 'ttsStreaming=', isTTSStreamingEnabled());
+        beaconLog('stream_start: speak=', data.speak, 'liveTurnSpeak=', liveTurnSpeak, 'ttsStreaming=', isTTSStreamingEnabled());
         if (!liveReplyActive) {
           liveReplyActive = true;
           liveRawText = "";
@@ -1508,7 +1514,7 @@ function handle({ type, data = {} }) {
       }
       break;
     case "tts_reply":
-      console.log('[TTS] tts_reply event received, text length:', data.text?.length);
+      beaconLog('tts_reply event received, text length:', data.text?.length);
       if (data.text) playTTSReply(data.text);
       break;
     case "key_configured":
@@ -1797,7 +1803,7 @@ function startTTSAudio(audioEl, revokeUrl, opts = {}) {
   // 这点路由耗时（毫秒级）远在出声之前完成 → 不必 await，也不会让首音漏到默认设备。
   applyOutputSink(audioEl).catch(() => {});
   audioEl.play().catch((err) => {
-    console.error('[TTS] audio.play() 失败:', err?.message || err);
+    beaconLog('audio.play() 失败:', err?.message || err);
     clearTTSAudioGraph(audioGraph);
     if (ttsAudioEl !== audioEl) return;
     if (onComplete) { ttsAudioEl = null; onComplete(); return; }
@@ -1816,7 +1822,7 @@ function playTTSViaMediaSource(resp, opts = {}) {
     if (!isCurrentAudio()) { try { mediaSource.endOfStream(); } catch {} return; }
     let sb;
     try { sb = mediaSource.addSourceBuffer('audio/mpeg'); }
-    catch (err) { console.error('[TTS] addSourceBuffer(audio/mpeg) 失败:', err.message); try { mediaSource.endOfStream(); } catch {} return; }
+    catch (err) { beaconLog('addSourceBuffer(audio/mpeg) 失败:', err.message); try { mediaSource.endOfStream(); } catch {} return; }
     const reader = resp.body.getReader();
     if (!isCurrentAudio()) { try { reader.cancel(); } catch {} return; }
     ttsStreamReader = reader;
@@ -1846,7 +1852,7 @@ function playTTSViaMediaSource(resp, opts = {}) {
         }
       } catch (err) {
         if (ttsStreamReader === reader) ttsStreamReader = null;
-        console.error('[TTS] MediaSource stream read 失败:', err?.message || err);
+        beaconLog('MediaSource stream read 失败:', err?.message || err);
         finished = true; flush();
       } // 被取消/网络中断：收尾，已播部分照常结束
     })();
@@ -1882,7 +1888,7 @@ async function playTTSReply(text) {
       startTTSAudio(new Audio(url), url);
     }
   } catch (err) {
-    console.error('[TTS] playTTSReply 失败:', err.message);
+    beaconLog('playTTSReply 失败:', err.message);
     clearTTSAudioGraph();
     ttsCurrentText = '';
     window.bailongmaVoice?.resumeAfterMedia();
@@ -1918,6 +1924,7 @@ function toPlainSpeech(md) {
 
 // ── 逐句流式 TTS 队列 ──────────────────────────────────────────────────────────
 function beginStreamingTTS() {
+  beaconLog('beginStreamingTTS called');
   // 停掉上一段仍在进行的单段播放 / 流读取
   if (ttsStreamReader) { try { ttsStreamReader.cancel(); } catch {} ttsStreamReader = null; }
   if (ttsAudioEl) { clearTTSAudioGraph(); try { ttsAudioEl.pause(); URL.revokeObjectURL(ttsAudioEl.src); } catch {} ttsAudioEl = null; }
@@ -1963,7 +1970,7 @@ async function pumpSttsQueue() {
     if (sttsStreamDone) endStreamingTTS(); // 正文已尽且队列放完 → 收尾
     return;
   }
-  console.log('[TTS] pumpSttsQueue: synthesizing seg length=', seg.length, ':', seg.slice(0, 30));
+  beaconLog('pumpSttsQueue: synthesizing seg length=', seg.length, ':', seg.slice(0, 30));
   sttsPlaying = true;
   sttsCurSeg = seg;
   // 麦克风只在首段挂起一次（后续段之间保持挂起，避免反复重置 bargein 缓冲/预热计时）
@@ -1981,7 +1988,8 @@ async function pumpSttsQueue() {
       body: JSON.stringify({ text: seg }),
     });
     if (!sttsActive) return; // 期间被打断/收尾
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    if (!resp.ok) { beaconLog('pumpSttsQueue fetch failed: HTTP', resp.status); throw new Error(`HTTP ${resp.status}`); }
+    beaconLog('pumpSttsQueue fetch ok, ttsCanStream=', ttsCanStream(), 'hasBody=', !!resp.body);
     if (ttsCanStream() && resp.body) {
       playTTSViaMediaSource(resp, { manageMic: false, onComplete });
     } else {
@@ -1991,7 +1999,7 @@ async function pumpSttsQueue() {
       startTTSAudio(new Audio(url), url, { manageMic: false, onComplete });
     }
   } catch (err) {
-    console.error('[TTS] 逐句合成失败:', seg.slice(0, 40), err.message);
+    beaconLog('逐句合成失败:', seg.slice(0, 40), err.message);
     onComplete(); // 本句合成失败：跳过，继续下一句，绝不卡住队列
   }
 }
@@ -2007,6 +2015,7 @@ function finalizeStreamingTTS() {
 }
 
 function endStreamingTTS() {
+  beaconLog('endStreamingTTS called');
   sttsActive = false;
   ttsStreamingMode = false;
   clearTTSAudioGraph();

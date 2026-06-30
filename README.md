@@ -14,7 +14,7 @@ Bailongma 是一个持续运行的桌面 AI Agent 项目。它不是一次问答
 - 多模型接入：通过 OpenAI 兼容接口连接 DeepSeek、MiniMax、OpenAI、Qwen、Moonshot、Zhipu、MiMo 以及自定义服务。
 - 工具系统：按需注入工具，支持通信、文件系统、Shell、网页读取、搜索、媒体生成、记忆管理、UI 卡片、任务、提醒、本地 Agent 委托和系统操作。
 - Brain UI：提供聊天、思考流、记忆图、焦点线程、热点面板、文档面板、人物卡片、语音控制、设置页和 ACUI 卡片渲染。
-- 语音能力：支持云端语音识别和多种 TTS 服务，可在 UI 中配置语音输入、语音输出和声音参数。
+- 语音能力：支持云端 ASR（阿里云百炼、腾讯云、科大讯飞、火山引擎）和本地 ASR（AetherMesh Whisper），TTS 支持豆包语音合成 2.0、MiniMax、OpenAI、ElevenLabs、火山引擎基础版、自定义 OpenAI 兼容服务和 AetherMesh 语音克隆（XTTS-v2 等本地模型），可在 UI 中配置语音输入、语音输出和声音参数。
 - 社交连接器：支持 Discord 与微信桥接，外部消息进入同一个主循环，回复按渠道路由返回。
 - 本地资源感知：启动时收集系统信息、桌面信息、已安装软件、本地 Agent、SSH 与 Git 资源、地理天气和热点内容。
 - 桌面集成：Electron 窗口、托盘、自动更新状态、日志落盘、单实例运行和焦点横幅。
@@ -142,6 +142,55 @@ http://127.0.0.1:3721
 
 部分接口还用于 Brain UI 内部面板，例如热点、文档、人物卡片、媒体历史、AI 视频面板、ACUI 和云端语音识别。
 
+## 语音系统
+
+### ASR（语音识别）
+
+| 服务商 | 字段 | 说明 |
+| --- | --- | --- |
+| 阿里云百炼 Paraformer（首选） | `aliyunApiKey` | 延迟低，中文效果出色 |
+| 腾讯云 ASR | `tencentSecretId/Key/AppId` | 支持粤语、英语等多语种 |
+| 科大讯飞 RTASR | `xunfeiAppId/ApiKey/ApiSecret` | 中文识别老牌服务 |
+| 火山引擎 ASR | `volcAsrApiKey/AppKey/AccessKey/ResourceId` | 字节跳动云端 ASR |
+| AetherMesh Whisper（本地） | `aethermeshBaseURL` + `aethermeshAsrModel` | 本地部署，完全私密，OpenAI `/v1/audio/transcriptions` 兼容格式 |
+
+### TTS（语音合成）
+
+| 服务商 | 字段 | 说明 |
+| --- | --- | --- |
+| 豆包语音合成 2.0（首选） | `doubaoKey` | 流式低延迟，中文音色丰富 |
+| MiniMax | 复用 LLM 密钥 | 无需额外配置 |
+| OpenAI | `openaiTtsKey` | 英文效果顶级 |
+| ElevenLabs | `elevenLabsKey` | 超自然音色，有免费额度 |
+| 火山引擎基础版 | `volcanoAppId` + `volcanoToken` | 传统版 TTS |
+| 自定义 OpenAI 兼容 | `customTtsKey/ BaseURL/Model` | 兼容 OpenAI `/v1/audio/speech` 接口 |
+| AetherMesh 语音克隆（本地） | `aethermeshBaseURL` | XTTS-v2 等本地模型，支持声音克隆 |
+
+### 本地语音配置示例
+
+使用 AetherMesh 连接本地 XTTS-v2 TTS 和 Whisper ASR：
+
+```json
+{
+  "voice": {
+    "voiceProvider": "aethermesh",
+    "aethermeshBaseURL": "http://192.168.1.200:8001",
+    "aethermeshKey": "your-api-key",
+    "aethermeshAsrModel": "whisper-large-v3",
+    "aethermeshLanguage": "zh-tw"
+  },
+  "tts": {
+    "ttsProvider": "aethermesh",
+    "aethermeshBaseURL": "http://192.168.1.200:8001",
+    "aethermeshKey": "your-api-key",
+    "aethermeshLanguage": "zh-tw",
+    "ttsVoiceId": "your-registered-voice-uuid"
+  }
+}
+```
+
+> ⚠️ XTTS-v2 需要先通过 `POST /v1/voices` 注册/克隆声音，`ttsVoiceId` 应使用注册后返回的 UUID，而非模型名。
+
 ## 数据与持久化
 
 Bailongma 的长期状态主要保存在本地 SQLite 数据库中，包括：
@@ -211,11 +260,35 @@ npm run repair:memories
 npm run probe:config-upgrade
 ```
 
-打包 Windows 安装包：
+打包与构建：
 
 ```bash
-npm run build
+# macOS（Intel Mac 建议指定 x64，避免双架构重构后原生模块架构不匹配）
+npm run build:mac:x64      # 只构建 x64 DMG
+npm run build:mac:arm64    # 只构建 arm64 DMG
+npm run build:mac           # 同时构建 x64 + arm64 DMG
+
+# Linux（需在 Linux 系统上执行，不支持交叉编译）
+npm run build:linux          # 默认 x64，产出 AppImage + deb
+npm run build:linux:x64
+npm run build:linux:arm64
+
+# Windows
+npm run build:win            # 产出 NSIS 安装包
+
+# 通用构建
+npm run build                # 构建当前平台
 ```
+
+> ⚠️ **Mac 架构注意：** `npm run build:mac` 会先重建 x64 的 better-sqlite3，再重建 arm64。**最后留在 node_modules 中的是 arm64 架构**，如果你在 Intel Mac 上继续用 `npm start` 开发，需要重新重建 x64：
+> ```bash
+> npx electron-rebuild -f -w better-sqlite3 -v 33.4.11 -a x64
+> ```
+
+> ⚠️ **Linux 构建注意：** electron-builder 不支持跨平台编译，Linux 包必须在 Linux 系统上构建。Ubuntu 需先安装依赖：
+> ```bash
+> sudo apt-get install -y libgtk-3-dev libxss1 libnss3 libasound2 libnotify-dev libxtst-dev libx11-xcb-dev libgl1-mesa-dev
+> ```
 
 发布到 GitHub Releases：
 

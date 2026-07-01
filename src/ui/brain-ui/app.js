@@ -2399,7 +2399,7 @@ function initTTSSettings() {
           const vid = v.voice_id || v.id || "";
           const name = v.name || "";
           const dur = v.duration_seconds || 0;
-          const tooLong = dur > 12;
+          const tooLong = dur > 8;
           const label = [name, v.language, v.created_at ? new Date(v.created_at).toLocaleDateString() : ""].filter(Boolean).join(" · ");
           const opt = document.createElement("option");
           opt.value = vid;

@@ -1832,8 +1832,8 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
                   }
                 }
                 const matched = _amVoiceCache.voices.find(v => (v.voice_id || v.id) === voiceId)
-                if (matched && matched.duration_seconds > 12) {
-                  jsonResponse(res, 400, { ok: false, error: `聲音「${matched.name || voiceId}」的參考音頻長達 ${matched.duration_seconds.toFixed(1)} 秒，超過 XTTS-v2 建議上限 12 秒，合成會出現異常。請重新克隆一段 6-10 秒的音頻，或選擇其他聲音。`, voiceTooLong: true, duration: matched.duration_seconds })
+                if (matched && matched.duration_seconds > 8) {
+                  jsonResponse(res, 400, { ok: false, error: `聲音「${matched.name || voiceId}」的參考音頻長達 ${matched.duration_seconds.toFixed(1)} 秒，超過 XTTS-v2 建議上限 8 秒，合成會出現異常。請重新克隆一段 5-8 秒的音頻，或選擇其他聲音。`, voiceTooLong: true, duration: matched.duration_seconds })
                   return
                 }
               } catch {} // best-effort check; proceed on failure

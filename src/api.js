@@ -3,6 +3,10 @@ import fs from 'fs'
 import path from 'path'
 import net from 'net'
 import crypto from 'crypto'
+
+// AetherMesh voice duration cache (refreshed every 5 min)
+let _amVoiceCache = { voices: [], ts: 0 }
+const AM_VOICE_CACHE_TTL = 5 * 60 * 1000
 import { fileURLToPath } from 'url'
 import { WebSocketServer } from 'ws'
 import { pushMessage } from './queue.js'
@@ -1811,6 +1815,30 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
           // 合成前预检：服务商未选/凭证未配齐时给出可执行引导，而非冲到 streamTTS 才裸抛
           const check = validateTTSConfig(creds)
           if (!check.ok) { jsonResponse(res, 400, { ok: false, error: check.guide, needsConfig: true, provider: check.provider }); return }
+          // AetherMesh: check if selected voice has overly long reference audio (>12s causes garbled output)
+          if (creds.provider === 'aethermesh') {
+            const voiceId = body.voiceId || creds.voiceId || ''
+            if (voiceId) {
+              try {
+                const now = Date.now()
+                if (now - _amVoiceCache.ts > AM_VOICE_CACHE_TTL) {
+                  const baseURL = (creds.aethermeshBaseURL || 'http://localhost:8001').replace(/\/$/, '')
+                  const amHeaders = {}
+                  if (creds.aethermeshKey) amHeaders['Authorization'] = `Bearer ${creds.aethermeshKey}`
+                  const amRes = await fetch(`${baseURL}/v1/voices`, { headers: amHeaders, signal: AbortSignal.timeout(4000) })
+                  if (amRes.ok) {
+                    const amList = await amRes.json()
+                    _amVoiceCache = { voices: Array.isArray(amList) ? amList : (amList.data || amList.voices || []), ts: now }
+                  }
+                }
+                const matched = _amVoiceCache.voices.find(v => (v.voice_id || v.id) === voiceId)
+                if (matched && matched.duration_seconds > 12) {
+                  jsonResponse(res, 400, { ok: false, error: `聲音「${matched.name || voiceId}」的參考音頻長達 ${matched.duration_seconds.toFixed(1)} 秒，超過 XTTS-v2 建議上限 12 秒，合成會出現異常。請重新克隆一段 6-10 秒的音頻，或選擇其他聲音。`, voiceTooLong: true, duration: matched.duration_seconds })
+                  return
+                }
+              } catch {} // best-effort check; proceed on failure
+            }
+          }
           const ttsResult = await streamTTS({
             text: text.slice(0, 800),
             provider: creds.provider,

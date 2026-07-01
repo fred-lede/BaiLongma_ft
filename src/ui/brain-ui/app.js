@@ -2398,11 +2398,18 @@ function initTTSSettings() {
         list.forEach(v => {
           const vid = v.voice_id || v.id || "";
           const name = v.name || "";
+          const dur = v.duration_seconds || 0;
+          const tooLong = dur > 12;
           const label = [name, v.language, v.created_at ? new Date(v.created_at).toLocaleDateString() : ""].filter(Boolean).join(" · ");
           const opt = document.createElement("option");
           opt.value = vid;
           opt.dataset.name = name;
-          opt.textContent = name ? `${name} (${vid.slice(0,8)}…)` : vid;
+          if (tooLong) {
+            opt.textContent = `⚠️ ${name} (${vid.slice(0,8)}…) — 參考音頻 ${dur.toFixed(1)}s 過長`;
+            opt.style.color = '#c00';
+          } else {
+            opt.textContent = name ? `${name} (${vid.slice(0,8)}…${dur ? ' ' + dur.toFixed(1) + 's' : ''})` : vid;
+          }
           aethermeshVoiceId.appendChild(opt);
         });
         // restore previously selected value if it still exists

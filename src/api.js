@@ -735,8 +735,8 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
           // XTTS-v2: >8s duration causes garbled output; even ≤8s can be bad if reference audio quality is poor
           list.forEach(v => {
             const dur = v.duration_seconds || 0
-            if (dur > 8) {
-              v._warning = `參考音頻 ${dur.toFixed(1)}s 過長（>8s），XTTS-v2 合成會異常`
+            if (dur > 15) {
+              v._warning = `參考音頻 ${dur.toFixed(1)}s 過長（>15s），XTTS-v2 合成會異常`
             }
           })
           jsonResponse(res, 200, { ok: true, voices: list })
@@ -1848,8 +1848,8 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
                   }
                 }
                 const matched = _amVoiceCache.voices.find(v => (v.voice_id || v.id) === voiceId)
-                if (matched && matched.duration_seconds > 8) {
-                  jsonResponse(res, 400, { ok: false, error: `聲音「${matched.name || voiceId}」的參考音頻長達 ${matched.duration_seconds.toFixed(1)} 秒，超過 XTTS-v2 建議上限 8 秒，合成會出現異常。請重新克隆一段 5-8 秒的音頻，或選擇其他聲音。`, voiceTooLong: true, duration: matched.duration_seconds })
+                if (matched && matched.duration_seconds > 15) {
+                  jsonResponse(res, 400, { ok: false, error: `聲音「${matched.name || voiceId}」的參考音頻長達 ${matched.duration_seconds.toFixed(1)} 秒，超過 XTTS-v2 建議上限 15 秒，合成會出現異常。請重新克隆一段 15 秒以內的音頻，或選擇其他聲音。`, voiceTooLong: true, duration: matched.duration_seconds })
                   return
                 }
               } catch {} // best-effort check; proceed on failure

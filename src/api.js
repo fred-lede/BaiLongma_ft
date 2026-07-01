@@ -1930,7 +1930,11 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
               errorRes(errMsg)
             } else if (isAetherMesh && collectedChunks) {
               // AetherMesh: validate output size before sending to client
-              const maxExpected = Math.max(text.length * 8000, 30000)
+              // XTTS-v2 at 24kHz 160kbps: ~20KB/s of speech audio.
+              // 1 Chinese char ≈ 0.3-0.5s speech, so ~6-10KB/char is normal.
+              // Bad voices produce 7-30x oversized output, so 20KB/char threshold
+              // safely allows normal output while catching anomalies.
+              const maxExpected = Math.max(text.length * 20000, 50000)
               if (totalAudioBytes > maxExpected) {
                 console.warn(`[TTS] AetherMesh output ${totalAudioBytes} bytes exceeds expected ${maxExpected} (voice quality issue)`)
                 errorRes(`語音合成異常：輸出 ${(totalAudioBytes/1024).toFixed(0)}KB 遠超預期（≤${(maxExpected/1024).toFixed(0)}KB）。該聲音的參考音頻品質有問題，請刪除後重新克隆一段乾淨清晰的 5-8 秒音頻。`)

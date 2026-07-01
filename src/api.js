@@ -821,6 +821,46 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
       return
     }
 
+    // GET /tts/aethermesh-health — lightweight CUDA health probe
+    // Sends a short synthesis request; checks that the response starts with a valid MP3 header.
+    // Returns { ok, healthy, reason }
+    if (req.method === 'GET' && url.pathname === '/tts/aethermesh-health') {
+      ;(async () => {
+        try {
+          const creds = getTTSCredentials()
+          if (creds.provider !== 'aethermesh' || !creds.voiceId) {
+            jsonResponse(res, 200, { ok: true, healthy: true, reason: 'not-aethermesh' })
+            return
+          }
+          const baseURL = (creds.aethermeshBaseURL || 'http://localhost:8001').replace(/\/$/, '')
+          const headers = { 'Content-Type': 'application/json' }
+          if (creds.aethermeshKey) headers['Authorization'] = `Bearer ${creds.aethermeshKey}`
+          const resp = await fetch(`${baseURL}/v1/audio/speech`, {
+            method: 'POST', headers,
+            body: JSON.stringify({ model: 'tts-1', input: '测', voice: creds.voiceId, response_format: 'mp3' }),
+            signal: AbortSignal.timeout(8000),
+          })
+          if (!resp.ok) {
+            jsonResponse(res, 200, { ok: true, healthy: false, reason: `HTTP ${resp.status}` })
+            return
+          }
+          const reader = resp.body.getReader()
+          const { value: chunk, done } = await reader.read()
+          reader.cancel().catch(() => {})
+          if (done || !chunk || chunk.byteLength < 4) {
+            jsonResponse(res, 200, { ok: true, healthy: false, reason: 'empty-response' })
+            return
+          }
+          const h = new Uint8Array(chunk.slice(0, 4))
+          const validMP3 = (h[0] === 0x49 && h[1] === 0x44 && h[2] === 0x33) || (h[0] === 0xFF && (h[1] & 0xE0) === 0xE0)
+          jsonResponse(res, 200, { ok: true, healthy: validMP3, reason: validMP3 ? 'ok' : 'invalid-header' })
+        } catch (err) {
+          jsonResponse(res, 200, { ok: true, healthy: false, reason: err.message.slice(0, 120) })
+        }
+      })()
+      return
+    }
+
     if (req.method === 'GET' && url.pathname === '/system-prompt-preview') {
       Promise.resolve()
         .then(() => buildHeartbeatSystemPromptPreview({

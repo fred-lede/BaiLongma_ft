@@ -428,7 +428,36 @@ async function streamAetherMesh({ text, voiceId, baseURL = 'http://localhost:800
     throw new Error(`AetherMesh TTS 失败 (${resp.status}): ${err.slice(0, 300)}`)
   }
   const contentType = resp.headers.get('content-type') || 'audio/mpeg'
-  return { stream: webStreamToNode(resp.body), contentType }
+
+  // CUDA corrupted state detection: AetherMesh may return HTTP 200 with garbage audio
+  // (e.g. silence, extremely small file, or non-MP3 header). Read the first chunk
+  // to validate the MP3 signature (ID3 tag or 0xFF sync word) before streaming on.
+  const reader = resp.body.getReader()
+  const { value: firstChunk, done } = await reader.read()
+  if (done || !firstChunk || firstChunk.byteLength < 4) {
+    throw new Error('AetherMesh TTS: 返回空音频（可能 CUDA 损坏，请重启 AetherMesh 并重载 NVIDIA 驱动）')
+  }
+  const header = new Uint8Array(firstChunk.slice(0, 4))
+  const isMP3 = (header[0] === 0x49 && header[1] === 0x44 && header[2] === 0x33)  // "ID3"
+              || (header[0] === 0xFF && (header[1] & 0xE0) === 0xE0)                // MPEG sync
+  if (!isMP3) {
+    throw new Error('AetherMesh TTS: 返回无效音频格式（CUDA 可能损坏，请重启 AetherMesh 并重载 NVIDIA 驱动）')
+  }
+
+  // Reconstruct a readable stream from the already-read first chunk + the rest
+  const restStream = new ReadableStream({
+    async start(controller) {
+      controller.enqueue(firstChunk)
+      try {
+        for (;;) {
+          const { value, done: d } = await reader.read()
+          if (d) { controller.close(); break }
+          controller.enqueue(value)
+        }
+      } catch (err) { controller.error(err) }
+    },
+  })
+  return { stream: webStreamToNode(restStream), contentType }
 }
 
 // ── 通用入口 ────────────────────────────────────────────────────────────────

@@ -32,6 +32,7 @@ import { loadInstalledTools } from './capabilities/marketplace/index.js'
 import { resumePendingVideoJobs, getAIVideoPanelState } from './capabilities/tools/media.js'
 import { dispatchSocialMessage } from './social/dispatch.js'
 import { startSocialConnectors } from './social/index.js'
+import { startTelegramTyping } from './social/telegram.js'
 import { getWeatherCardProps, isWeatherQuery } from './weather.js'
 import { collectSystemInfo, getSystemInfoBlock, getBatteryBlock, getDesktopPath } from './system-info.js'
 import { collectDesktopInfo, getDesktopBlock } from './desktop-scanner.js'
@@ -879,6 +880,10 @@ async function runTurn(input, label, msg = null) {
   console.log(`\n── ${label} ──`)
   if (!silentSignal) emitEvent(isTick ? 'tick' : 'message_received', { label, input: input.slice(0, 300) })
 
+  // Start Telegram typing indicator for incoming user messages from TELEGRAM channel
+  const _tgChatId = msg?.social?.chat_id || (msg?.channel === 'TELEGRAM' && msg?.externalPartyId?.replace('telegram:', ''))
+  const _tgTyping = _tgChatId ? startTelegramTyping(_tgChatId) : null
+
   // User messages are written to conversations at the pushMessage stage (recorded on arrival) — do not write them again here.
   try {
     beginExecution({
@@ -1443,6 +1448,7 @@ async function runTurn(input, label, msg = null) {
     }
   } finally {
     clearExecution(controller)
+    _tgTyping?.stop()
   }
 
   if (llmResult.aborted) {

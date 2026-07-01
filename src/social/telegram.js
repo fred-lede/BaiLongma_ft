@@ -93,6 +93,52 @@ export async function startTelegramConnector({ pushMessage, emitEvent } = {}) {
   }
 }
 
+/**
+ * Send a Telegram chat action (e.g. typing indicator).
+ * Each call shows the indicator for ~5 seconds; callers should refresh periodically.
+ */
+export async function sendTelegramChatAction(chatId, action = 'typing') {
+  const token = env('TELEGRAM_BOT_TOKEN')
+  if (!token) return
+  try {
+    await requestJson(`https://api.telegram.org/bot${token}/sendChatAction`, {
+      method: 'POST',
+      body: { chat_id: Number(chatId), action },
+    })
+  } catch (err) {
+    // Typing failures are non-fatal
+    console.debug('[Telegram] sendChatAction failed:', err.message)
+  }
+}
+
+/**
+ * Start a periodic typing indicator for a Telegram chat.
+ * Returns an object with a stop() method to cancel it.
+ */
+export function startTelegramTyping(chatId) {
+  const token = env('TELEGRAM_BOT_TOKEN')
+  if (!token) return { stop() {} }
+
+  let timer = null
+  let stopped = false
+
+  function tick() {
+    if (stopped) return
+    sendTelegramChatAction(chatId, 'typing').catch(() => {})
+    timer = setTimeout(tick, 4500) // refresh every 4.5s (Telegram expires at ~5s)
+    timer?.unref?.()
+  }
+
+  tick() // send first indicator immediately
+
+  return {
+    stop() {
+      stopped = true
+      if (timer) { clearTimeout(timer); timer = null }
+    },
+  }
+}
+
 export async function sendTelegramMessage(chatId, content) {
   const token = env('TELEGRAM_BOT_TOKEN')
   if (!token) return { ok: false, skipped: true, reason: 'TELEGRAM_BOT_TOKEN not configured' }

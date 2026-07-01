@@ -731,6 +731,14 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
           }
           const data = await proxyRes.json()
           const list = Array.isArray(data) ? data : (data.data || data.voices || data.voice_ids || [])
+          // Mark voices with quality warnings based on reference audio duration
+          // XTTS-v2: >8s duration causes garbled output; even ≤8s can be bad if reference audio quality is poor
+          list.forEach(v => {
+            const dur = v.duration_seconds || 0
+            if (dur > 8) {
+              v._warning = `參考音頻 ${dur.toFixed(1)}s 過長（>8s），XTTS-v2 合成會異常`
+            }
+          })
           jsonResponse(res, 200, { ok: true, voices: list })
         } catch (err) {
           jsonResponse(res, 500, { ok: false, error: err.message })
@@ -825,9 +833,11 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
       return
     }
 
-    // GET /tts/aethermesh-health — lightweight CUDA health probe
-    // Sends a short synthesis request; checks that the response starts with a valid MP3 header.
-    // Returns { ok, healthy, reason }
+    // GET /tts/aethermesh-health — lightweight CUDA + voice quality probe
+    // Sends a short synthesis request; checks MP3 header AND output size.
+    // XTTS-v2 bad voices produce 7x+ oversized output for the same text.
+    // A 1-char synthesis should be ~2-8KB; >20KB indicates a bad voice.
+    // Returns { ok, healthy, reason, sizeKB }
     if (req.method === 'GET' && url.pathname === '/tts/aethermesh-health') {
       ;(async () => {
         try {
@@ -841,23 +851,29 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
           if (creds.aethermeshKey) headers['Authorization'] = `Bearer ${creds.aethermeshKey}`
           const resp = await fetch(`${baseURL}/v1/audio/speech`, {
             method: 'POST', headers,
-            body: JSON.stringify({ model: 'tts-1', input: '测', voice: creds.voiceId, response_format: 'mp3' }),
-            signal: AbortSignal.timeout(8000),
+            body: JSON.stringify({ model: 'tts-1', input: '测试语音', voice: creds.voiceId, language: creds.aethermeshLanguage || 'zh-tw', response_format: 'mp3' }),
+            signal: AbortSignal.timeout(15000),
           })
           if (!resp.ok) {
             jsonResponse(res, 200, { ok: true, healthy: false, reason: `HTTP ${resp.status}` })
             return
           }
-          const reader = resp.body.getReader()
-          const { value: chunk, done } = await reader.read()
-          reader.cancel().catch(() => {})
-          if (done || !chunk || chunk.byteLength < 4) {
-            jsonResponse(res, 200, { ok: true, healthy: false, reason: 'empty-response' })
+          const buf = Buffer.from(await resp.arrayBuffer())
+          const sizeKB = (buf.length / 1024).toFixed(1)
+          if (!buf.length || buf.length < 4) {
+            jsonResponse(res, 200, { ok: true, healthy: false, reason: 'empty-response', sizeKB })
             return
           }
-          const h = new Uint8Array(chunk.slice(0, 4))
+          const h = new Uint8Array(buf.slice(0, 4))
           const validMP3 = (h[0] === 0x49 && h[1] === 0x44 && h[2] === 0x33) || (h[0] === 0xFF && (h[1] & 0xE0) === 0xE0)
-          jsonResponse(res, 200, { ok: true, healthy: validMP3, reason: validMP3 ? 'ok' : 'invalid-header' })
+          if (!validMP3) {
+            jsonResponse(res, 200, { ok: true, healthy: false, reason: 'invalid-header', sizeKB })
+            return
+          }
+          // Size sanity check: "测试语音" (4 chars) should produce ~4-15KB at 24kHz MP3.
+          // Bad voices produce 30KB+ for the same input.
+          const oversized = buf.length > 30000
+          jsonResponse(res, 200, { ok: true, healthy: !oversized, reason: oversized ? 'oversized-output' : 'ok', sizeKB })
         } catch (err) {
           jsonResponse(res, 200, { ok: true, healthy: false, reason: err.message.slice(0, 120) })
         }
@@ -1870,25 +1886,61 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
           let headersWritten = false
           let responseDone = false
           let streamError = null
+          // AetherMesh size anomaly detection: bad voices produce oversized output.
+          // Collect all chunks first, then validate size before sending to client.
+          const isAetherMesh = creds.provider === 'aethermesh'
+          let collectedChunks = isAetherMesh ? [] : null
+          let totalAudioBytes = 0
           const finishRes = () => { if (!responseDone) { responseDone = true; res.end() } }
           const errorRes = (msg) => { if (!responseDone) { responseDone = true; jsonResponse(res, 500, { ok: false, error: msg }) } }
+          const flushCollected = () => {
+            if (!collectedChunks || !collectedChunks.length) return
+            res.writeHead(200, {
+              'Content-Type': audioContentType,
+              'Content-Length': totalAudioBytes,
+              'Cache-Control': 'no-cache',
+              'Access-Control-Allow-Origin': '*',
+            })
+            collectedChunks.forEach(c => res.write(c))
+            collectedChunks = null // prevent double flush
+          }
           audioStream.on('data', (chunk) => {
-            if (!headersWritten) {
-              headersWritten = true
-              res.writeHead(200, {
-                'Content-Type': audioContentType,
-                'Transfer-Encoding': 'chunked',
-                'Cache-Control': 'no-cache',
-                'Access-Control-Allow-Origin': '*',
-              })
+            if (isAetherMesh && collectedChunks) {
+              // Buffer mode: collect for size check before sending
+              collectedChunks.push(chunk)
+              totalAudioBytes += chunk.length
+            } else {
+              // Streaming mode: send immediately
+              if (!headersWritten) {
+                headersWritten = true
+                res.writeHead(200, {
+                  'Content-Type': audioContentType,
+                  'Transfer-Encoding': 'chunked',
+                  'Cache-Control': 'no-cache',
+                  'Access-Control-Allow-Origin': '*',
+                })
+              }
+              res.write(chunk)
             }
-            res.write(chunk)
           })
           audioStream.on('end', () => {
-            if (!headersWritten) {
+            if (!headersWritten && !collectedChunks) {
               const errMsg = streamError?.message || 'TTS synthesis failed: API returned no audio — check whether the voice ID is enabled on your account'
               console.warn('[TTS] Empty stream:', errMsg)
               errorRes(errMsg)
+            } else if (isAetherMesh && collectedChunks) {
+              // AetherMesh: validate output size before sending to client
+              const maxExpected = Math.max(text.length * 8000, 30000)
+              if (totalAudioBytes > maxExpected) {
+                console.warn(`[TTS] AetherMesh output ${totalAudioBytes} bytes exceeds expected ${maxExpected} (voice quality issue)`)
+                errorRes(`語音合成異常：輸出 ${(totalAudioBytes/1024).toFixed(0)}KB 遠超預期（≤${(maxExpected/1024).toFixed(0)}KB）。該聲音的參考音頻品質有問題，請刪除後重新克隆一段乾淨清晰的 5-8 秒音頻。`)
+              } else if (!totalAudioBytes) {
+                errorRes('TTS synthesis returned empty audio')
+              } else {
+                headersWritten = true
+                flushCollected()
+                finishRes()
+              }
             } else {
               finishRes()
             }
@@ -1896,7 +1948,7 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
           audioStream.on('error', (err) => {
             console.warn('[TTS] Audio stream error:', err.message)
             streamError = err
-            if (!headersWritten) {
+            if (!headersWritten && !(isAetherMesh && collectedChunks)) {
               errorRes(err.message)
             } else {
               finishRes()

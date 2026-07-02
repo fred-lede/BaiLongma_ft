@@ -1994,14 +1994,18 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
 
   // Per-connection VAD processing: runs asynchronously via setImmediate to avoid
   // blocking the WS message loop. Processes accumulated PCM buffers through Silero
-  // VAD and only sends speech frames to AetherMesh ASR.
-  async function processConnVadQueue(connVad, buffers, asrSession, ws) {
+  // VAD:
+  //   - Speech frames: send raw PCM to ASR immediately (real-time transcription)
+  //   - Silence frames: discard (noise/background filtered)
+  //   - Speech-end: flush ASR (trigger Whisper transcription on accumulated audio)
+  async function processConnVadQueue(connVad, buffers, ws) {
     while (buffers.length > 0) {
       const raw = buffers.shift()
-      if (!raw || !connVad || !asrSession) break
+      if (!raw || !connVad) break
       try {
         const i16 = new Int16Array(raw.buffer, raw.byteOffset, raw.byteLength / 2)
         const f32 = new Float32Array(512)
+        let wasSpeech = false
         for (let off = 0; off < i16.length; off += 512) {
           const frameLen = Math.min(512, i16.length - off)
           for (let i = 0; i < 512; i++) {
@@ -2009,14 +2013,18 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
             f32[i] = s < 0 ? s / 32768 : s / 32767
           }
           const result = await connVad.processChunk(f32)
-          if (result.flush && asrSession) {
-            const buf = connVad.getBuffer()
-            if (buf) {
-              asrSession.sendAudio(Buffer.from(buf.buffer))
-            }
+          if (result.speech && !wasSpeech) wasSpeech = true
+          if (result.flush) {
+            // VAD detected end of speech — flush ASR
+            if (raw) session?.sendAudio(raw)
             connVad.reset()
-            await asrSession.flush()
+            await session?.flush()
           }
+        }
+        // During speech: send raw PCM to ASR for real-time streaming
+        // During silence: discard (don't send raw PCM; non-speech frames filtered out)
+        if (wasSpeech) {
+          session?.sendAudio(raw)
         }
       } catch (err) {
         console.error('[VAD] processing error:', err.message)
@@ -2091,13 +2099,14 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
         // AetherMesh provider: run Silero VAD to detect speech/non-speech
         // and accumulate only speech frames before sending to ASR.
         if (connVadSession) {
-          // Defer VAD processing to avoid blocking the message loop
+          // Silero VAD active: PCM goes through VAD queue (async processing)
           connVadBuffers.push(raw)
           if (!connVadProcessing) {
             connVadProcessing = true
-            setImmediate(() => processConnVadQueue(connVadSession, connVadBuffers, session, ws))
+            setImmediate(() => processConnVadQueue(connVadSession, connVadBuffers, ws))
           }
         } else {
+          // No VAD / fallback: send PCM directly to ASR (original behavior)
           session?.sendAudio(raw)
         }
       }

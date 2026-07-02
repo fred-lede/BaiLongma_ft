@@ -32,6 +32,7 @@ import { getWorldcup, setWorldcupPanelState, getWorldcupPanelState } from './wor
 import { getPersonCard, setPersonCardPanelState, getPersonCardPanelState, setPersonCardVoice, setPersonCardLanguage, getPersonCardLanguage } from './person-cards.js'
 import { setDocPanelState, getDocPanelState, DOC_TOPICS } from './docs.js'
 import { getTraces, getTrace, clearTraces, getTraceStatus } from './runtime/turn-trace.js'
+import { createVADSession } from './voice/vad.js'
 
 export { emitEvent }
 
@@ -1990,10 +1991,47 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
   })
 
   // Cloud ASR WebSocket channel: frontend PCM → backend proxy → cloud ASR
+
+  // Per-connection VAD processing: runs asynchronously via setImmediate to avoid
+  // blocking the WS message loop. Processes accumulated PCM buffers through Silero
+  // VAD and only sends speech frames to AetherMesh ASR.
+  async function processConnVadQueue(connVad, buffers, asrSession, ws) {
+    while (buffers.length > 0) {
+      const raw = buffers.shift()
+      if (!raw || !connVad || !asrSession) break
+      try {
+        const i16 = new Int16Array(raw.buffer, raw.byteOffset, raw.byteLength / 2)
+        const f32 = new Float32Array(512)
+        for (let off = 0; off < i16.length; off += 512) {
+          const frameLen = Math.min(512, i16.length - off)
+          for (let i = 0; i < 512; i++) {
+            const s = i < frameLen ? i16[off + i] : 0
+            f32[i] = s < 0 ? s / 32768 : s / 32767
+          }
+          const result = await connVad.processChunk(f32)
+          if (result.flush && asrSession) {
+            const buf = connVad.getBuffer()
+            if (buf) {
+              asrSession.sendAudio(Buffer.from(buf.buffer))
+            }
+            connVad.reset()
+            await asrSession.flush()
+          }
+        }
+      } catch (err) {
+        console.error('[VAD] processing error:', err.message)
+      }
+    }
+  }
+
   const cloudWss = new WebSocketServer({ noServer: true })
   cloudWss.on('connection', (ws) => {
     let session = null
     let configured = false
+    // Per-connection VAD state
+    let connVadSession = null
+    let connVadBuffers = []
+    let connVadProcessing = false
 
     ws.on('message', (raw) => {
       // First frame must be a JSON config frame
@@ -2025,6 +2063,10 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
             }
           )
           configured = true
+          // Initialize Silero VAD for AetherMesh ASR to filter non-speech
+          if (provider === 'aethermesh' && !connVadSession) {
+            createVADSession().then(v => { connVadSession = v }).catch(e => console.error('[VAD] init:', e.message))
+          }
         } catch {}
         return
       }
@@ -2046,12 +2088,29 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
         } catch {}
       }
       if (!handled && raw instanceof Buffer) {
-        session?.sendAudio(raw)
+        // AetherMesh provider: run Silero VAD to detect speech/non-speech
+        // and accumulate only speech frames before sending to ASR.
+        if (connVadSession) {
+          // Defer VAD processing to avoid blocking the message loop
+          connVadBuffers.push(raw)
+          if (!connVadProcessing) {
+            connVadProcessing = true
+            setImmediate(() => processConnVadQueue(connVadSession, connVadBuffers, session, ws))
+          }
+        } else {
+          session?.sendAudio(raw)
+        }
       }
     })
 
-    ws.on('close', () => { session?.close(); session = null })
-    ws.on('error', () => { session?.close(); session = null })
+    ws.on('close', () => {
+      session?.close(); session = null
+      if (connVadSession) { connVadSession.release(); connVadSession = null }
+    })
+    ws.on('error', () => {
+      session?.close(); session = null
+      if (connVadSession) { connVadSession.release(); connVadSession = null }
+    })
   })
 
   // ACUI WebSocket channel: bidirectional control + perception

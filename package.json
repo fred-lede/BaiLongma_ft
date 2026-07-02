@@ -44,6 +44,7 @@
     "smoke:social": "node scripts/smoke-social.mjs"
   },
   "dependencies": {
+    "@jjhbw/silero-vad": "^1.0.3",
     "better-sqlite3": "^12.8.0",
     "d3": "^7.9.0",
     "electron-updater": "^6.3.9",
@@ -179,5 +180,8 @@
         "releaseType": "release"
       }
     ]
+  },
+  "allowScripts": {
+    "@jjhbw/silero-vad@1.0.3": true
   }
 }

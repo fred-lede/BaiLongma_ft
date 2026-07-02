@@ -315,7 +315,7 @@ export function initChat({
     const images = attachments
       .filter(item => item?.data_url)
       .map(item => markdownImage(item.data_url, item.alt || item.name || "image"));
-    return [String(content || "").trim(), images.join("\n")].filter(Boolean).join("\n\n");
+    return [images.join("\n"), String(content || "").trim()].filter(Boolean).join("\n\n");
   }
 
   const SYSTEM_SCREENSHOT_RE = /(?:\u7cfb\u7edf|\u5c4f\u5e55)?\u622a\u56fe|\u8fd9\u5f20\u56fe|\u56fe\u91cc|\u770b\u56fe|screenshot|screen\s*shot/i;

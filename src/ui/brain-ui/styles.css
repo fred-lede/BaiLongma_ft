@@ -907,21 +907,75 @@ body {
   white-space: normal;
 }
 
+.msg:has(.msg-image) {
+  --msg-image-size: 55px;
+  max-width: min(85%, 300px);
+  padding: 10px;
+}
+
+.msg-body:has(.msg-image) {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.msg-user .msg-body:has(.msg-image),
+.msg-external .msg-body:has(.msg-image) {
+  align-items: flex-end;
+}
+
+.msg-body:has(.msg-image) > * + * {
+  margin-top: 0;
+}
+
+.msg-body:has(.msg-image) > p:not(.msg-media-block) {
+  max-width: 100%;
+  line-height: 1.45;
+  text-align: left;
+}
+
+.msg-user .msg-body:has(.msg-image) > p:not(.msg-media-block),
+.msg-external .msg-body:has(.msg-image) > p:not(.msg-media-block) {
+  text-align: right;
+}
+
 /* 聊天里的图片消息（内容寻址 /media/chat/*）：缩略展示，点击在新标签打开原图 */
+.msg-media-block {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  width: 100%;
+  line-height: 0;
+}
+
+.msg-user .msg-media-block,
+.msg-external .msg-media-block {
+  justify-content: flex-end;
+}
+
 .msg-image-link {
-  display: inline-block;
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: fit-content;
   max-width: 100%;
   line-height: 0;
 }
 
+.msg-user .msg-image-link,
+.msg-external .msg-image-link {
+  justify-content: flex-end;
+}
+
 .msg-image {
-  max-width: min(260px, 100%);
-  max-height: 320px;
-  width: auto;
-  height: auto;
-  border-radius: 10px;
+  width: var(--msg-image-size);
+  height: var(--msg-image-size);
+  max-width: var(--msg-image-size);
+  max-height: var(--msg-image-size);
+  display: block;
+  border-radius: 9px;
   border: 1px solid var(--line, rgba(255, 255, 255, 0.12));
-  object-fit: contain;
+  object-fit: cover;
   cursor: zoom-in;
 }
 

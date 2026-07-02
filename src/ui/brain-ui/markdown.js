@@ -75,7 +75,10 @@ export function renderMarkdown(text) {
 
   function flushParagraph() {
     if (!paragraph.length) return;
-    parts.push(`<p>${paragraph.map(renderInlineMarkdown).join("<br>")}</p>`);
+    const imageOnly = paragraph.every(line => /^!\[[^\]]*]\([^)]+(?:\s+"[^"]*")?\)\s*$/.test(line.trim()));
+    const classAttr = imageOnly ? ` class="msg-media-block"` : "";
+    const separator = imageOnly ? "" : "<br>";
+    parts.push(`<p${classAttr}>${paragraph.map(renderInlineMarkdown).join(separator)}</p>`);
     paragraph = [];
   }
 

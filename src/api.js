@@ -304,7 +304,7 @@ function appendInboundChatMediaMarkdown(content = '', body = {}) {
   }
   if (media.length === 0) return { content, media }
   return {
-    content: `${content.trim()}\n\n${media.map(item => item.markdown).join('\n')}`.trim(),
+    content: `${media.map(item => item.markdown).join('\n')}\n\n${content.trim()}`.trim(),
     media,
   }
 }

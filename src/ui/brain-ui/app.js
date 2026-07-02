@@ -1442,11 +1442,12 @@ function handle({ type, data = {} }) {
         const shouldSpeakMessage = data.speak === true;
         const viaLabel = friendlyChannelLabel(data.channel);
         const content = viaLabel ? `_→ ${viaLabel}_  \n${data.content}` : data.content;
+        const messageId = data.conversation_id || data.conversationId || "";
         // 若本轮正文已流式进了实时气泡：用权威全文定稿同一个气泡，避免新建重复气泡
         if (chat.hasLiveJarvisMsg()) {
-          chat.finalizeLiveJarvisMsg(content);
+          chat.finalizeLiveJarvisMsg(content, { messageId });
         } else {
-          addMsg("jarvis", content);
+          addMsg("jarvis", content, { messageId });
         }
         // 语音轮的 TTS 收尾：逐句会话进行中 → flush 尾句并收尾；若未走逐句（流式合成关闭）→ 整段播一次
         if (liveTurnSpeak) {
@@ -1470,7 +1471,7 @@ function handle({ type, data = {} }) {
         || (data.from_id && /^(wechat|discord|feishu|wecom):/i.test(data.from_id));
       if (isExternal) {
         const label = friendlyChannelLabel(data.channel) || data.from_id || "External";
-        addMsg("external", data.content, { label, alert: false });
+        addMsg("external", data.content, { label, alert: false, messageId: data.conversation_id || data.conversationId || "" });
         openChat(true);
       }
       break;

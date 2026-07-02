@@ -34,8 +34,14 @@ function verifyWechatSignature(url) {
 function enqueueSocialMessage(fromId, content, channel, social = {}) {
   const trimmed = String(content || '').trim()
   if (!trimmed) return
-  pushMessage(fromId, trimmed, channel, { social })
-  emitEvent('message_in', { from_id: fromId, content: trimmed, channel, timestamp: new Date().toISOString() })
+  const queued = pushMessage(fromId, trimmed, channel, { social })
+  emitEvent('message_in', {
+    from_id: fromId,
+    content: trimmed,
+    channel,
+    timestamp: new Date().toISOString(),
+    conversation_id: queued?.conversationId || 0,
+  })
 }
 
 function feishuVerificationToken(body) {

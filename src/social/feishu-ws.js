@@ -109,14 +109,14 @@ export async function startFeishuConnector({ pushMessage, emitEvent } = {}) {
       console.log(`[Feishu] 收到入站消息 from=${fromId} len=${trimmed.length}`)
       // 复用与 webhook 入站完全相同的入队语义（channel='FEISHU' + social 元数据），
       // 让长连接来的消息和 webhook 来的消息在下游不可区分。
-      pushMessage(fromId, trimmed, 'FEISHU', {
+      const queued = pushMessage(fromId, trimmed, 'FEISHU', {
         social: {
           platform: 'feishu',
           chat_id: data?.message?.chat_id || '',
           message_id: data?.message?.message_id || '',
         },
       })
-      emitEvent?.('message_in', { from_id: fromId, content: trimmed, channel: 'FEISHU', timestamp: new Date().toISOString() })
+      emitEvent?.('message_in', { from_id: fromId, content: trimmed, channel: 'FEISHU', timestamp: new Date().toISOString(), conversation_id: queued?.conversationId || 0 })
     },
   })
 

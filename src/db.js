@@ -145,7 +145,7 @@ function initSchema() {
   // 迁移：P0-2 标记 agent 自己留下的"未答悬念"（follow-up question）。
   //   open_question=1 表示这条 jarvis 消息末尾留了一个非澄清型问号悬念。
   //   conversationWindow 渲染时：若该悬念在 N 轮内未被用户接茬 / 话题已切换，
-  //   marker 末尾追加 "[expired follow-up — ignore]"，避免模糊代词被钩到这里。
+  //   在 conversation_metadata 中标记 expired_open_question，避免模糊代词被钩到这里。
   try { db.exec(`ALTER TABLE conversations ADD COLUMN open_question INTEGER NOT NULL DEFAULT 0`) } catch {}
 
   db.exec(`

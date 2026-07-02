@@ -69,6 +69,8 @@ When a turn teaches a reusable way to act in the future, do not store it as a pl
 - A mistake and its corrected lesson: tags must include "kind:failure_lesson".
 - Add one domain tag when possible, e.g. "domain:desktop_control", "domain:file_work", "domain:web_research", "domain:message_delivery", "domain:verification".
 - Add trigger tags for likely future wording, e.g. "trigger:screenshot", "trigger:fullscreen", "trigger:dpi", "trigger:wechat", "trigger:test".
+- For tool-specific procedures or failure lessons, add the exact tool tag, e.g. "tool:write_file", "tool:exec_command", "tool:web_search", "tool:send_message". These tags let the runtime attach the lesson directly to that tool's future schema prompt.
+- If a tool failure is not a transient network/rate-limit/timeout issue, save the failure condition and safer next action even when the final corrected method is only "do not retry the same call; verify with X or ask for Y".
 
 Examples:
 - If the user says "next time remember to use DPI-aware physical pixels for screenshots", save type="knowledge", mem_id="procedure_desktop_capture_dpi_aware", tags=["kind:procedure","domain:desktop_control","trigger:screenshot","trigger:fullscreen","trigger:dpi"].
@@ -118,6 +120,7 @@ const RECOGNIZER_TOOLS = ['search_memory', 'upsert_memory', 'skip_recognition']
 function summarizeToolEntry(entry) {
   const argsStr = JSON.stringify(entry.args || {}).slice(0, 200)
   const rawResult = String(entry.result ?? '')
+  const status = entry.ok === false ? 'failed' : 'ok'
 
   let parsed = null
   try { parsed = JSON.parse(rawResult) } catch {}
@@ -134,7 +137,7 @@ function summarizeToolEntry(entry) {
     }
   }
 
-  const head = `Tool: ${entry.name}\nArgs: ${argsStr}`
+  const head = `Tool: ${entry.name}\nStatus: ${status}\nArgs: ${argsStr}`
   const hl = highlights.length > 0 ? `\nKey fields: ${highlights.join(' | ')}` : ''
   const tail = `\nResult summary: ${rawResult.slice(0, 600)}`
   return head + hl + tail

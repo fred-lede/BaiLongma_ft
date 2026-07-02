@@ -246,7 +246,7 @@ export function startClawbotConnector({ pushMessage, emitEvent } = {}) {
     const text = WeChatClient.extractText?.(msg) ?? extractText(msg)
     if (!text) return
     const fromId = `wechat:clawbot:${msg.from_user_id}`
-    pushMessage(fromId, text, 'WECHAT_CLAWBOT', {
+    const queued = pushMessage(fromId, text, 'WECHAT_CLAWBOT', {
       social: { platform: 'wechat-clawbot', user_id: msg.from_user_id },
     })
     emitEvent?.('message_in', {
@@ -254,6 +254,7 @@ export function startClawbotConnector({ pushMessage, emitEvent } = {}) {
       content: text,
       channel: 'WECHAT_CLAWBOT',
       timestamp: new Date().toISOString(),
+      conversation_id: queued?.conversationId || 0,
     })
   })
 

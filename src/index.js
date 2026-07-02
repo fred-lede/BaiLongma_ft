@@ -4,6 +4,7 @@ import { callLLM } from './llm.js'
 import { buildSystemPrompt, buildContextBlock, combinePromptForPreview } from './prompt.js'
 import { enqueueTurnForRecognition, configureRecognizerScheduler } from './memory/recognizer-scheduler.js'
 import { runInjector, formatMemoriesForPrompt, formatActivePoliciesForPrompt, formatTaskKnowledge, formatPrefetchedItems, formatSceneManifest, formatTemporalRecall, formatAIVideoPanel } from './memory/injector.js'
+import { formatToolPromptHintsForSchemas } from './memory/active-policies.js'
 import { sceneStore } from './scene/scene-store.js'
 import {
   ensureThreadState, attributeUserMessage, buildThreadView, getForegroundThread,
@@ -447,18 +448,7 @@ function buildStartupSelfCheckDirections(checkState) {
 function deliverFallbackReply(msg, content, timestamp) {
   const channel = msg.channel || ''
   const externalPartyId = msg.externalPartyId || ''
-  emitEvent('message', {
-    from: 'consciousness',
-    to: msg.fromId,
-    content,
-    timestamp,
-    channel,
-    external_party_id: externalPartyId,
-  })
-  if (externalPartyId) {
-    dispatchSocialMessage(externalPartyId, content).catch(err => console.warn('[social] fallback send failed:', err.message))
-  }
-  insertConversation({
+  const insertedId = insertConversation({
     role: 'jarvis',
     from_id: 'jarvis',
     to_id: msg.fromId,
@@ -469,6 +459,18 @@ function deliverFallbackReply(msg, content, timestamp) {
     // P0-2：fallback 投递的 reply 同样检测末尾是否是 follow-up 悬念
     open_question: detectOpenFollowupQuestion(content) ? 1 : 0,
   })
+  emitEvent('message', {
+    from: 'consciousness',
+    to: msg.fromId,
+    content,
+    timestamp,
+    conversation_id: insertedId,
+    channel,
+    external_party_id: externalPartyId,
+  })
+  if (externalPartyId) {
+    dispatchSocialMessage(externalPartyId, content).catch(err => console.warn('[social] fallback send failed:', err.message))
+  }
   // 同步登记 action_log，让 self-snapshot 能用 action_log 作为身份锚的真值源。
   // tool 仍为 send_message，但 source 标 'fallback' 以便区分主动调用与协议兜底。
   try {
@@ -1397,6 +1399,14 @@ async function runTurn(input, label, msg = null) {
       turnTools = turnTools.filter(t => t !== 'send_message')
     }
     const capabilityDemoTurn = localReply && turnTools.includes('capability_demo')
+    const toolPromptHints = formatToolPromptHintsForSchemas(injection.activePolicies || [], turnTools)
+    if (Object.keys(toolPromptHints).length > 0) {
+      toolContext.toolPromptHints = toolPromptHints
+      emitEvent('tool_prompt_hints', {
+        tools: Object.keys(toolPromptHints),
+        count: Object.values(toolPromptHints).reduce((sum, hints) => sum + (Array.isArray(hints) ? hints.length : 0), 0),
+      })
+    }
     // thinking 不用"消息是否 trivial"的正则判定来开关 reasoning：浅层模式不该替模型决定"这题用不用想"
     // ——复合意图下会把需要 reasoning 的部分误判。是否思考由「用户在设置里的显式选择」(config.thinking) 决定，
     // 默认关闭、用户主动开启才思考；这是用户的选择，不是 runtime 按难度替它判定。
@@ -1442,7 +1452,8 @@ async function runTurn(input, label, msg = null) {
         // 优先压缩 stdout/stderr/content/snippet 等长字段，再整体 stringify，而非粗暴 slice。
         const resultForEvent = truncateToolResultForUI(parsed, resultText)
         emitEvent('tool_call', { name, args: cleanArgs, result: resultForEvent, ok })
-        toolCallLog.push({ name, args: cleanArgs, result: resultText.slice(0, 500), ok, fallback: isFallbackDelivery, ack: isAckDelivery })
+        const recognizerResultLimit = ok ? 500 : 1200
+        toolCallLog.push({ name, args: cleanArgs, result: resultText.slice(0, recognizerResultLimit), ok, fallback: isFallbackDelivery, ack: isAckDelivery })
         // send_message playback is driven by executor.js via message.speak.
         // That covers explicit sends, slow acknowledgements, fallback delivery,
         // and background job completion notifications through the same frontend path.

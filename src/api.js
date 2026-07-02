@@ -419,9 +419,10 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
         const meta = {}
         if (strictEvaluation !== undefined) meta.strictEvaluation = strictEvaluation
         if (Array.isArray(forbiddenTools)) meta.forbiddenTools = forbiddenTools
-        pushMessage(from_id, trimmed, channel, meta)
-        emitEvent('message_in', { from_id, content: trimmed, channel, timestamp: new Date().toISOString() })
-        jsonResponse(res, 200, { ok: true, agent_name: getAgentName() })
+        const queued = pushMessage(from_id, trimmed, channel, meta)
+        const conversationId = queued?.conversationId || 0
+        emitEvent('message_in', { from_id, content: trimmed, channel, timestamp: new Date().toISOString(), conversation_id: conversationId })
+        jsonResponse(res, 200, { ok: true, agent_name: getAgentName(), conversation_id: conversationId })
       } catch (e) {
         if (claim?.claimed && claim.key) recentInboundMessages.delete(claim.key)
         jsonResponse(res, 400, { error: e.message })

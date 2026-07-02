@@ -159,10 +159,10 @@ export async function startDiscordConnector({ pushMessage, emitEvent }) {
         const event = msg.d || {}
         if (!event.content || event.author?.bot) return
         const fromId = `discord:${event.channel_id}:${event.author?.id || 'unknown'}`
-        pushMessage(fromId, event.content, 'DISCORD', {
+        const queued = pushMessage(fromId, event.content, 'DISCORD', {
           social: { platform: 'discord', channel_id: event.channel_id, author_id: event.author?.id || null },
         })
-        emitEvent?.('message_in', { from_id: fromId, content: event.content, channel: 'DISCORD', timestamp: new Date().toISOString() })
+        emitEvent?.('message_in', { from_id: fromId, content: event.content, channel: 'DISCORD', timestamp: new Date().toISOString(), conversation_id: queued?.conversationId || 0 })
       })
 
       ws.on('close', code => {

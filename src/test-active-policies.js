@@ -22,6 +22,8 @@ process.env.HOME = tempUserDir
 try {
   const db = await import('./db.js')
   const { runInjector, formatActivePoliciesForPrompt } = await import('./memory/injector.js')
+  const { formatToolPromptHintsForSchemas } = await import('./memory/active-policies.js')
+  const { getToolSchemas } = await import('./capabilities/schemas.js')
   const { buildContextBlock } = await import('./prompt.js')
 
   db.getDB()
@@ -75,6 +77,18 @@ try {
     timestamp: ts,
   })
 
+  db.upsertMemoryByMemId({
+    mem_id: 'lesson_file_work_write_file_no_shell_echo',
+    type: 'knowledge',
+    title: 'Use write_file for multi-line files',
+    content: 'When creating multi-line files, avoid exec_command with echo, Set-Content, or inline Python because quoting often breaks. Call write_file with the full content and verify the read-back.',
+    detail: 'Failure lesson from broken shell-based file writes.',
+    entities: ['agent:jarvis'],
+    tags: ['kind:failure_lesson', 'domain:file_work', 'tool:write_file', 'trigger:write_file', 'trigger:verify'],
+    salience: 4,
+    timestamp: ts,
+  })
+
   const screenshotMsg = '[ID:000099] 2026-06-11T01:00:00+08:00 [TUI] Please make the Bailongma window fullscreen with F11, then take a screenshot and send it.'
   const screenshotInjection = await runInjector({ message: screenshotMsg, state: {} })
   const screenshotIds = new Set((screenshotInjection.activePolicies || []).map(m => m.mem_id))
@@ -110,6 +124,21 @@ try {
   const searchIds = new Set((searchInjection.activePolicies || []).map(m => m.mem_id))
   assert(searchIds.has('procedure_web_research_sources'), 'web research procedure activates for search/source task')
   assert(!searchIds.has('procedure_desktop_capture_dpi_aware'), 'desktop screenshot procedure stays inactive for unrelated search task')
+
+  const fileMsg = '[ID:000099] 2026-06-11T01:10:00+08:00 [TUI] Please write a markdown file and verify it.'
+  const fileInjection = await runInjector({ message: fileMsg, state: {} })
+  const fileIds = new Set((fileInjection.activePolicies || []).map(m => m.mem_id))
+  assert(fileIds.has('lesson_file_work_write_file_no_shell_echo'), 'tool-tagged write_file failure lesson activates for file-writing task')
+
+  const hintMap = formatToolPromptHintsForSchemas(fileInjection.activePolicies, fileInjection.tools)
+  assert(Array.isArray(hintMap.write_file) && hintMap.write_file.length > 0, 'tool prompt hint map includes write_file lesson')
+
+  const writeSchema = getToolSchemas(['write_file'], { toolPromptHints: hintMap })[0]
+  assert(writeSchema.function.description.includes('Learned failure lessons for this tool'), 'write_file schema receives learned lesson block')
+  assert(writeSchema.function.description.includes('lesson_file_work_write_file_no_shell_echo'), 'write_file schema includes specific failure lesson id')
+
+  const readSchema = getToolSchemas(['read_file'], { toolPromptHints: hintMap })[0]
+  assert(!readSchema.function.description.includes('lesson_file_work_write_file_no_shell_echo'), 'unrelated tool schema does not receive write_file lesson')
 } catch (err) {
   failed++
   process.exitCode = 1

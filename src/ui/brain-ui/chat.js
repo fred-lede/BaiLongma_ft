@@ -35,8 +35,44 @@ export function initChat({
   let audioCtx = null;
   let audioUnlocked = false;
   let warmupTimer = null;
+  const renderedMessageIds = new Set();
+  const recentRenderedKeys = new Map();
+  const RENDER_DEDUPE_TTL_MS = 2 * 60 * 1000;
 
   const PUSH_TO_TALK_PLACEHOLDER = "按住空格键开始说话";
+
+  function normalizeMessageId(value) {
+    if (value === undefined || value === null || value === "") return "";
+    return String(value);
+  }
+
+  function renderedKey(role, text, label) {
+    const cleanText = String(text || "").replace(/\s+/g, " ").trim();
+    if (!cleanText) return "";
+    return `${role || ""}\n${label || ""}\n${cleanText}`;
+  }
+
+  function pruneRenderedKeys(now = Date.now()) {
+    for (const [key, ts] of recentRenderedKeys) {
+      if (now - ts > RENDER_DEDUPE_TTL_MS) recentRenderedKeys.delete(key);
+    }
+  }
+
+  function claimRenderedMessage({ messageId, role, text, label, source = "event", dedupe = true } = {}) {
+    const id = normalizeMessageId(messageId);
+    const now = Date.now();
+    pruneRenderedKeys(now);
+    if (id && renderedMessageIds.has(id)) return false;
+    const key = renderedKey(role, text, label);
+    const allowContentDedupe = source === "history" || !id;
+    if (dedupe && allowContentDedupe && key && recentRenderedKeys.has(key)) {
+      if (id) renderedMessageIds.add(id);
+      return false;
+    }
+    if (id) renderedMessageIds.add(id);
+    if (key && (!id || dedupe === false)) recentRenderedKeys.set(key, now);
+    return true;
+  }
 
   // 多行输入：每次内容变化时把高度重置为内容实际高度（上限由 CSS max-height 接管、超出后内部滚动）。
   function autoGrowInput() {
@@ -173,9 +209,9 @@ export function initChat({
                 || /^(wechat|discord|feishu|wecom):/i.test(r.from_id || ""));
           if (isExternal) {
             const label = friendlyChannelLabel(r.channel) || r.from_id;
-            return { role: "external", text: r.content, label };
+            return { role: "external", text: r.content, label, messageId: r.id };
           }
-          return { role: r.role, text: r.content };
+          return { role: r.role, text: r.content, messageId: r.id };
         });
     } catch { return []; }
   }
@@ -198,11 +234,14 @@ export function initChat({
   }
 
   function addMsg(role, text, options = {}) {
-    const { alert = role === "jarvis", pending = true, label } = options;
+    const { alert = role === "jarvis", pending = true, label, messageId, source = "event", dedupe = true } = options;
     const defaultLabel = role === "user" ? "You" : role === "jarvis" ? getAgentName() : "Peer";
     const labelText = label || defaultLabel;
+    if (!claimRenderedMessage({ messageId, role, text, label: labelText, source, dedupe })) return false;
     const div = document.createElement("div");
     div.className = `msg msg-${role}`;
+    const normalizedId = normalizeMessageId(messageId);
+    if (normalizedId) div.dataset.messageId = normalizedId;
     const labelSpan = document.createElement("span");
     labelSpan.className = "msg-label";
     labelSpan.textContent = labelText;
@@ -225,11 +264,19 @@ export function initChat({
     }
 
     chatMessages.scrollTop = chatMessages.scrollHeight;
+    return true;
   }
 
   async function restoreChatHistory() {
     const history = await fetchChatHistory();
-    history.forEach(i => addMsg(i.role, i.text, { persist: false, alert: false, pending: false, label: i.label }));
+    history.forEach(i => addMsg(i.role, i.text, {
+      persist: false,
+      alert: false,
+      pending: false,
+      label: i.label,
+      messageId: i.messageId,
+      source: "history",
+    }));
     if (history.length) {
       pendingMessageDismissed = true;
       chatMessages.scrollTop = chatMessages.scrollHeight;
@@ -260,7 +307,7 @@ export function initChat({
     if (fromInput) { msgInput.value = ""; autoGrowInput(); }
     // If onUserMessage returns a string, use it as the backend payload; if it returns false, skip the backend call
     const override = onUserMessage?.(content);
-    addMsg("user", content, { label: label || undefined });
+    addMsg("user", content, { label: label || undefined, dedupe: false });
     openChat();
     scheduleClose(1000);
     if (override === false) {
@@ -539,9 +586,17 @@ export function initChat({
   }
 
   // text 为字符串则替换为权威全文；为 null 仅去掉 live 标记（保留已流出的内容）
-  function finalizeLiveJarvisMsg(text) {
+  function finalizeLiveJarvisMsg(text, options = {}) {
     if (!liveEl) return false;
     if (typeof text === "string") {
+      const labelText = getAgentName();
+      if (!claimRenderedMessage({ messageId: options.messageId, role: "jarvis", text, label: labelText, source: options.source || "event" })) {
+        liveEl.remove();
+        liveEl = null;
+        return false;
+      }
+      const normalizedId = normalizeMessageId(options.messageId);
+      if (normalizedId) liveEl.dataset.messageId = normalizedId;
       const children = Array.from(liveEl.children);
       for (let i = 1; i < children.length; i++) children[i].remove();
       liveEl.appendChild(createMarkdownBody(text));

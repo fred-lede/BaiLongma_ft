@@ -21,7 +21,7 @@ const STREAM_IDLE_TIMEOUT_MS = 45_000
 // find_tool 命中后，把它返回的 loaded 工具 schema 原地追加进本轮 toolSchemas。
 // 已在列表里的跳过；schema 取不到的跳过。数组原地 mutate —— 调用方传的是 callLLM 的 toolSchemas
 // 引用，push 后下一轮 streamOnceWithRetry 自动带上这些新工具，模型即可直接调用。
-function injectFoundToolSchemas(result, toolSchemas, strictEvaluation = null) {
+function injectFoundToolSchemas(result, toolSchemas, strictEvaluation = null, toolPromptHints = null) {
   try {
     const parsed = JSON.parse(result)
     const loaded = parsed?.loaded
@@ -33,7 +33,7 @@ function injectFoundToolSchemas(result, toolSchemas, strictEvaluation = null) {
         console.log(`[find_tool] strict evaluation skipped forbidden tool → ${name}`)
         continue
       }
-      const schema = getToolSchemas([name])[0]
+      const schema = getToolSchemas([name], { toolPromptHints })[0]
       if (schema) {
         toolSchemas.push(schema)
         present.add(name)
@@ -824,7 +824,8 @@ function isCloserPattern(content) {
 //   "本轮是 silent 系统信号，不要 send_message"，让模型从这次拒绝里学到边界。
 export async function callLLM({ systemPrompt, message, messages: inputMessages = null, temperature = 0.5, topP = 0.9, tools = [], maxTokens, thinking = true, signal, onToolCall, onToolExecute, onStream, onRetry, toolContext = {}, mustReply = false, silentSignal = false, localReply = false, _streamOnceForTest = null }) {
   const strictEvaluation = toolContext?.strictEvaluation || null
-  const toolSchemas = getToolSchemas(filterStrictEvaluationTools(tools, strictEvaluation))
+  const toolPromptHints = toolContext?.toolPromptHints || null
+  const toolSchemas = getToolSchemas(filterStrictEvaluationTools(tools, strictEvaluation), { toolPromptHints })
 
   // 本地渠道（语音 / TUI）下纯文本即回复：模型直接产出 text 就算回复，runtime 协议兜底会替它
   // 真正投递（含语音 TTS）。社交渠道（微信/Discord/飞书/企微）必须显式 send_message 才能送达外部平台。
@@ -1188,7 +1189,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
           }
           // find_tool 动态装载：把搜到的工具 schema 当场注入本轮 toolSchemas（数组原地 push，
           // 下一轮 streamOnceWithRetry 即带上），模型下一步就能直接调用搜出来的工具。
-          if (tc.name === 'find_tool') injectFoundToolSchemas(result, toolSchemas, strictEvaluation)
+          if (tc.name === 'find_tool') injectFoundToolSchemas(result, toolSchemas, strictEvaluation, toolPromptHints)
         }
       }
       throwIfAborted(signal)

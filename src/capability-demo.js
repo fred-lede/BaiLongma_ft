@@ -36,7 +36,7 @@ export function runCapabilityDemo({ to = '', channel = 'TUI', speak = true, mess
 function deliverIntroMessage({ to = '', channel = 'TUI', text = '', speak = true } = {}) {
   if (!to || !text) return false
   const timestamp = nowTimestamp()
-  insertConversation({
+  const insertedId = insertConversation({
     role: 'jarvis',
     from_id: 'jarvis',
     to_id: to,
@@ -49,6 +49,7 @@ function deliverIntroMessage({ to = '', channel = 'TUI', text = '', speak = true
     to,
     content: text,
     timestamp,
+    conversation_id: insertedId,
     channel: channel || 'TUI',
     speak: speak === true,
   })

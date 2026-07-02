@@ -28,6 +28,24 @@ const devLight = require('./dev-board-light.cjs')
 
 const IS_DEV = !app.isPackaged
 const WINDOWS_APP_USER_MODEL_ID = 'com.xiaoyuanda.bailongma'
+
+function resolvePortableRoot() {
+  if (IS_DEV) return null
+  const requestedRoot = process.env.BAILONGMA_PORTABLE_DIR?.trim()
+  if (requestedRoot) return path.resolve(requestedRoot)
+  const exeDir = path.dirname(process.execPath)
+  return fs.existsSync(path.join(exeDir, 'portable.flag')) ? exeDir : null
+}
+
+const PORTABLE_ROOT = resolvePortableRoot()
+const PORTABLE_USER_DIR = PORTABLE_ROOT ? path.join(PORTABLE_ROOT, 'data') : null
+const IS_PORTABLE = Boolean(PORTABLE_USER_DIR)
+if (PORTABLE_USER_DIR) {
+  try { fs.mkdirSync(PORTABLE_USER_DIR, { recursive: true }) } catch {}
+  app.setPath('userData', PORTABLE_USER_DIR)
+  process.env.BAILONGMA_USER_DIR ||= PORTABLE_USER_DIR
+}
+
 const USER_DIR = app.getPath('userData')
 const CODE_ROOT = app.getAppPath()
 const RESOURCE_ROOT = CODE_ROOT
@@ -945,6 +963,12 @@ ipcMain.on('wake:orb-exit-done', () => {
 })
 
 function setupAutoUpdater() {
+  if (IS_PORTABLE) {
+    console.log(`[updater] skipped in portable mode, data dir: ${USER_DIR}`)
+    sendUpdaterStatus({ stage: 'portable', portable: true })
+    return
+  }
+
   autoUpdater.autoDownload = false
   // Avoid applying an already downloaded update while Windows is shutting down.
   // The renderer still installs explicitly through updater:quit-and-install.
@@ -998,6 +1022,10 @@ function setupAutoUpdater() {
 ipcMain.handle('app:get-version', () => app.getVersion())
 
 ipcMain.handle('updater:check-for-updates', async () => {
+  if (IS_PORTABLE) {
+    sendUpdaterStatus({ stage: 'portable', portable: true })
+    return { ok: false, skipped: true, reason: 'portable' }
+  }
   if (IS_DEV) {
     sendUpdaterStatus({ stage: 'dev' })
     return { ok: false, skipped: true, reason: 'dev' }
@@ -1014,6 +1042,10 @@ ipcMain.handle('updater:check-for-updates', async () => {
 })
 
 ipcMain.handle('updater:start-download', async () => {
+  if (IS_PORTABLE) {
+    sendUpdaterStatus({ stage: 'portable', portable: true })
+    return { ok: false, skipped: true, reason: 'portable' }
+  }
   try {
     await autoUpdater.downloadUpdate()
     return { ok: true }
@@ -1025,7 +1057,12 @@ ipcMain.handle('updater:start-download', async () => {
 })
 
 ipcMain.handle('updater:quit-and-install', () => {
+  if (IS_PORTABLE) {
+    sendUpdaterStatus({ stage: 'portable', portable: true })
+    return { ok: false, skipped: true, reason: 'portable' }
+  }
   autoUpdater.quitAndInstall()
+  return { ok: true }
 })
 
 app.on('second-instance', () => {

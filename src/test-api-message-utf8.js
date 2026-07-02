@@ -38,6 +38,8 @@ try {
   if (postRes.status !== 200) {
     throw new Error(`POST /message failed ${postRes.status}: ${await postRes.text()}`)
   }
+  const postBody = await postRes.json()
+  assert(postBody.conversation_id > 0, 'POST /message returns the inserted conversation_id')
 
   const rowsRes = await fetch(`${baseUrl}/conversations?limit=20`)
   if (rowsRes.status !== 200) {
@@ -47,6 +49,7 @@ try {
   const row = rows.find(item => item.channel === 'API_UTF8_TEST')
 
   assert(row, 'posted UTF-8 message is present in /conversations')
+  assert.equal(row.id, postBody.conversation_id, 'conversation_id matches the /conversations row id')
   assert.equal(row.content, expected, 'Chinese content round-trips through /message and /conversations')
   assert.equal(row.from_id, 'ID:UTF8_API_TEST')
 

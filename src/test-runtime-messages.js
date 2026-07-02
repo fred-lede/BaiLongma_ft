@@ -84,6 +84,10 @@ assert(messages[1].content.includes('Task step progress (1/2)'), 'runtime contex
 assert(messages[1].content.includes('Recent assistant actions'), 'runtime context includes recent actions')
 assert(messages[1].content.includes('Recent tool/action log'), 'runtime context includes action log')
 assert(messages[1].content.includes('Previous tool result'), 'runtime context includes last tool result')
+assert(messages[1].content.includes('<conversation_metadata>'), 'runtime context includes conversation metadata')
+assert(messages[1].content.includes('role="assistant"'), 'conversation metadata includes assistant role')
+assert(messages[1].content.includes('salience="last_assistant_reply"'), 'conversation metadata marks the last assistant reply')
+assert(messages[1].content.includes('channel_switched_from="TUI"'), 'conversation metadata marks channel switch')
 
 const historicalUser = messages.find(m => m.content.includes('先在本地看一下'))
 assert(historicalUser && !historicalUser.content.includes('<context>CTX</context>'), 'historical user message is not prefixed with current context')
@@ -91,16 +95,16 @@ assert(historicalUser && !historicalUser.content.includes('<context>CTX</context
 const currentUser = messages.find(m => m.content.startsWith('<context>CTX</context>'))
 assert(currentUser, 'current user message is identified')
 assert(currentUser.content.startsWith('<context>CTX</context>'), 'context is prefixed to current user message')
-assert(currentUser.content.includes('· WECHAT'), 'current user message shows normalized WECHAT channel')
-assert(currentUser.content.includes('channel switch: TUI → WECHAT'), 'current user message marks channel switch')
+assert(!currentUser.content.includes('[current user message'), 'current user message keeps metadata out of visible content')
+assert(!currentUser.content.includes('channel switch:'), 'current user message does not inline channel switch metadata')
 
 const assistant = messages.find(m => m.role === 'assistant')
-// The assistant line immediately preceding the current user message is the "last reply":
-// it carries the salience anchor tag, then the verbatim original content.
+// The assistant line immediately preceding the current user message is the "last reply";
+// salience now lives in conversation_metadata, not in the assistant text itself.
 assert(assistant.content.includes('我看到了，随时为您效劳！'), 'assistant history content preserved verbatim')
-assert(assistant.content.includes('your last reply'), 'last reply is tagged as the salience anchor')
-assert(assistant.content.includes('[you · '), 'assistant line carries the symmetric in-band speaker heading')
-assert(assistant.content.endsWith('我看到了，随时为您效劳！'), 'tag is prepended, original content kept verbatim at the end')
+assert(!assistant.content.includes('your last reply'), 'assistant text does not carry salience marker inline')
+assert(!assistant.content.includes('[you · '), 'assistant text does not carry the old in-band speaker heading')
+assertEqual(assistant.content, '我看到了，随时为您效劳！', 'assistant history content is exactly the original text')
 
 const fallbackMessages = buildLLMMessages({
   systemPrompt: 'SYS',

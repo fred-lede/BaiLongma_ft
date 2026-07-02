@@ -726,6 +726,7 @@ async function execSendMessage({ target_id, content = '', channel = 'AUTO', imag
     to: resolvedId,
     content: outboundContent,
     timestamp,
+    conversation_id: insertedId,
     channel: channelLabel,
     external_party_id: delivery.externalTargetId || '',
     ...(shouldSpeakLocally ? { speak: true } : {}),

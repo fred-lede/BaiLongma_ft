@@ -57,7 +57,15 @@ import { formatTerminalStreamContext } from './terminal-stream.js'
 import { getWeatherCardProps, isWeatherQuery } from './weather.js'
 import { scheduleSceneSurfaceRemoval } from './scene/transient-surfaces.js'
 
+function reportStartupProgress(id, status, detail, message) {
+  try {
+    const reporter = globalThis.bailongmaStartupProgress
+    if (typeof reporter === 'function') reporter({ id, status, detail, message })
+  } catch {}
+}
+
 // On first launch, copy sandbox seed files from the resource directory to the user data directory (Electron install)
+reportStartupProgress('resources', 'running', '复制沙箱与音乐资源', '正在准备工作区')
 seedSandboxOnce()
 seedMusicOnce()
 
@@ -75,9 +83,11 @@ try {
 } catch (err) {
   console.warn('[startup] 安装目录数据迁移检查失败:', err?.message || err)
 }
+reportStartupProgress('resources', 'done', '工作区已准备', '工作区已准备')
 
 // Collect host system environment info (full scan + persist on first run, then refresh dynamic fields).
 // Must complete before the main loop starts so buildSystemPrompt can inject the env block.
+reportStartupProgress('environment', 'running', '系统、桌面、软件与本地资源', '正在扫描本机环境')
 await collectSystemInfo()
 
 // Scan the user's desktop (shortcuts cached by mtime, regular files scanned every time)
@@ -90,6 +100,7 @@ collectInstalledSoftware()
 // for the "Self-Sufficient Execution" prompt — so the agent already knows what
 // the user has before being asked "上服务器看看".
 collectLocalResources()
+reportStartupProgress('environment', 'done', '本机环境已扫描', '本机环境已扫描')
 
 // 启动期"自感知"采集(地理/天气/热点/本机 agent/已装工具)是可选的、依赖网络或子进程的步骤,
 // 绝不应阻塞后端启动:某个外部调用卡死(如 DNS/connect 被挂住,连 AbortController 都打不断)
@@ -102,16 +113,24 @@ function withStartupTimeout(promise, ms, label) {
 }
 
 // Collect geo-location + live weather (refresh on IP change or after 7 days; weather refreshed every time)
+reportStartupProgress('geo', 'running', '读取缓存或请求实时天气', '正在刷新天气位置')
 const geoResult = await withStartupTimeout(collectGeoWeather(), 12000, '[startup] geo-weather')
+reportStartupProgress('geo', 'done', '天气位置已刷新', '天气位置已刷新')
 
 // Collect trending topics (CN → Weibo+Zhihu, others → HN+Reddit; 1h cache)
+reportStartupProgress('trending', 'running', '加载今日热点源', '正在采集热点')
 await withStartupTimeout(collectTrending(geoResult?.location?.country_code), 12000, '[startup] trending')
+reportStartupProgress('trending', 'done', '热点采集完成', '热点采集完成')
 
 // Scan locally installed AI agents (Claude Code, Codex, Hermes, OpenClaw, etc.) and persist to known_agents table
+reportStartupProgress('agents', 'running', 'Claude Code / Codex / Hermes', '正在扫描本地 Agent')
 await withStartupTimeout(collectAgents(), 15000, '[startup] agents')
+reportStartupProgress('agents', 'done', '本地 Agent 扫描完成', '本地 Agent 扫描完成')
 
 // Load persisted installed tools
+reportStartupProgress('tools', 'running', '恢复已安装能力', '正在加载工具槽')
 await withStartupTimeout(loadInstalledTools(), 12000, '[startup] installed-tools')
+reportStartupProgress('tools', 'done', '工具槽已加载', '工具槽已加载')
 
 // 本地嵌入模型预热：provider==='local' 时后台 fire-and-forget 建好 pipeline（含首次模型下载），
 // 让首条向量召回不被冷启动撞穿超时。绝不阻塞启动，失败静默（召回会自动退化为 FTS5）。
@@ -127,6 +146,7 @@ await withStartupTimeout(loadInstalledTools(), 12000, '[startup] installed-tools
 })().catch(() => {})
 
 // Load Agent Skills metadata. Full SKILL.md bodies are injected only when a turn matches.
+reportStartupProgress('skills', 'running', '技能目录、SQLite、线程状态', '正在加载技能和记忆')
 const startupSkills = refreshSkills()
 console.log(`[skills] Loaded ${startupSkills.length} Agent Skill(s)`)
 
@@ -158,6 +178,7 @@ if (getMemoryCount() === 0) {
 }
 const birthTime = getOrInitBirthTime()
 refreshUserProfile(PRIMARY_USER_ID)
+reportStartupProgress('skills', 'done', `已加载 ${startupSkills.length} 个技能并恢复记忆`, '技能和记忆已加载')
 
 // Awakening phase: first 10 heartbeat ticks after initial activation run at a fixed 10s cadence
 const AWAKENING_CONFIG_KEY = 'awakening_ticks_remaining'
@@ -1885,6 +1906,7 @@ async function main() {
 
   // Start HTTP API — must start regardless of activation status; the activation page depends on it
   const apiPort = Number(process.env.BAILONGMA_PORT) || 3721
+  reportStartupProgress('api', 'running', `准备监听 127.0.0.1:${apiPort}`, '正在启动本地 API')
   startAPI(apiPort, {
     getStateSnapshot: () => ({
       action: state.action,
@@ -1904,6 +1926,7 @@ async function main() {
       startConsciousnessLoop({ runImmediateTick: true }).catch(err => console.error('[system] Main loop failed to start:', err))
     },
   })
+  reportStartupProgress('api', 'running', `等待 127.0.0.1:${apiPort} 就绪`, '正在等待本地 API 就绪')
   startSocialConnectors({ pushMessage, emitEvent }).catch(err => console.warn('[social] startup failed:', err.message))
 
   // 恢复重启前未完成的 AI 视频生成任务（继续轮询，避免面板永远卡“生成中”）

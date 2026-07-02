@@ -7,6 +7,14 @@ contextBridge.exposeInMainWorld('bailongma', {
   checkForUpdates: () => ipcRenderer.invoke('updater:check-for-updates'),
   startDownload: () => ipcRenderer.invoke('updater:start-download'),
   quitAndInstall: () => ipcRenderer.invoke('updater:quit-and-install'),
+  getLatestSystemScreenshot: (options) => ipcRenderer.invoke('system-screenshot:get-latest', options || {}),
+  getStartupProgress: () => ipcRenderer.invoke('startup:get-progress'),
+  onStartupProgress: (handler) => {
+    if (typeof handler !== 'function') return () => {}
+    const listener = (_event, payload) => handler(payload)
+    ipcRenderer.on('startup:progress', listener)
+    return () => ipcRenderer.removeListener('startup:progress', listener)
+  },
   getZoomFactor: () => webFrame.getZoomFactor(),
   setZoomFactor: (factor) => webFrame.setZoomFactor(factor),
   onUpdaterStatus: (handler) => {

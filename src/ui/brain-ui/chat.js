@@ -296,18 +296,60 @@ export function initChat({
     return `${String(channel || "TUI").toUpperCase()}\n${String(text || "").trim()}`;
   }
 
+  const SYSTEM_SCREENSHOT_RE = /(?:\u7cfb\u7edf|\u5c4f\u5e55)?\u622a\u56fe|\u8fd9\u5f20\u56fe|\u56fe\u91cc|\u770b\u56fe|screenshot|screen\s*shot/i;
+  const INLINE_IMAGE_RE = /!\[[^\]]*]\(|\/media\/chat\/|data:image\//i;
+
+  function shouldAttachSystemScreenshot(text) {
+    const raw = String(text || "");
+    return SYSTEM_SCREENSHOT_RE.test(raw) && !INLINE_IMAGE_RE.test(raw);
+  }
+
+  async function maybeAttachSystemScreenshot(content) {
+    const base = { content, displayContent: content, attachments: [] };
+    if (!shouldAttachSystemScreenshot(content)) return base;
+    const api = window.bailongma;
+    if (typeof api?.getLatestSystemScreenshot !== "function") return base;
+    try {
+      const shot = await api.getLatestSystemScreenshot({
+        preferClipboard: true,
+        maxAgeMs: 15 * 60 * 1000,
+      });
+      if (!shot?.ok || !shot.dataUrl) return base;
+      const alt = "\u7cfb\u7edf\u622a\u56fe";
+      return {
+        content,
+        displayContent: `${content}\n\n![${alt}](${shot.dataUrl})`,
+        attachments: [{
+          data_url: shot.dataUrl,
+          alt,
+          name: shot.filename || "system-screenshot.png",
+          source: shot.source || "system",
+        }],
+      };
+    } catch (error) {
+      console.warn("[system screenshot]", error?.message || error);
+      return base;
+    }
+  }
+
   async function send({ channel = null, label = null, text = null } = {}) {
     if (inputLocked) return;
     const fromInput = (text == null);
-    const content = (fromInput ? msgInput.value : text).trim();
-    if (!content) return;
-    const pendingKey = localSendKey(channel, content);
+    const rawContent = (fromInput ? msgInput.value : text).trim();
+    if (!rawContent) return;
+    const pendingKey = localSendKey(channel, rawContent);
     if (pendingLocalSends.has(pendingKey)) return;
     pendingLocalSends.add(pendingKey);
     if (fromInput) { msgInput.value = ""; autoGrowInput(); }
+    const prepared = await maybeAttachSystemScreenshot(rawContent);
+    const content = prepared.content;
+    if (!content) {
+      pendingLocalSends.delete(pendingKey);
+      return;
+    }
     // If onUserMessage returns a string, use it as the backend payload; if it returns false, skip the backend call
     const override = onUserMessage?.(content);
-    addMsg("user", content, { label: label || undefined, dedupe: false });
+    addMsg("user", prepared.displayContent || content, { label: label || undefined, dedupe: false });
     openChat();
     scheduleClose(1000);
     if (override === false) {
@@ -318,6 +360,7 @@ export function initChat({
     try {
       const backendText = (typeof override === "string") ? override : content;
       const payload = { content: backendText, from_id: "ID:000001", client_message_id: newClientMessageId() };
+      if (prepared.attachments.length && backendText === content) payload.attachments = prepared.attachments;
       if (channel) payload.channel = channel;
       const resp = await fetch(`${apiBase}/message`, {
         method: "POST",

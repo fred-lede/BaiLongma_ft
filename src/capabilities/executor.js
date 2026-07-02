@@ -38,11 +38,11 @@ import { execAnalyzeImage, execManageApiCapability, execRunApiCapability } from 
 import { execManageRule } from './tools/rules.js'
 import { runWorkReview } from '../review/reviewer.js'
 import { CAPABILITY_DEMO_INTRO, runCapabilityDemo } from '../capability-demo.js'
+import { persistChatMediaPath } from '../chat-media.js'
 export { calculateNextDueAt } from './tools/reminders.js'
 export { autoSpeakForVoiceReply } from './tools/media.js'
 
 import { config, setSecurity } from '../config.js'
-import { paths } from '../paths.js'
 import { lookupReplyTarget, normalizeChannel, suggestProactiveChannel, isVoiceChannel, isExternalChannel } from '../identity.js'
 import { sanitizeAssistantReplyForDelivery } from '../runtime/markers.js'
 
@@ -113,13 +113,7 @@ function inferOutboundMediaKind(filePath = '') {
 // 失败（如磁盘错误）时返回 null，调用方退化为仅文本标记，不阻断消息发送。
 function persistChatMedia(resolvedPath) {
   try {
-    const buf = fs.readFileSync(resolvedPath)
-    const hash = crypto.createHash('sha256').update(buf).digest('hex')
-    const ext = path.extname(resolvedPath).toLowerCase()
-    const storedName = `${hash}${ext}`
-    const storedPath = path.join(paths.mediaDir, storedName)
-    if (!fs.existsSync(storedPath)) fs.writeFileSync(storedPath, buf)
-    return `/media/chat/${storedName}`
+    return persistChatMediaPath(resolvedPath).url
   } catch (err) {
     console.warn(`[media] 聊天媒体落盘失败（退化为纯文本标记）：${err.message}`)
     return null

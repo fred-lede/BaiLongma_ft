@@ -15,7 +15,7 @@ if (IS_WIN) {
   } catch (_) {}
 }
 
-const { app, BrowserWindow, shell, dialog, Menu, ipcMain, Tray, nativeImage } = require('electron')
+const { app, BrowserWindow, shell, dialog, Menu, ipcMain, Tray, nativeImage, clipboard } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const net = require('net')
@@ -50,12 +50,182 @@ const USER_DIR = app.getPath('userData')
 const CODE_ROOT = app.getAppPath()
 const RESOURCE_ROOT = CODE_ROOT
 const BACKEND_ENTRY = path.join(CODE_ROOT, 'src', 'index.js')
+const STARTUP_PAGE = path.join(__dirname, 'startup.html')
+
+const STARTUP_STEPS = [
+  { id: 'port', label: '准备本地端口', detail: '锁定 3721 或备用端口' },
+  { id: 'core', label: '启动本地核心', detail: '加载 Bailongma runtime' },
+  { id: 'resources', label: '准备工作区', detail: '复制沙箱与音乐资源' },
+  { id: 'tools', label: '加载工具槽', detail: '恢复已安装能力' },
+  { id: 'api', label: '启动本地 API', detail: 'HTTP / SSE / WebSocket' },
+]
+
+const startupProgressState = {
+  startedAt: Date.now(),
+  updatedAt: Date.now(),
+  completed: false,
+  failed: false,
+  percent: 0,
+  activeStepId: null,
+  message: '正在打开 Bailongma',
+  steps: STARTUP_STEPS.map(step => ({ ...step, status: 'pending', startedAt: null, endedAt: null })),
+}
+
+function cloneStartupProgressState() {
+  return {
+    ...startupProgressState,
+    steps: startupProgressState.steps.map(step => ({ ...step })),
+  }
+}
+
+function recalcStartupPercent() {
+  if (startupProgressState.completed) return 100
+  const done = startupProgressState.steps.filter(step => step.status === 'done').length
+  const hasRunning = startupProgressState.steps.some(step => step.status === 'running')
+  return Math.min(99, Math.round(((done + (hasRunning ? 0.45 : 0)) / startupProgressState.steps.length) * 100))
+}
+
+function sendStartupProgress() {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  mainWindow.webContents.send('startup:progress', cloneStartupProgressState())
+}
+
+function emitStartupProgress(update = {}) {
+  const now = Date.now()
+  let visibleUpdate = false
+  if (update.id) {
+    let step = startupProgressState.steps.find(item => item.id === update.id)
+    if (!step) {
+      if (!update.completed && !update.error && update.status !== 'error') return cloneStartupProgressState()
+    } else {
+      visibleUpdate = true
+      if (update.label) step.label = update.label
+      if (update.detail) step.detail = update.detail
+      if (update.status) {
+        step.status = update.status
+        if (update.status === 'running' && !step.startedAt) step.startedAt = now
+        if (update.status === 'done' || update.status === 'error') step.endedAt = now
+        if (update.status === 'running') startupProgressState.activeStepId = step.id
+      }
+    }
+  }
+  if (update.message && (visibleUpdate || update.completed || update.error || update.status === 'error')) startupProgressState.message = update.message
+  if (update.status === 'error' || update.error) {
+    startupProgressState.failed = true
+    startupProgressState.message = update.message || '启动失败'
+  }
+  if (update.completed) {
+    startupProgressState.completed = true
+    startupProgressState.percent = 100
+    startupProgressState.message = update.message || '启动完成'
+  } else {
+    startupProgressState.percent = recalcStartupPercent()
+  }
+  startupProgressState.updatedAt = now
+  sendStartupProgress()
+  return cloneStartupProgressState()
+}
+
+global.bailongmaStartupProgress = emitStartupProgress
 
 function getAppIconPath({ trayIcon = false } = {}) {
   if (IS_WIN) return path.join(RESOURCE_ROOT, 'build', 'icon.ico')
   if (IS_MAC) return path.join(RESOURCE_ROOT, 'build', 'icon.png')
   if (IS_LINUX) return path.join(RESOURCE_ROOT, 'build', 'icon.png')
   return path.join(RESOURCE_ROOT, 'build', trayIcon ? 'icon.png' : 'icon.png')
+}
+
+const SCREENSHOT_IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif'])
+
+function imageMimeForPath(filePath = '') {
+  switch (path.extname(filePath).toLowerCase()) {
+    case '.jpg':
+    case '.jpeg':
+      return 'image/jpeg'
+    case '.webp':
+      return 'image/webp'
+    case '.bmp':
+      return 'image/bmp'
+    case '.gif':
+      return 'image/gif'
+    default:
+      return 'image/png'
+  }
+}
+
+function addExistingDir(out, dir) {
+  if (!dir) return
+  try {
+    const resolved = path.resolve(dir)
+    if (fs.existsSync(resolved) && fs.statSync(resolved).isDirectory()) out.add(resolved)
+  } catch {}
+}
+
+function collectSystemScreenshotDirs() {
+  const dirs = new Set()
+  try { addExistingDir(dirs, path.join(app.getPath('pictures'), 'Screenshots')) } catch {}
+
+  const home = process.env.USERPROFILE || process.env.HOME || ''
+  addExistingDir(dirs, path.join(home, 'Pictures', 'Screenshots'))
+
+  const localAppData = process.env.LOCALAPPDATA || (home ? path.join(home, 'AppData', 'Local') : '')
+  const packagesDir = localAppData ? path.join(localAppData, 'Packages') : ''
+  addExistingDir(dirs, path.join(packagesDir, 'MicrosoftWindows.Client.CBS_cw5n1h2txyewy', 'TempState', 'ScreenClip'))
+  addExistingDir(dirs, path.join(packagesDir, 'Microsoft.ScreenSketch_8wekyb3d8bbwe', 'TempState'))
+  addExistingDir(dirs, path.join(packagesDir, 'Microsoft.ScreenSketch_8wekyb3d8bbwe', 'TempState', 'ScreenClip'))
+  addExistingDir(dirs, path.join(packagesDir, 'Microsoft.Windows.SnippingTool_8wekyb3d8bbwe', 'TempState'))
+  addExistingDir(dirs, path.join(packagesDir, 'Microsoft.Windows.SnippingTool_8wekyb3d8bbwe', 'TempState', 'ScreenClip'))
+
+  try {
+    for (const entry of fs.readdirSync(packagesDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue
+      if (!/(ScreenSketch|SnippingTool|Client\.CBS)/i.test(entry.name)) continue
+      const base = path.join(packagesDir, entry.name, 'TempState')
+      addExistingDir(dirs, base)
+      addExistingDir(dirs, path.join(base, 'ScreenClip'))
+    }
+  } catch {}
+
+  return [...dirs]
+}
+
+function collectImageFiles(dir, { depth = 0 } = {}) {
+  const files = []
+  let entries = []
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { return files }
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name)
+    if (entry.isDirectory()) {
+      if (depth > 0) files.push(...collectImageFiles(full, { depth: depth - 1 }))
+      continue
+    }
+    if (!entry.isFile()) continue
+    if (!SCREENSHOT_IMAGE_EXTS.has(path.extname(entry.name).toLowerCase())) continue
+    try {
+      const stat = fs.statSync(full)
+      files.push({ path: full, mtimeMs: stat.mtimeMs, size: stat.size })
+    } catch {}
+  }
+  return files
+}
+
+function findLatestSystemScreenshotFile({ maxAgeMs = 15 * 60 * 1000 } = {}) {
+  const cutoff = Date.now() - Math.max(0, Number(maxAgeMs) || 0)
+  const candidates = []
+  for (const dir of collectSystemScreenshotDirs()) {
+    const depth = /TempState|ScreenClip/i.test(dir) ? 2 : 0
+    for (const file of collectImageFiles(dir, { depth })) {
+      if (maxAgeMs && file.mtimeMs < cutoff) continue
+      candidates.push(file)
+    }
+  }
+  candidates.sort((a, b) => b.mtimeMs - a.mtimeMs)
+  return candidates[0] || null
+}
+
+function fileImageToDataUrl(filePath) {
+  const bytes = fs.readFileSync(filePath)
+  return `data:${imageMimeForPath(filePath)};base64,${bytes.toString('base64')}`
 }
 
 // 持久化日志：把 console.* 镜像到 USER_DIR/logs/bailongma.log，
@@ -246,7 +416,22 @@ function waitForBackend(port, timeoutMs = 30000) {
   })
 }
 
-async function createWindow() {
+async function loadStartupPage() {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  emitStartupProgress({ id: 'window', status: 'running', message: '正在打开桌面窗口' })
+  await mainWindow.loadFile(STARTUP_PAGE)
+  emitStartupProgress({ id: 'window', status: 'done', message: '桌面窗口已打开' })
+}
+
+async function loadMainApp() {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  if (!backendPort) throw new Error('Backend port is not ready')
+  emitStartupProgress({ id: 'interface', status: 'running', message: '正在进入界面' })
+  await mainWindow.loadURL(`http://127.0.0.1:${backendPort}/`)
+  emitStartupProgress({ id: 'interface', status: 'done', completed: true, message: '启动完成' })
+}
+
+async function createWindow({ loadStartup = true } = {}) {
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 840,
@@ -310,7 +495,11 @@ async function createWindow() {
     return { action: 'allow' }
   })
 
-  await mainWindow.loadURL(`http://127.0.0.1:${backendPort}/`)
+  if (loadStartup) {
+    await loadStartupPage()
+  } else if (backendPort) {
+    await loadMainApp()
+  }
   // Windows/Linux 关闭主窗口时最小化到托盘；macOS 允许销毁窗口，Dock/托盘可重建。
   mainWindow.on('close', (e) => {
     if (!app.isQuiting && !IS_MAC) {
@@ -326,7 +515,7 @@ async function createWindow() {
 
 async function showMainWindow() {
   if (!mainWindow || mainWindow.isDestroyed()) {
-    await createWindow()
+    await createWindow({ loadStartup: !backendPort })
   }
   if (mainWindow.isMinimized()) mainWindow.restore()
   if (!mainWindow.isVisible()) mainWindow.show()
@@ -1020,6 +1209,53 @@ function setupAutoUpdater() {
 }
 
 ipcMain.handle('app:get-version', () => app.getVersion())
+ipcMain.handle('startup:get-progress', () => cloneStartupProgressState())
+
+ipcMain.handle('system-screenshot:get-latest', async (_event, options = {}) => {
+  const maxAgeMs = Number(options?.maxAgeMs || 15 * 60 * 1000)
+  const preferClipboard = options?.preferClipboard !== false
+
+  if (preferClipboard) {
+    try {
+      const image = clipboard.readImage()
+      if (image && !image.isEmpty()) {
+        const png = image.toPNG()
+        if (png?.length) {
+          return {
+            ok: true,
+            source: 'clipboard',
+            filename: `system-screenshot-${Date.now()}.png`,
+            mime: 'image/png',
+            byteLength: png.length,
+            dataUrl: `data:image/png;base64,${png.toString('base64')}`,
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[system-screenshot] clipboard read failed:', err?.message || err)
+    }
+  }
+
+  try {
+    const latest = findLatestSystemScreenshotFile({ maxAgeMs })
+    if (latest?.path) {
+      return {
+        ok: true,
+        source: 'system-cache',
+        path: latest.path,
+        filename: path.basename(latest.path),
+        mime: imageMimeForPath(latest.path),
+        byteLength: latest.size,
+        mtimeMs: latest.mtimeMs,
+        dataUrl: fileImageToDataUrl(latest.path),
+      }
+    }
+  } catch (err) {
+    console.warn('[system-screenshot] cache scan failed:', err?.message || err)
+  }
+
+  return { ok: false, error: 'no_recent_system_screenshot' }
+})
 
 ipcMain.handle('updater:check-for-updates', async () => {
   if (IS_PORTABLE) {
@@ -1084,19 +1320,37 @@ app.on('before-quit', () => {
 
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(null)
+  await createWindow({ loadStartup: true })
 
   try {
+    emitStartupProgress({ id: 'port', status: 'running', message: '正在准备本地端口' })
     backendPort = await findFreePort(3721)
+    emitStartupProgress({ id: 'port', status: 'done', detail: `本地端口 ${backendPort} 已准备` })
+
+    emitStartupProgress({ id: 'core', status: 'running', message: '正在启动本地核心' })
     await bootstrapBackend(backendPort)
+    emitStartupProgress({ id: 'core', status: 'done', message: '本地核心已启动' })
+
+    emitStartupProgress({ id: 'api', status: 'running', detail: '等待 activation-status', message: '正在确认本地 API 就绪' })
     await waitForBackend(backendPort)
+    emitStartupProgress({ id: 'api', status: 'done', detail: `本地 API 已监听 ${backendPort}`, message: '本地 API 已启动' })
   } catch (err) {
     console.error(`[main] Backend startup failed on port ${backendPort || 'unknown'}`, err?.stack || err?.message || err)
+    emitStartupProgress({ id: 'core', status: 'error', error: true, message: `启动失败: ${err.message}` })
     dialog.showErrorBox('Startup failed', `Unable to start the Bailongma backend:\n${err.message}`)
     app.quit()
     return
   }
 
-  await createWindow()
+  try {
+    await loadMainApp()
+  } catch (err) {
+    console.error('[main] Failed to load Bailongma UI', err?.stack || err?.message || err)
+    emitStartupProgress({ id: 'interface', status: 'error', error: true, message: `进入界面失败: ${err.message}` })
+    dialog.showErrorBox('Startup failed', `Unable to load the Bailongma interface:\n${err.message}`)
+    app.quit()
+    return
+  }
   setupTray()
   setupAutoUpdater()
 

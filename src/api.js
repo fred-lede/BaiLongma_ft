@@ -32,6 +32,7 @@ import { setDocPanelState, getDocPanelState, DOC_TOPICS } from './docs.js'
 import { getTraces, getTrace, clearTraces, getTraceStatus } from './runtime/turn-trace.js'
 import { getTerminalStreamSnapshot } from './terminal-stream.js'
 import { getSelfEvolutionSnapshot } from './memory/self-evolution.js'
+import { markdownImage, persistChatMediaDataUrl } from './chat-media.js'
 
 export { emitEvent }
 
@@ -53,6 +54,7 @@ const DEFAULT_AGENT_NAME = '小白龙'
 const DEFAULT_API_HOST = '127.0.0.1'
 const INBOUND_MESSAGE_DEDUPE_TTL_MS = 10_000
 const INBOUND_MESSAGE_FALLBACK_DEDUPE_MS = 1_500
+const MAX_INBOUND_CHAT_MEDIA = 8
 const recentInboundMessages = new Map()
 
 function pruneRecentInboundMessages(now = Date.now()) {
@@ -255,6 +257,58 @@ function readJsonBody(req) {
   })
 }
 
+function collectInboundChatMedia(body = {}) {
+  const out = []
+  const push = (item, fallbackAlt = 'image') => {
+    if (!item) return
+    if (typeof item === 'string') {
+      out.push({ dataUrl: item, alt: fallbackAlt })
+      return
+    }
+    if (typeof item !== 'object') return
+    const dataUrl = item.data_url || item.dataUrl || item.url || item.src || item.image
+    if (!dataUrl) return
+    out.push({
+      dataUrl: String(dataUrl),
+      alt: item.alt || item.name || item.filename || fallbackAlt,
+    })
+  }
+
+  if (Array.isArray(body.attachments)) {
+    for (const item of body.attachments) push(item, 'attachment')
+  }
+  if (Array.isArray(body.images)) {
+    for (const item of body.images) push(item, 'image')
+  }
+  push(body.image_data_url || body.imageDataUrl || body.image, 'image')
+  push(body.screenshot_data_url || body.screenshotDataUrl || body.screenshot, 'system screenshot')
+
+  return out
+    .filter(item => /^data:image\//i.test(String(item.dataUrl || '').trim()))
+    .slice(0, MAX_INBOUND_CHAT_MEDIA)
+}
+
+function appendInboundChatMediaMarkdown(content = '', body = {}) {
+  const media = []
+  for (const item of collectInboundChatMedia(body)) {
+    try {
+      const stored = persistChatMediaDataUrl(item.dataUrl)
+      media.push({
+        ...stored,
+        alt: item.alt || 'image',
+        markdown: markdownImage(stored.url, item.alt || 'image'),
+      })
+    } catch (err) {
+      console.warn('[message] inbound chat media ignored:', err?.message || err)
+    }
+  }
+  if (media.length === 0) return { content, media }
+  return {
+    content: `${content.trim()}\n\n${media.map(item => item.markdown).join('\n')}`.trim(),
+    media,
+  }
+}
+
 function contentTypeFor(filePath) {
   switch (path.extname(filePath).toLowerCase()) {
     case '.html':
@@ -408,8 +462,10 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
         const { from_id = 'ID:000001', content, channel = 'API' } = body
         if (!content?.trim()) return jsonResponse(res, 400, { error: 'content required' })
         const trimmed = content.trim()
+        const enhanced = appendInboundChatMediaMarkdown(trimmed, body)
+        const queuedContent = enhanced.content
         const clientMessageId = body.client_message_id ?? body.clientMessageId ?? ''
-        claim = claimInboundMessage({ fromId: from_id, channel, content: trimmed, clientMessageId })
+        claim = claimInboundMessage({ fromId: from_id, channel, content: queuedContent, clientMessageId })
         if (!claim.claimed) {
           return jsonResponse(res, 200, { ok: true, duplicate: true, agent_name: getAgentName() })
         }
@@ -419,10 +475,11 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
         const meta = {}
         if (strictEvaluation !== undefined) meta.strictEvaluation = strictEvaluation
         if (Array.isArray(forbiddenTools)) meta.forbiddenTools = forbiddenTools
-        const queued = pushMessage(from_id, trimmed, channel, meta)
+        if (enhanced.media.length) meta.attachments = enhanced.media
+        const queued = pushMessage(from_id, queuedContent, channel, meta)
         const conversationId = queued?.conversationId || 0
-        emitEvent('message_in', { from_id, content: trimmed, channel, timestamp: new Date().toISOString(), conversation_id: conversationId })
-        jsonResponse(res, 200, { ok: true, agent_name: getAgentName(), conversation_id: conversationId })
+        emitEvent('message_in', { from_id, content: queuedContent, channel, timestamp: new Date().toISOString(), conversation_id: conversationId, attachments: enhanced.media })
+        jsonResponse(res, 200, { ok: true, agent_name: getAgentName(), conversation_id: conversationId, attachments: enhanced.media })
       } catch (e) {
         if (claim?.claimed && claim.key) recentInboundMessages.delete(claim.key)
         jsonResponse(res, 400, { error: e.message })

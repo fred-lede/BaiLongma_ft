@@ -683,27 +683,55 @@ function decodeProcessOutput(chunks) {
   }
 }
 
-function runProcess(file, args = [], cwd) {
+function runProcess(file, args = [], cwd, options = {}) {
+  const timeoutMs = Number(options.timeoutMs) || 120000
   return new Promise((resolve) => {
-    const child = spawn(file, args, {
-      cwd: cwd || paths.musicDir,
-      windowsHide: true,
-      env: {
-        ...process.env,
-        PYTHONIOENCODING: 'utf-8',
-        PYTHONUTF8: '1',
-      },
-    })
     const stdoutChunks = []
     const stderrChunks = []
+    let child = null
+    let settled = false
+    let timer = null
+
+    const finish = (result) => {
+      if (settled) return
+      settled = true
+      if (timer) clearTimeout(timer)
+      resolve(result)
+    }
+
+    try {
+      child = spawn(file, args, {
+        cwd: cwd || paths.musicDir,
+        windowsHide: true,
+        shell: IS_WIN && /\.(cmd|bat)$/i.test(file),
+        env: {
+          ...process.env,
+          PYTHONIOENCODING: 'utf-8',
+          PYTHONUTF8: '1',
+        },
+      })
+    } catch (err) {
+      finish({ code: -1, stdout: '', stderr: err.message })
+      return
+    }
+
+    timer = setTimeout(() => {
+      try { child.kill() } catch {}
+      finish({
+        code: -1,
+        stdout: decodeProcessOutput(stdoutChunks),
+        stderr: `process timed out after ${timeoutMs}ms`,
+      })
+    }, timeoutMs)
+
     child.stdout?.on('data', d => { stdoutChunks.push(Buffer.from(d)) })
     child.stderr?.on('data', d => { stderrChunks.push(Buffer.from(d)) })
-    child.on('close', code => resolve({
+    child.on('close', code => finish({
       code,
       stdout: decodeProcessOutput(stdoutChunks),
       stderr: decodeProcessOutput(stderrChunks),
     }))
-    child.on('error', err => resolve({
+    child.on('error', err => finish({
       code: -1,
       stdout: decodeProcessOutput(stdoutChunks),
       stderr: err.message,
@@ -720,31 +748,255 @@ const YTDLP_DOWNLOAD_SOURCES = [
   `https://ghfast.top/${YTDLP_URL}`,
 ]
 
-async function resolveYtDlp() {
-  // 1. 系统 PATH 里有就直接用
-  const sys = await runProcess('yt-dlp', ['--version'], paths.musicDir)
-  if (sys.code === 0) return 'yt-dlp'
+function splitNonEmptyLines(text) {
+  return String(text || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean)
+}
 
-  // 2. music 目录里有本地副本就用它
-  if (fs.existsSync(YTDLP_LOCAL)) {
-    const local = await runProcess(YTDLP_LOCAL, ['--version'], paths.musicDir)
-    if (local.code === 0) return YTDLP_LOCAL
+function compactProcessError(result) {
+  const lines = splitNonEmptyLines(`${result?.stderr || ''}\n${result?.stdout || ''}`)
+  return (lines.slice(-8).join(' | ') || `exit code ${result?.code ?? 'unknown'}`).slice(0, 700)
+}
+
+function normalizeYtDlpCommand(spec, version = '') {
+  return {
+    file: spec.file,
+    argsPrefix: Array.isArray(spec.argsPrefix) ? spec.argsPrefix : [],
+    label: spec.label || [spec.file, ...(spec.argsPrefix || [])].join(' '),
+    local: Boolean(spec.local),
+    version: String(version || '').trim(),
   }
+}
 
-  // 3. 自动下载 yt-dlp.exe 到 music 目录（GitHub 直连 + 国内镜像兜底）
-  emitEvent('action', { tool: 'music', summary: 'yt-dlp 未安装，正在自动下载…', detail: YTDLP_URL })
+function ytdlpCommandKey(command) {
+  return `${command.file}\0${(command.argsPrefix || []).join('\0')}`
+}
+
+async function probeYtDlpCommand(spec) {
+  const result = await runProcess(spec.file, [...(spec.argsPrefix || []), '--version'], paths.musicDir, { timeoutMs: 15000 })
+  if (result.code !== 0) return null
+  const version = splitNonEmptyLines(result.stdout)[0] || splitNonEmptyLines(result.stderr)[0] || ''
+  return normalizeYtDlpCommand(spec, version)
+}
+
+function runYtDlp(command, args = [], options = {}) {
+  return runProcess(command.file, [...(command.argsPrefix || []), ...args], paths.musicDir, options)
+}
+
+async function downloadLocalYtDlp() {
+  emitEvent('action', { tool: 'music', summary: 'yt-dlp 未安装或不可用，正在准备本地副本', detail: YTDLP_URL })
+
   for (const src of YTDLP_DOWNLOAD_SOURCES) {
     try {
       const res = await fetch(src, { signal: AbortSignal.timeout(60000) })
       if (!res.ok) continue
       const buf = Buffer.from(await res.arrayBuffer())
-      if (buf.length < 1_000_000) continue   // 太小八成是错误页/重定向，不是真 exe
-      fs.writeFileSync(YTDLP_LOCAL, buf)
+      if (buf.length < 1_000_000) continue
+      const tmp = `${YTDLP_LOCAL}.download`
+      fs.writeFileSync(tmp, buf)
+      fs.renameSync(tmp, YTDLP_LOCAL)
       try { fs.chmodSync(YTDLP_LOCAL, 0o755) } catch {}
-      return YTDLP_LOCAL
-    } catch { /* 换下一个源 */ }
+      const local = await probeYtDlpCommand({ file: YTDLP_LOCAL, label: 'local yt-dlp.exe', local: true })
+      if (local) return local
+    } catch {}
   }
   return null
+}
+
+async function resolveYtDlpCommands({ forceLocalRefresh = false } = {}) {
+  const specs = []
+  if (fs.existsSync(YTDLP_LOCAL) && !forceLocalRefresh) {
+    specs.push({ file: YTDLP_LOCAL, label: 'local yt-dlp.exe', local: true })
+  }
+  specs.push({ file: 'yt-dlp', label: 'PATH yt-dlp' })
+  if (IS_WIN) {
+    specs.push({ file: 'yt-dlp.exe', label: 'PATH yt-dlp.exe' })
+    specs.push({ file: 'yt-dlp.cmd', label: 'PATH yt-dlp.cmd' })
+    specs.push({ file: 'yt-dlp.bat', label: 'PATH yt-dlp.bat' })
+  }
+  specs.push({ file: 'python', argsPrefix: ['-m', 'yt_dlp'], label: 'python -m yt_dlp' })
+  if (IS_WIN) specs.push({ file: 'py', argsPrefix: ['-m', 'yt_dlp'], label: 'py -m yt_dlp' })
+
+  const commands = []
+  const seen = new Set()
+  for (const spec of specs) {
+    const command = await probeYtDlpCommand(spec)
+    if (!command) continue
+    const key = ytdlpCommandKey(command)
+    if (seen.has(key)) continue
+    seen.add(key)
+    commands.push(command)
+  }
+
+  if (forceLocalRefresh || commands.length === 0) {
+    const local = await downloadLocalYtDlp()
+    if (local && !seen.has(ytdlpCommandKey(local))) commands.push(local)
+  }
+
+  return commands.sort((a, b) => {
+    const versionCmp = String(b.version).localeCompare(String(a.version))
+    if (versionCmp) return versionCmp
+    return Number(b.local) - Number(a.local)
+  })
+}
+
+function shouldRefreshYtDlp(failures) {
+  const text = failures.map(f => f.error || '').join('\n')
+  return /HTTP Error 412|Precondition Failed|Unable to download JSON metadata|signature|nsig|Unsupported URL|Sign in to confirm/i.test(text)
+}
+
+function uniqueStrings(values) {
+  const out = []
+  const seen = new Set()
+  for (const value of values) {
+    const s = String(value || '').trim()
+    if (!s || seen.has(s)) continue
+    seen.add(s)
+    out.push(s)
+  }
+  return out
+}
+
+function applyKnownMusicAliases(query) {
+  let q = String(query || '').trim()
+  q = q.replace(/肖斯塔科维奇|蕭士塔高維契|萧斯塔科维奇|老肖/gi, 'Shostakovich')
+  q = q.replace(/第二圆舞曲|第二圓舞曲|圆舞曲二号|圓舞曲二號/gi, 'Waltz No 2')
+  return q
+}
+
+function buildMusicQueryVariants(query) {
+  const raw = String(query || '').trim()
+  const aliased = applyKnownMusicAliases(raw)
+  const variants = [raw, aliased]
+  if (/Waltz\s*No\.?\s*2|第二[圆圓]舞曲/i.test(raw)) {
+    variants.push('Shostakovich Waltz No 2', 'Dmitri Shostakovich Waltz No. 2')
+  }
+  return uniqueStrings(variants)
+}
+
+function inferTrackMetaFromFile(filePath) {
+  const ext = path.extname(filePath)
+  const base = path.basename(filePath, ext).trim()
+  const parts = base.split(/\s+-\s+/).map(p => p.trim()).filter(Boolean)
+  if (parts.length >= 2) {
+    return { artist: parts[0], title: parts.slice(1).join(' - ') }
+  }
+  return { artist: '', title: base }
+}
+
+function scanMusicDirIntoLibrary(musicDir) {
+  const added = []
+  let entries = []
+  try {
+    entries = fs.readdirSync(musicDir, { withFileTypes: true })
+  } catch {
+    return added
+  }
+  for (const entry of entries) {
+    if (!entry.isFile()) continue
+    const ext = path.extname(entry.name).toLowerCase()
+    if (!MUSIC_AUDIO_EXTS.has(ext)) continue
+    const filePath = path.join(musicDir, entry.name)
+    const meta = inferTrackMetaFromFile(filePath)
+    const track = upsertMusicTrack({ title: meta.title, artist: meta.artist, filePath })
+    added.push({ id: track.id, title: track.title, artist: track.artist, file_path: track.file_path })
+  }
+  return added
+}
+
+function searchMusicLibraryVariants(query, limit = 20) {
+  const rows = []
+  const seen = new Set()
+  for (const variant of buildMusicQueryVariants(query)) {
+    for (const row of searchMusicLibrary(variant, limit)) {
+      const key = row.file_path || row.id
+      if (seen.has(key)) continue
+      seen.add(key)
+      rows.push(row)
+      if (rows.length >= limit) return rows
+    }
+  }
+  return rows
+}
+
+async function fetchYoutubeWatchUrls(query) {
+  try {
+    const params = new URLSearchParams({ search_query: query })
+    const res = await fetch(`https://www.youtube.com/results?${params}`, {
+      signal: AbortSignal.timeout(12000),
+      headers: {
+        'User-Agent': 'Mozilla/5.0 BaiLongma/1.0',
+        'Accept-Language': 'en-US,en;q=0.9,zh-CN;q=0.8',
+      },
+    })
+    if (!res.ok) return []
+    const html = await res.text()
+    const ids = []
+    for (const match of html.matchAll(/(?:watch\?v=|\"videoId\":\"|%2Fwatch%3Fv%3D)([A-Za-z0-9_-]{11})/g)) {
+      ids.push(match[1])
+      if (ids.length >= 8) break
+    }
+    return uniqueStrings(ids).slice(0, 3).map(id => `https://www.youtube.com/watch?v=${id}`)
+  } catch {
+    return []
+  }
+}
+
+async function fetchBilibiliVideoUrls(query) {
+  try {
+    const params = new URLSearchParams({ search_type: 'video', keyword: query })
+    const res = await fetch(`https://api.bilibili.com/x/web-interface/search/type?${params}`, {
+      signal: AbortSignal.timeout(12000),
+      headers: {
+        'User-Agent': 'Mozilla/5.0 BaiLongma/1.0',
+        Referer: 'https://search.bilibili.com/',
+      },
+    })
+    if (!res.ok) return []
+    const data = await res.json()
+    const rows = Array.isArray(data?.data?.result) ? data.data.result : []
+    const urls = []
+    for (const row of rows) {
+      if (row?.bvid) urls.push(`https://www.bilibili.com/video/${row.bvid}`)
+      else if (row?.arcurl) urls.push(String(row.arcurl).replace(/^http:/, 'https:'))
+      if (urls.length >= 3) break
+    }
+    return uniqueStrings(urls)
+  } catch {
+    return []
+  }
+}
+
+async function buildMusicDownloadTargets(query, platform) {
+  const variants = buildMusicQueryVariants(query)
+  const primaryQuery = variants[0] || query
+  const aliasedQuery = variants[1] || primaryQuery
+  const [youtubeDirect, biliDirect] = await Promise.all([
+    fetchYoutubeWatchUrls(aliasedQuery),
+    fetchBilibiliVideoUrls(aliasedQuery),
+  ])
+  const youtubeSearch = variants.map(q => `ytsearch1:${q}`)
+  const biliSearch = variants.map(q => `bilisearch1:${q}`)
+
+  const groups = platform === 'bilibili'
+    ? [biliDirect, biliSearch, youtubeDirect, youtubeSearch]
+    : [youtubeDirect, youtubeSearch, biliDirect, biliSearch]
+  return uniqueStrings(groups.flat())
+}
+
+async function tryYtDlpDownload(commands, targets, dlArgs) {
+  const failures = []
+  for (const command of commands) {
+    for (const target of targets) {
+      emitEvent('action', { tool: 'music', summary: `正在尝试下载：${command.label}`, detail: String(target).slice(0, 120) })
+      let result = await runYtDlp(command, [...dlArgs, target], { timeoutMs: 180000 })
+      if (result.code !== 0 && /ssl|EOF occurred in violation of protocol/i.test(result.stderr)) {
+        result = await runYtDlp(command, [...dlArgs, '--no-check-certificates', target], { timeoutMs: 180000 })
+      }
+      if (result.code === 0) return { ok: true, result, command, target, failures }
+      failures.push({ command: command.label, target, error: compactProcessError(result) })
+    }
+  }
+  return { ok: false, failures }
 }
 
 export async function execMusic(args = {}) {
@@ -761,23 +1013,19 @@ export async function execMusic(args = {}) {
   if (action === 'search') {
     const q = String(args.query || '').trim()
     if (!q) return JSON.stringify({ ok: false, error: 'query required' })
-    const rows = searchMusicLibrary(q, Number(args.limit) || 20)
-    return JSON.stringify({ ok: true, count: rows.length, tracks: rows })
+    const limit = Number(args.limit) || 20
+    let rows = searchMusicLibraryVariants(q, limit)
+    let scanned = 0
+    if (!rows.length) {
+      scanned = scanMusicDirIntoLibrary(musicDir).length
+      rows = searchMusicLibraryVariants(q, limit)
+    }
+    return JSON.stringify({ ok: true, count: rows.length, tracks: rows, scanned })
   }
 
   // ── scan ──────────────────────────────────────────────────────────────────
   if (action === 'scan') {
-    const entries = fs.readdirSync(musicDir, { withFileTypes: true })
-    const added = []
-    for (const entry of entries) {
-      if (!entry.isFile()) continue
-      const ext = path.extname(entry.name).toLowerCase()
-      if (!MUSIC_AUDIO_EXTS.has(ext)) continue
-      const filePath = path.join(musicDir, entry.name)
-      const baseName = path.basename(entry.name, ext)
-      const track = upsertMusicTrack({ title: baseName, filePath })
-      added.push({ id: track.id, title: track.title, file_path: track.file_path })
-    }
+    const added = scanMusicDirIntoLibrary(musicDir)
     return JSON.stringify({ ok: true, scanned: added.length, tracks: added })
   }
 
@@ -788,10 +1036,10 @@ export async function execMusic(args = {}) {
     if (!fs.existsSync(filePath)) return JSON.stringify({ ok: false, error: `file not found: ${filePath}` })
     const ext = path.extname(filePath).toLowerCase()
     if (!MUSIC_AUDIO_EXTS.has(ext)) return JSON.stringify({ ok: false, error: `unsupported format: ${ext}` })
-    const baseName = path.basename(filePath, ext)
+    const meta = inferTrackMetaFromFile(filePath)
     const track = upsertMusicTrack({
-      title: String(args.title || baseName),
-      artist: String(args.artist || ''),
+      title: String(args.title || meta.title),
+      artist: String(args.artist || meta.artist || ''),
       album: String(args.album || ''),
       filePath,
     })
@@ -801,14 +1049,26 @@ export async function execMusic(args = {}) {
   // ── download ──────────────────────────────────────────────────────────────
   if (action === 'download') {
     // 自动解析 yt-dlp 路径（没有则自动下载）
-    const ytdlp = await resolveYtDlp()
-    if (!ytdlp) return JSON.stringify({ ok: false, error: 'yt-dlp 自动下载失败（可能无法连接 GitHub）。请检查网络，或手动把 yt-dlp.exe 放到 music 目录。' })
-
     const url = String(args.url || '').trim()
     // query 兜底：没有明确 URL 时，用关键词让 yt-dlp 自己搜索并下载第一条，
     // 这样 agent 不必凭空找/猜一个真实视频 URL（这是放歌失败的主因）。
     const query = String(args.query || '').trim()
       || [String(args.title || '').trim(), String(args.artist || '').trim()].filter(Boolean).join(' ')
+
+    if (!url && query) {
+      let existing = searchMusicLibraryVariants(query, 1)
+      if (!existing.length) {
+        scanMusicDirIntoLibrary(musicDir)
+        existing = searchMusicLibraryVariants(query, 1)
+      }
+      const track = existing.find(row => row?.file_path && fs.existsSync(row.file_path))
+      if (track) return JSON.stringify({ ok: true, track, reused: true, lrc_fetched: Boolean(track.lrc) })
+    }
+
+    const ytdlpCommands = await resolveYtDlpCommands()
+    if (!ytdlpCommands.length) {
+      return JSON.stringify({ ok: false, error: 'yt-dlp 不可用：本机未找到可执行版本，且本地副本自动准备失败。请检查网络，或手动把 yt-dlp.exe 放到 music 目录。' })
+    }
 
     // 构造按序尝试的下载目标：
     //  - 有明确 URL → 只用它
@@ -818,13 +1078,11 @@ export async function execMusic(args = {}) {
     if (url) {
       targets = [url]
     } else if (query) {
-      const yt = `ytsearch1:${query}`
-      const bili = `bilisearch1:${query}`
-      // CN/bilibili 优先 B 站，否则优先 YouTube；两者互为兜底。
-      targets = platform === 'bilibili' ? [bili, yt] : [yt, bili]
+      targets = await buildMusicDownloadTargets(query, platform)
     } else {
       return JSON.stringify({ ok: false, error: 'download 需要 url 或 query（歌名/歌手），至少给一个' })
     }
+    if (!targets.length) return JSON.stringify({ ok: false, error: '没有找到可尝试的音乐下载目标' })
 
     // 文件命名：Agent 传了 title 就用干净标题命名。query 直下时 yt-dlp 默认用
     // 视频标题（一长串脏名），用 title/artist 命名既好看，定位文件也更稳。
@@ -846,21 +1104,25 @@ export async function execMusic(args = {}) {
     // 而不是面对一段静默以为卡死。
     emitEvent('action', { tool: 'music', summary: `正在下载歌曲：${niceName || query || url}`, detail: '' })
 
-    let result = null
-    let lastErr = ''
-    for (const target of targets) {
-      result = await runProcess(ytdlp, [...dlArgs, target])
-      // SSL 握手失败时降级：加 --no-check-certificates 重试一次
-      if (result.code !== 0 && /ssl|EOF occurred in violation of protocol/i.test(result.stderr)) {
-        result = await runProcess(ytdlp, [...dlArgs, '--no-check-certificates', target])
+    const downloadStartedAt = Date.now()
+    let attempt = await tryYtDlpDownload(ytdlpCommands, targets, dlArgs)
+    if (!attempt.ok && shouldRefreshYtDlp(attempt.failures)) {
+      const refreshed = await resolveYtDlpCommands({ forceLocalRefresh: true })
+      if (refreshed.length) {
+        attempt = await tryYtDlpDownload(refreshed, targets, dlArgs)
       }
-      if (result.code === 0) break
-      lastErr = result.stderr
     }
 
-    if (!result || result.code !== 0) {
-      return JSON.stringify({ ok: false, error: `yt-dlp failed: ${String(lastErr).slice(0, 400)}` })
+    if (!attempt.ok) {
+      const lastErr = attempt.failures.slice(-3).map(f => `${f.command} ${f.target}: ${f.error}`).join(' || ')
+      return JSON.stringify({
+        ok: false,
+        error: `yt-dlp failed: ${lastErr.slice(0, 700)}`,
+        attempts: attempt.failures.slice(-5),
+      })
     }
+
+    const { result } = attempt
 
     // Parse output filepath (last non-empty line)
     const lines = result.stdout.trim().split('\n').map(l => l.trim()).filter(Boolean)
@@ -869,8 +1131,9 @@ export async function execMusic(args = {}) {
     // Fallback: scan for newest mp3 in musicDir
     if (!filePath || !fs.existsSync(filePath)) {
       const files = fs.readdirSync(musicDir)
-        .filter(f => f.endsWith('.mp3'))
+        .filter(f => f.toLowerCase().endsWith('.mp3'))
         .map(f => ({ f, mt: fs.statSync(path.join(musicDir, f)).mtimeMs }))
+        .filter(x => x.mt >= downloadStartedAt - 15000)
         .sort((a, b) => b.mt - a.mt)
       if (files.length) filePath = path.join(musicDir, files[0].f)
     }
@@ -879,9 +1142,9 @@ export async function execMusic(args = {}) {
       return JSON.stringify({ ok: false, error: 'Download completed but could not locate output file' })
     }
 
-    const baseName = path.basename(filePath, '.mp3')
-    const title  = String(args.title  || baseName)
-    const artist = String(args.artist || '')
+    const meta = inferTrackMetaFromFile(filePath)
+    const title  = String(args.title  || meta.title)
+    const artist = String(args.artist || meta.artist || '')
 
     // Auto-fetch lyrics
     let lrc = ''
@@ -890,7 +1153,7 @@ export async function execMusic(args = {}) {
     }
 
     const track = upsertMusicTrack({ title, artist, album: String(args.album || ''), filePath, lrc, sourceUrl: url || query })
-    return JSON.stringify({ ok: true, track, lrc_fetched: Boolean(lrc) })
+    return JSON.stringify({ ok: true, track, lrc_fetched: Boolean(lrc), source: attempt.target, downloader: attempt.command?.label })
   }
 
   // ── get_lyrics ────────────────────────────────────────────────────────────

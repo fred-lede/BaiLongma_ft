@@ -2012,8 +2012,8 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
           const provider = rawCfg.voiceProvider || msg.provider || 'aliyun'
           session = createCloudASRSession(
             { provider, lang: msg.lang || 'zh', ...rawCfg },
-            (text, isFinal, seg) => {
-              try { ws.send(JSON.stringify({ type: 'transcript', text, is_final: isFinal, seg })) } catch {}
+            (text, isFinal, seg, language) => {
+              try { ws.send(JSON.stringify({ type: 'transcript', text, is_final: isFinal, seg, language: language || '' })) } catch {}
             },
             (errMsg) => {
               try { ws.send(JSON.stringify({ type: 'error', message: errMsg })) } catch {}

@@ -515,7 +515,7 @@ function createAetherMeshSession(config, lang, onTranscript, onError, onClose) {
       const body = Buffer.concat([
         part(`name="file"; filename="audio.wav"`, 'audio/wav', wavBuf),
         part(`name="model"`, null, Buffer.from(model)),
-        part(`name="language"`, null, Buffer.from(lang || 'zh')),
+        part(`name="response_format"`, null, Buffer.from('verbose_json')),
         Buffer.from(`--${boundary}--\r\n`),
       ])
       log(`flush: multipart body ${body.length} bytes`)
@@ -540,7 +540,10 @@ function createAetherMeshSession(config, lang, onTranscript, onError, onClose) {
       const data = await res.json()
       log(`flush: response data = ${JSON.stringify(data)}`)
       if (data?.text) {
-        if (!closed) onTranscript(data.text, true, 'am')
+        // verbose_json returns { text, language, segments: [...] }
+        // json mode returns { text }
+        const detectedLang = data.language || ''
+        if (!closed) onTranscript(data.text, true, 'am', detectedLang)
       } else {
         log('flush: empty result')
         if (!closed) onError('AetherMesh ASR returned empty result')

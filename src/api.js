@@ -459,11 +459,11 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
       let claim = null
       try {
         const body = await readJsonBody(req)
-        const { from_id = 'ID:000001', content, channel = 'API' } = body
-        if (!content?.trim()) return jsonResponse(res, 400, { error: 'content required' })
-        const trimmed = content.trim()
+        const { from_id = 'ID:000001', content = '', channel = 'API' } = body
+        const trimmed = String(content || '').trim()
         const enhanced = appendInboundChatMediaMarkdown(trimmed, body)
         const queuedContent = enhanced.content
+        if (!queuedContent.trim()) return jsonResponse(res, 400, { error: 'content or image required' })
         const clientMessageId = body.client_message_id ?? body.clientMessageId ?? ''
         claim = claimInboundMessage({ fromId: from_id, channel, content: queuedContent, clientMessageId })
         if (!claim.claimed) {

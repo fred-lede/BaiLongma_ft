@@ -89,6 +89,7 @@ const MM_GEN_TOOLS = {
   music:  'generate_music',
   image:  'generate_image',
 }
+const INLINE_IMAGE_RE = /!\[[^\]]*]\(|\/media\/chat\/|data:image\//i
 
 // ---- 关键词触发集 ----
 //
@@ -365,6 +366,7 @@ export function selectTools(ctx = {}) {
   // software-install=isSoftwareInstallRequest），保留与旧分支等价的解耦语义。
   const capCtx = { text: body, rawText: messageBody, isTick, mmCaps, hasTask }
   for (const t of capabilityToolsFor(capCtx)) out.add(t)
+  if (INLINE_IMAGE_RE.test(messageBody)) out.add('analyze_image')
 
   if (hitsPersonCardIntent(messageBody)) {
     for (const t of PERSON_CARD_TOOLS) out.add(t)

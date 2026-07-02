@@ -1027,6 +1027,59 @@ body {
 }
 .slash-menu[hidden] { display: none; }
 
+.paste-attachments {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-height: 132px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 10px 22px 8px 50px;
+  border-top: 1px solid var(--line);
+}
+.paste-attachments[hidden] { display: none; }
+.paste-attachments:not([hidden]) + #input-row { border-top-color: transparent; }
+
+.paste-attachment {
+  position: relative;
+  width: 58px;
+  height: 58px;
+  flex: 0 0 auto;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  overflow: visible;
+  background: color-mix(in srgb, var(--panel-raised) 80%, transparent);
+}
+
+.paste-attachment img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  border-radius: 9px;
+  object-fit: cover;
+}
+
+.paste-attachment-remove {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: var(--bg-deep);
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 16px;
+  cursor: pointer;
+  box-shadow: var(--shadow-pop);
+}
+
+.paste-attachment-remove:hover {
+  background: color-mix(in srgb, var(--danger) 28%, var(--bg-deep));
+}
+
 .slash-item {
   display: flex;
   align-items: baseline;
@@ -4219,6 +4272,7 @@ body.worldcup-mode .console.wc-collapsed {
   overflow: hidden;
 }
 body.worldcup-mode .console.wc-collapsed #chat-history,
+body.worldcup-mode .console.wc-collapsed #paste-attachments,
 body.worldcup-mode .console.wc-collapsed #input-row,
 body.worldcup-mode .console.wc-collapsed > #voice-panel .voice-transcript { display: none; }
 body.worldcup-mode .console.wc-collapsed > #voice-panel {

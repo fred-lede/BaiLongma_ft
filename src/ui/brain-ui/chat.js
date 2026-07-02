@@ -25,9 +25,11 @@ export function initChat({
   const msgInput = document.getElementById("msg-input");
   const chatArea = document.getElementById("chat-area");
   const sendBtn = document.getElementById("send-btn");
+  const pasteAttachments = document.getElementById("paste-attachments");
 
   let inputLocked = false;
   const pendingLocalSends = new Set();
+  const pendingPastedImages = [];
   let closeTimer = null;
   let hasPendingJarvisMessage = false;
   let pendingMessageDismissed = false;
@@ -40,6 +42,8 @@ export function initChat({
   const RENDER_DEDUPE_TTL_MS = 2 * 60 * 1000;
 
   const PUSH_TO_TALK_PLACEHOLDER = "按住空格键开始说话";
+  const MAX_PASTED_IMAGES = 8;
+  const MAX_PASTED_IMAGE_BYTES = 12 * 1024 * 1024;
 
   function normalizeMessageId(value) {
     if (value === undefined || value === null || value === "") return "";
@@ -189,7 +193,7 @@ export function initChat({
   }
 
   function isTyping() {
-    return document.activeElement === msgInput || msgInput.value.trim().length > 0;
+    return document.activeElement === msgInput || msgInput.value.trim().length > 0 || pendingPastedImages.length > 0;
   }
 
   async function fetchChatHistory() {
@@ -292,8 +296,26 @@ export function initChat({
     return `local-${Date.now().toString(36)}-${rand}`;
   }
 
-  function localSendKey(channel, text) {
-    return `${String(channel || "TUI").toUpperCase()}\n${String(text || "").trim()}`;
+  function localSendKey(channel, text, attachments = []) {
+    const mediaKey = attachments
+      .map(item => `${item.id || ""}:${item.name || ""}:${String(item.data_url || "").length}`)
+      .join("|");
+    return `${String(channel || "TUI").toUpperCase()}\n${String(text || "").trim()}\n${mediaKey}`;
+  }
+
+  function safeMarkdownAlt(value, fallback = "image") {
+    return String(value || fallback).replace(/[\]\r\n]/g, " ").trim() || fallback;
+  }
+
+  function markdownImage(dataUrl, alt = "image") {
+    return `![${safeMarkdownAlt(alt)}](${dataUrl})`;
+  }
+
+  function appendAttachmentMarkdown(content = "", attachments = []) {
+    const images = attachments
+      .filter(item => item?.data_url)
+      .map(item => markdownImage(item.data_url, item.alt || item.name || "image"));
+    return [String(content || "").trim(), images.join("\n")].filter(Boolean).join("\n\n");
   }
 
   const SYSTEM_SCREENSHOT_RE = /(?:\u7cfb\u7edf|\u5c4f\u5e55)?\u622a\u56fe|\u8fd9\u5f20\u56fe|\u56fe\u91cc|\u770b\u56fe|screenshot|screen\s*shot/i;
@@ -304,8 +326,9 @@ export function initChat({
     return SYSTEM_SCREENSHOT_RE.test(raw) && !INLINE_IMAGE_RE.test(raw);
   }
 
-  async function maybeAttachSystemScreenshot(content) {
+  async function maybeAttachSystemScreenshot(content, { skip = false } = {}) {
     const base = { content, displayContent: content, attachments: [] };
+    if (skip) return base;
     if (!shouldAttachSystemScreenshot(content)) return base;
     const api = window.bailongma;
     if (typeof api?.getLatestSystemScreenshot !== "function") return base;
@@ -332,18 +355,155 @@ export function initChat({
     }
   }
 
+  function imageExtFromMime(mime = "") {
+    const type = String(mime || "").split(";")[0].trim().toLowerCase();
+    if (type === "image/jpeg" || type === "image/jpg") return ".jpg";
+    if (type === "image/gif") return ".gif";
+    if (type === "image/webp") return ".webp";
+    if (type === "image/bmp") return ".bmp";
+    return ".png";
+  }
+
+  function readFileAsDataUrl(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(reader.error || new Error("failed to read pasted image"));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function collectClipboardImageFiles(event) {
+    const data = event.clipboardData;
+    if (!data) return [];
+    const files = [];
+    const seen = new Set();
+    const pushFile = (file) => {
+      if (!file || !String(file.type || "").startsWith("image/")) return;
+      const key = `${file.name || ""}:${file.type || ""}:${file.size || 0}:${file.lastModified || 0}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      files.push(file);
+    };
+
+    for (const item of Array.from(data.items || [])) {
+      if (item?.kind === "file" && String(item.type || "").startsWith("image/")) {
+        pushFile(item.getAsFile());
+      }
+    }
+    for (const file of Array.from(data.files || [])) pushFile(file);
+    return files;
+  }
+
+  function renderPastedImages() {
+    if (!pasteAttachments) return;
+    pasteAttachments.replaceChildren();
+    pasteAttachments.hidden = pendingPastedImages.length === 0;
+    pendingPastedImages.forEach((item, index) => {
+      const shell = document.createElement("div");
+      shell.className = "paste-attachment";
+
+      const img = document.createElement("img");
+      img.src = item.data_url;
+      img.alt = item.alt || "pasted image";
+      img.draggable = false;
+      shell.appendChild(img);
+
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "paste-attachment-remove";
+      remove.setAttribute("aria-label", "Remove image");
+      remove.title = "Remove image";
+      remove.textContent = "\u00d7";
+      remove.addEventListener("click", (event) => {
+        event.preventDefault();
+        pendingPastedImages.splice(index, 1);
+        renderPastedImages();
+        try { msgInput.focus(); } catch {}
+      });
+      shell.appendChild(remove);
+
+      pasteAttachments.appendChild(shell);
+    });
+  }
+
+  function clearPastedImages() {
+    pendingPastedImages.length = 0;
+    renderPastedImages();
+  }
+
+  function snapshotPastedImages() {
+    return pendingPastedImages.map(item => ({
+      id: item.id,
+      data_url: item.data_url,
+      alt: item.alt || "pasted image",
+      name: item.name || "pasted-image.png",
+      source: "paste",
+    }));
+  }
+
+  async function addPastedImageFiles(files = []) {
+    const slots = Math.max(0, MAX_PASTED_IMAGES - pendingPastedImages.length);
+    if (slots <= 0) return;
+    const accepted = files
+      .filter(file => {
+        if (!file || file.size > MAX_PASTED_IMAGE_BYTES) {
+          console.warn("[paste image] ignored oversized image");
+          return false;
+        }
+        return true;
+      })
+      .slice(0, slots);
+    if (!accepted.length) return;
+
+    const images = await Promise.all(accepted.map(async (file, offset) => {
+      try {
+        const dataUrl = await readFileAsDataUrl(file);
+        if (!/^data:image\//i.test(dataUrl)) return null;
+        const ext = imageExtFromMime(file.type);
+        return {
+          id: newClientMessageId(),
+          data_url: dataUrl,
+          alt: "pasted image",
+          name: file.name || `pasted-image-${pendingPastedImages.length + offset + 1}${ext}`,
+        };
+      } catch (error) {
+        console.warn("[paste image]", error?.message || error);
+        return null;
+      }
+    }));
+
+    // Chromium/Electron may expose one pasted image through both clipboardData.items
+    // and clipboardData.files. File metadata can differ, so dedupe after reading bytes.
+    const seenDataUrls = new Set();
+    for (const image of images) {
+      if (!image || seenDataUrls.has(image.data_url)) continue;
+      seenDataUrls.add(image.data_url);
+      pendingPastedImages.push(image);
+    }
+    renderPastedImages();
+    openChat();
+  }
+
   async function send({ channel = null, label = null, text = null } = {}) {
     if (inputLocked) return;
     const fromInput = (text == null);
     const rawContent = (fromInput ? msgInput.value : text).trim();
-    if (!rawContent) return;
-    const pendingKey = localSendKey(channel, rawContent);
+    const pastedAttachments = fromInput ? snapshotPastedImages() : [];
+    if (!rawContent && pastedAttachments.length === 0) return;
+    const pendingKey = localSendKey(channel, rawContent, pastedAttachments);
     if (pendingLocalSends.has(pendingKey)) return;
     pendingLocalSends.add(pendingKey);
-    if (fromInput) { msgInput.value = ""; autoGrowInput(); }
-    const prepared = await maybeAttachSystemScreenshot(rawContent);
+    if (fromInput) {
+      msgInput.value = "";
+      clearPastedImages();
+      autoGrowInput();
+    }
+    const prepared = await maybeAttachSystemScreenshot(rawContent, { skip: pastedAttachments.length > 0 });
+    prepared.attachments = [...(prepared.attachments || []), ...pastedAttachments];
+    prepared.displayContent = appendAttachmentMarkdown(prepared.displayContent || prepared.content, pastedAttachments);
     const content = prepared.content;
-    if (!content) {
+    if (!content && !prepared.attachments.length) {
       pendingLocalSends.delete(pendingKey);
       return;
     }
@@ -404,6 +564,13 @@ export function initChat({
     updateSlashMenu();
     if (isTyping()) openChat();
     else if (!hasPendingJarvisMessage || pendingMessageDismissed) scheduleClose();
+  });
+  msgInput.addEventListener("paste", (event) => {
+    const imageFiles = collectClipboardImageFiles(event);
+    if (imageFiles.length) {
+      addPastedImageFiles(imageFiles);
+      openChat();
+    }
   });
   msgInput.addEventListener("keydown", event => {
     if (handleSlashKeydown(event)) return;

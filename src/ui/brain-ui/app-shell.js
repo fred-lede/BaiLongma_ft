@@ -135,6 +135,7 @@ const createConsole = () => `
   <div id="chat-history">
     <div id="chat-messages"></div>
   </div>
+  <div id="paste-attachments" class="paste-attachments" hidden></div>
   <div id="input-row">
     <div id="slash-menu" class="slash-menu" role="listbox" aria-label="命令" hidden></div>
     <span class="prompt-mark">▸</span>

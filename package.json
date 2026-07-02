@@ -48,7 +48,7 @@
     "better-sqlite3": "^12.8.0",
     "d3": "^7.9.0",
     "electron-updater": "^6.3.9",
-    "onnxruntime-node": "^1.23.0",
+    "onnxruntime-node": "^1.23.2",
     "openai": "^6.34.0",
     "wechat-ilink-client": "^0.1.0",
     "ws": "^8.20.1"
@@ -184,6 +184,6 @@
   },
   "allowScripts": {
     "@jjhbw/silero-vad@1.0.3": true,
-    "onnxruntime-node@1.27.0": true
+    "onnxruntime-node@1.23.0": true
   }
 }

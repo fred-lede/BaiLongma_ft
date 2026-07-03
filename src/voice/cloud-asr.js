@@ -464,94 +464,86 @@ function pcmToWav(pcmBuffer, sampleRate = 16000) {
 }
 
 function createAetherMeshSession(config, lang, onTranscript, onError, onClose) {
-  const baseURL = (config.aethermeshBaseURL || 'http://192.168.1.200:8001').replace(/\/+$/, '')
+  const baseURL = (config.aethermeshBaseURL || 'http://192.168.1.200:8001').replace(/\/+$/, '').replace(/^http:/, 'ws:').replace(/^https:/, 'wss:')
   const apiKey = config.aethermeshKey || ''
   const model = config.aethermeshAsrModel || 'whisper-large-v3'
-  let chunks = []
+  const wsURL = `${baseURL}/v1/audio/transcriptions/stream?model=${encodeURIComponent(model)}&language=${lang || 'zh'}&interim=true`
   let closed = false
+  let ws = null
+  let reconnectTimer = null
   let pendingFlush = null
 
   function log(...args) { console.error('[AetherMesh-ASR]', ...args) }
-  log(`session created (baseURL=${baseURL}, model=${model}, apiKey=${apiKey ? 'set' : 'unset'})`)
+
+  function connect() {
+    if (closed) return
+    const url = apiKey ? `${wsURL}&api_key=${encodeURIComponent(apiKey)}` : wsURL
+    log(`connecting to ${url.replace(apiKey, '***')}`)
+    ws = new WebSocket(url)
+
+    ws.on('open', () => {
+      log('connected')
+    })
+
+    ws.on('message', (data) => {
+      try {
+        const msg = typeof data === 'string' ? JSON.parse(data) : JSON.parse(data.toString())
+        if (msg.type === 'transcript') {
+          const detectedLang = msg.language || ''
+          if (!closed) onTranscript(msg.text, !!msg.is_final, 'am', detectedLang)
+        } else if (msg.type === 'error') {
+          if (!closed) onError(`AetherMesh ASR error: ${msg.message}`)
+        }
+      } catch (e) {
+        log('message parse error:', e.message)
+      }
+    })
+
+    ws.on('close', () => {
+      log('connection closed')
+      ws = null
+      if (!closed) {
+        // Auto-reconnect after 1s (transient disconnect)
+        reconnectTimer = setTimeout(connect, 1000)
+      }
+    })
+
+    ws.on('error', (err) => {
+      log('connection error:', err.message || err)
+    })
+  }
+
+  connect()
 
   return {
     sendAudio(pcmBuffer) {
       if (closed) { log('sendAudio: closed, drop'); return }
-      chunks.push(Buffer.from(pcmBuffer))
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        // WS not ready yet or reconnecting — buffer silently
+        log('sendAudio: ws not open, drop')
+        return
+      }
+      ws.send(pcmBuffer)
     },
     async flush() {
       if (closed) { log('flush: closed, skip'); return }
-      if (chunks.length === 0) { log('flush: no audio chunks, skip'); return }
-      const pcmData = Buffer.concat(chunks)
-      chunks = []
-      log(`flush: sending ${pcmData.length} bytes PCM → WAV to ${baseURL}/v1/audio/transcriptions`)
-      const promise = doFlush(pcmData)
-      pendingFlush = promise
-      await promise
-      if (pendingFlush === promise) pendingFlush = null
-    },
-    async close() {
-      log('close (awaiting pending flush...)')
-      closed = true
-      // Wait for any in-flight flush to complete before tearing down
-      if (pendingFlush) {
-        try { await Promise.race([pendingFlush, new Promise(r => setTimeout(r, 20000))]) } catch {}
-      }
-      chunks = []
-      onClose()
-    },
-  }
-
-  async function doFlush(pcmData) {
-    try {
-      const boundary = '----AetherMeshASR' + Math.random().toString(36).slice(2)
-      const wavBuf = pcmToWav(pcmData)
-      log(`flush: WAV size ${wavBuf.length} bytes`)
-
-      function part(disposition, contentType, data) {
-        const header = `--${boundary}\r\nContent-Disposition: form-data; ${disposition}\r\n${contentType ? `Content-Type: ${contentType}\r\n` : ''}\r\n`
-        return Buffer.concat([Buffer.from(header), data, Buffer.from('\r\n')])
-      }
-      const body = Buffer.concat([
-        part(`name="file"; filename="audio.wav"`, 'audio/wav', wavBuf),
-        part(`name="model"`, null, Buffer.from(model)),
-        part(`name="response_format"`, null, Buffer.from('verbose_json')),
-        Buffer.from(`--${boundary}--\r\n`),
-      ])
-      log(`flush: multipart body ${body.length} bytes`)
-
-      const headers = { 'Content-Type': `multipart/form-data; boundary=${boundary}` }
-      if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`
-      log(`flush: POSTing to ${baseURL}/v1/audio/transcriptions`)
-
-      const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), 15000)
-      const res = await fetch(`${baseURL}/v1/audio/transcriptions`, {
-        method: 'POST', headers, body, signal: controller.signal,
-      }).finally(() => clearTimeout(timeoutId))
-      log(`flush: response status ${res.status}`)
-
-      if (!res.ok) {
-        const errText = await res.text().catch(() => '')
-        log(`flush: error ${res.status}: ${errText}`)
-        if (!closed) onError(`AetherMesh ASR error ${res.status}: ${errText}`)
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        log('flush: ws not open, skip')
         return
       }
-      const data = await res.json()
-      log(`flush: response data = ${JSON.stringify(data)}`)
-      if (data?.text) {
-        // verbose_json returns { text, language, segments: [...] }
-        // json mode returns { text }
-        const detectedLang = data.language || ''
-        if (!closed) onTranscript(data.text, true, 'am', detectedLang)
-      } else {
-        log('flush: empty result')
-        if (!closed) onError('AetherMesh ASR returned empty result')
+      // Send flush command and wait for final transcript
+      ws.send(JSON.stringify({ type: 'flush' }))
+    },
+    async close() {
+      log('close...')
+      closed = true
+      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
+      if (ws) {
+        try { ws.close() } catch {}
+        ws = null
       }
-    } catch (err) {
-      log(`flush: exception: ${err.message}`)
-      if (!closed) onError(`AetherMesh ASR failed: ${err.message}`)
-    }
+      onClose()
+    },
   }
 }
 

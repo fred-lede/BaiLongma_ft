@@ -23,167 +23,43 @@
     "build:linux:x64": "node scripts/build-linux.mjs x64",
     "build:linux:arm64": "node scripts/build-linux.mjs arm64",
     "publish": "node scripts/prebuild-clean.mjs && node scripts/build-macos-speech.mjs && node ./node_modules/@electron/rebuild/lib/cli.js -f -w better-sqlite3 -v 33.4.11 && node ./node_modules/electron-builder/cli.js --publish always",
-    "postinstall": "node ./node_modules/electron-builder/cli.js install-app-deps",
-    "test:rule-context": "electron ./src/test-rule-context.js",
-    "test:complex-task": "electron ./src/test-complex-task.js",
-    "test:relevance": "electron ./src/test-relevance-selection.js",
-    "test:section-gate": "node ./src/test-section-gate.js",
-    "test:agent-skills": "node ./src/test-agent-skills.js",
-    "test:tool-factory": "node ./src/test-tool-factory.js",
-    "test:api-message-utf8": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$env:ELECTRON_RUN_AS_NODE='1'; .\\node_modules\\.bin\\electron.cmd .\\src\\test-api-message-utf8.js\"",
-    "test:strict-evaluation": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$env:ELECTRON_RUN_AS_NODE='1'; .\\node_modules\\.bin\\electron.cmd .\\src\\test-strict-evaluation.js\"",
-    "test:no-fake-detection": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$env:ELECTRON_RUN_AS_NODE='1'; .\\node_modules\\.bin\\electron.cmd .\\src\\test-no-fake-tool-detection.js\"",
-    "test:config-upgrade": "node ./src/test-config-upgrade.js",
-    "test:voice-continuous": "node ./src/test-voice-continuous.js",
-    "repair:memories:dry": "electron ./scripts/repair-memory-quality.js",
-    "repair:memories": "electron ./scripts/repair-memory-quality.js --apply",
-    "probe:config-upgrade": "node ./scripts/probe-config-upgrade.mjs",
-    "smoke:tools": "node scripts/smoke-tools.mjs",
-    "smoke:tool-factory-web": "node scripts/smoke-tool-factory-web-e2e.mjs",
-    "smoke:brain-ui": "node scripts/smoke-brain-ui.mjs",
-    "smoke:social": "node scripts/smoke-social.mjs"
+    "test:node": "node --test",
+    "test:web:build": "node scripts/test-web-build.mjs",
+    "test:web": "node --test tests/*.test.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "postinstall": "node ./node_modules/electron-builder/cli.js install-app-deps"
   },
   "dependencies": {
-    "@jjhbw/silero-vad": "^1.0.3",
+    "archiver": "^7.0.1",
+    "axios": "^1.7.9",
     "better-sqlite3": "^12.8.0",
-    "d3": "^7.9.0",
-    "electron-updater": "^6.3.9",
-    "onnxruntime-node": "^1.23.2",
-    "openai": "^6.34.0",
-    "wechat-ilink-client": "^0.1.0",
-    "ws": "^8.20.1"
-  },
-  "devDependencies": {
-    "@electron/rebuild": "^4.0.4",
-    "electron": "^33.2.0",
+    "cheerio": "1.0.0",
+    "chokidar": "^4.0.3",
     "electron-builder": "^25.1.8",
-    "playwright": "^1.59.1"
+    "express": "^5.1.0",
+    "follow-redirects": "^1.15.9",
+    "glob": "^11.0.1",
+    "htmlparser2": "^10.0.0",
+    "jsdom": "^26.1.0",
+    "jsonrepair": "^3.12.0",
+    "mammoth": "^1.9.0",
+    "minimist": "^1.2.8",
+    "openai": "^4.89.0",
+    "proxy-agent": "^6.5.0",
+    "puppeteer": "^24.6.1",
+    "qrcode": "^1.5.4",
+    "uuid": "^11.1.0",
+    "wav-encoder": "^1.3.0",
+    "ws": "^8.18.1",
+    "xlsx": "^0.18.5"
   },
-  "build": {
-    "appId": "com.xiaoyuanda.bailongma",
-    "productName": "Bailongma",
-    "artifactName": "${productName}-Setup-${version}.${ext}",
-    "npmRebuild": false,
-    "asar": true,
-    "asarUnpack": [
-      "**/node_modules/better-sqlite3/**",
-      "build/native-speech-recognizer",
-      "src/voice/**"
-    ],
-    "files": [
-      "electron/**/*",
-      "src/**/*",
-      "skills/**/*",
-      "scripts/seed-memories.js",
-      "index.html",
-      "dashboard.html",
-      "brain.html",
-      "brain-ui.html",
-      "website.html",
-      "systemPrompt.html",
-      "activation.html",
-      "focus-banner.html",
-      "turn-trace.html",
-      "build/icon.ico",
-      "build/icon.icns",
-      "build/icon.png",
-      "build/icon-mac-cartoon.png",
-      "build/native-speech-recognizer",
-      "sandbox/**/*",
-      "music/**/*",
-      "package.json",
-      "!**/*.map",
-      "!src/test-*",
-      "!src/**/test-*",
-      "!scripts/smoke-*.mjs",
-      "!src/**/__pycache__/**",
-      "!src/**/*.pyc",
-      "!**/node_modules/*/{CHANGELOG.md,README.md,readme.md,*.d.ts}",
-      "!**/node_modules/.cache",
-      "!**/.vscode",
-      "!data/**/*"
-    ],
-    "directories": {
-      "buildResources": "build",
-      "output": "dist"
-    },
-    "win": {
-      "icon": "build/icon.ico",
-      "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64"
-          ]
-        }
-      ]
-    },
-    "nsis": {
-      "oneClick": false,
-      "perMachine": false,
-      "allowToChangeInstallationDirectory": true,
-      "deleteAppDataOnUninstall": false,
-      "installerHeaderIcon": "build/installerHeaderIcon.ico",
-      "installerSidebar": "build/installerSidebar.bmp",
-      "uninstallerSidebar": "build/uninstallerSidebar.bmp",
-      "createDesktopShortcut": false,
-      "createStartMenuShortcut": false,
-      "shortcutName": "Bailongma"
-    },
-    "mac": {
-      "icon": "build/icon.icns",
-      "target": [
-        {
-          "target": "dmg",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
-        }
-      ],
-      "category": "public.app-category.productivity",
-      "extendInfo": {
-        "NSMicrophoneUsageDescription": "Bailongma uses the microphone for voice input when you enable voice features.",
-        "NSSpeechRecognitionUsageDescription": "Bailongma may use speech recognition for voice input features."
-      },
-      "artifactName": "${productName}-${version}-mac-${arch}.${ext}"
-    },
-    "linux": {
-      "icon": "build/icon.png",
-      "target": [
-        {
-          "target": "AppImage",
-          "arch": [
-            "x64"
-          ]
-        },
-        {
-          "target": "deb",
-          "arch": [
-            "x64"
-          ]
-        }
-      ],
-      "category": "Utility",
-      "artifactName": "${productName}-${version}-linux-${arch}.${ext}",
-      "desktop": {
-        "Name": "Bailongma",
-        "Comment": "A continuously running digital consciousness framework",
-        "Categories": "Utility;Network;",
-        "StartupWMClass": "Bailongma"
-      }
-    },
-    "publish": [
-      {
-        "provider": "github",
-        "owner": "xiaoyuanda666-ship-it",
-        "repo": "BaiLongma",
-        "releaseType": "release"
-      }
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "electron",
+      "electron-builder",
+      "fsevents",
+      "onnxruntime-node"
     ]
-  },
-  "allowScripts": {
-    "@jjhbw/silero-vad@1.0.3": true,
-    "onnxruntime-node@1.23.0": true
   }
 }

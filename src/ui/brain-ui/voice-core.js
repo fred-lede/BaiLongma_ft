@@ -81,6 +81,8 @@ const STATE_CFG = {
 export const BARGEIN_THRESHOLD = 0.09; // 振幅阈值（高于环境噪声和 AEC 残留）
 
 const CLOUD_WS_URL  = 'ws://127.0.0.1:3721/voice/cloud';
+// AetherMesh direct WS streaming ASR (bypass backend proxy)
+const AETHERMESH_WS_URL = 'ws://192.168.1.200:8001/v1/audio/transcriptions/stream';
 const VOICE_PROVIDER_KEY = 'bailongma-voice-provider';
 const VOICE_MIC_DEVICE_KEY = 'bailongma-voice-mic-device-id';
 

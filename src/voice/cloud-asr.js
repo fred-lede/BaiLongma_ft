@@ -471,9 +471,21 @@ function createAetherMeshSession(config, lang, onTranscript, onError, onClose) {
   let closed = false
   let ws = null
   let reconnectTimer = null
-  let pendingFlush = null
+  // Accumulation buffer: merge small PCM frames into ~1s chunks before sending
+  let accBuf = null       // Buffer being accumulated
+  let accBytes = 0        // bytes accumulated so far
+  const ACC_TARGET = 16000 * 2  // 1 second of PCM (16kHz, 16-bit mono)
 
   function log(...args) { console.error('[AetherMesh-ASR]', ...args) }
+
+  function flushAccumulated() {
+    if (!accBuf || accBytes === 0) return
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(accBuf.subarray(0, accBytes))
+    }
+    accBuf = null
+    accBytes = 0
+  }
 
   function connect() {
     if (closed) return
@@ -483,6 +495,8 @@ function createAetherMeshSession(config, lang, onTranscript, onError, onClose) {
 
     ws.on('open', () => {
       log('connected')
+      // Flush any accumulated audio that arrived while reconnecting
+      flushAccumulated()
     })
 
     ws.on('message', (data) => {
@@ -503,7 +517,6 @@ function createAetherMeshSession(config, lang, onTranscript, onError, onClose) {
       log('connection closed')
       ws = null
       if (!closed) {
-        // Auto-reconnect after 1s (transient disconnect)
         reconnectTimer = setTimeout(connect, 1000)
       }
     })
@@ -518,26 +531,40 @@ function createAetherMeshSession(config, lang, onTranscript, onError, onClose) {
   return {
     sendAudio(pcmBuffer) {
       if (closed) { log('sendAudio: closed, drop'); return }
-      if (!ws || ws.readyState !== WebSocket.OPEN) {
-        // WS not ready yet or reconnecting — buffer silently
-        log('sendAudio: ws not open, drop')
-        return
+      const buf = Buffer.from(pcmBuffer)
+      // Accumulate small PCM frames into larger chunks for Whisper
+      if (!accBuf) {
+        accBuf = Buffer.alloc(ACC_TARGET * 2) // pre-allocate generous size
+        accBytes = 0
       }
-      ws.send(pcmBuffer)
+      // Grow buffer if needed
+      if (accBytes + buf.length > accBuf.length) {
+        const newBuf = Buffer.alloc(Math.max(accBuf.length * 2, accBytes + buf.length))
+        accBuf.copy(newBuf, 0, 0, accBytes)
+        accBuf = newBuf
+      }
+      buf.copy(accBuf, accBytes)
+      accBytes += buf.length
+      // Flush when accumulation target reached or WS is ready
+      if (accBytes >= ACC_TARGET) {
+        flushAccumulated()
+      }
     },
     async flush() {
       if (closed) { log('flush: closed, skip'); return }
+      // Flush any accumulated PCM first, then send WS flush command
+      flushAccumulated()
       if (!ws || ws.readyState !== WebSocket.OPEN) {
         log('flush: ws not open, skip')
         return
       }
-      // Send flush command and wait for final transcript
       ws.send(JSON.stringify({ type: 'flush' }))
     },
     async close() {
       log('close...')
       closed = true
       if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
+      flushAccumulated()
       if (ws) {
         try { ws.close() } catch {}
         ws = null

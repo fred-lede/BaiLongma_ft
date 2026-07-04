@@ -402,13 +402,21 @@ export function initPersonCard() {
       testBtn.disabled = true;
       try {
         await saveVoiceId(vid);
+        let ttsLang = 'zh-tw';
+        try {
+          const cfgResp = await fetch(apiUrl('/config'));
+          if (cfgResp.ok) {
+            const cfg = await cfgResp.json();
+            ttsLang = cfg?.tts?.aethermeshLanguage || cfg?.aethermeshLanguage || 'zh-tw';
+          }
+        } catch {}
+        const testText = ttsLang.startsWith('en')
+          ? `Hello, this is a voice test for ${currentCard.name}.`
+          : `你好，这是为 ${currentCard.name} 设定的声音试听。`;
         const ttsResp = await fetch(apiUrl('/tts/stream'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            text: `你好，这是为 ${currentCard.name} 设定的声音试听。`,
-            voiceId: vid,
-          }),
+          body: JSON.stringify({ text: testText, voiceId: vid }),
         });
         if (!ttsResp.ok) throw new Error(`HTTP ${ttsResp.status}`);
         const blob = await ttsResp.blob();

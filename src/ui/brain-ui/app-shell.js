@@ -725,6 +725,7 @@ const createSettingsModal = () => `
                   <option value="en">English</option>
                   <option value="ja">日本語</option>
                   <option value="ko">한국어</option>
+                  <option value="es">Español</option>
                 </select>
               </div>
               <p class="settings-hint">AetherMesh 本地语音克隆服务。点「刷新」从服务端获取已注册声音列表；点「注册」可克隆新声音。</p>

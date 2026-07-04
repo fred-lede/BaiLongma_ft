@@ -412,7 +412,13 @@ export function initPersonCard() {
         } catch {}
         const testText = ttsLang.startsWith('en')
           ? `Hello, this is a voice test for ${currentCard.name}.`
-          : `你好，这是为 ${currentCard.name} 设定的声音试听。`;
+          : ttsLang.startsWith('es')
+            ? `Hola, esta es una prueba de voz para ${currentCard.name}.`
+            : ttsLang.startsWith('ja')
+              ? `こんにちは、${currentCard.name}さんの音声テストです。`
+              : ttsLang.startsWith('ko')
+                ? `안녕하세요, ${currentCard.name}님의 음성 테스트입니다.`
+                : `你好，这是为 ${currentCard.name} 设定的声音试听。`;
         const ttsResp = await fetch(apiUrl('/tts/stream'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

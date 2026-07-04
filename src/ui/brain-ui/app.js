@@ -2762,7 +2762,13 @@ function initTTSSettings() {
         const testLang = aethermeshLangEl2?.value || 'zh-cn';
         const testText = testLang.startsWith('en')
           ? "Hello, this is a TTS voice test. Does it sound clear and natural?"
-          : "你好，这是一段语音合成测试，听起来清晰自然吗？";
+          : testLang.startsWith('es')
+            ? "Hola, esta es una prueba de voz. ¿Suena clara y natural?"
+            : testLang.startsWith('ja')
+              ? "こんにちは、これは音声合成テストです。はっきりと聞こえますか？"
+              : testLang.startsWith('ko')
+                ? "안녕하세요, 이것은 음성 합성 테스트입니다. 명확하게 들리나요?"
+                : "你好，这是一段语音合成测试，听起来清晰自然吗？";
         const ttsResp = await fetch(`${API}/tts/stream`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },

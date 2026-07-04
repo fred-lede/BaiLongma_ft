@@ -471,10 +471,11 @@ function createAetherMeshSession(config, lang, onTranscript, onError, onClose) {
   let closed = false
   let ws = null
   let reconnectTimer = null
-  // Accumulation buffer: merge small PCM frames into ~1s chunks before sending
+  // Accumulation buffer: merge small PCM frames into ~0.5s chunks before sending
+  // Short enough to not truncate sentences, large enough for stable Whisper input
   let accBuf = null       // Buffer being accumulated
   let accBytes = 0        // bytes accumulated so far
-  const ACC_TARGET = 16000 * 2  // 1 second of PCM (16kHz, 16-bit mono)
+  const ACC_TARGET = 16000   // ~0.5 second of PCM (16kHz × 2 bytes × 0.5s = 16000 bytes)
 
   function log(...args) { console.error('[AetherMesh-ASR]', ...args) }
 

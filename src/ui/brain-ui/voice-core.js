@@ -413,7 +413,14 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
   // 兜底「云端静默停识别」：音频在正常送、WS 仍 OPEN、用户还在出声，却数秒收不到任何
   // 转录 → 主动关连接触发重连，把识别任务滚动重启接活。不依赖云端发任何结束/错误事件，
   // 也就修了「说到几十个字球变绿后不再出字」。localStorage 'bailongma-voice-watchdog'='0' 可关。
-  const WATCHDOG_ON = localStorage.getItem('bailongma-voice-watchdog') !== '0';
+  const WATCHDOG_ON = (() => {
+    const stored = localStorage.getItem('bailongma-voice-watchdog')
+    if (stored === '0') return false
+    // AetherMesh has built-in VAD and auto-flush — no watchdog needed
+    const provider = localStorage.getItem(VOICE_PROVIDER_KEY) || 'aliyun'
+    if (provider === 'aethermesh') return false
+    return true
+  })()
   const STALL_RECONNECT_MS = 3500;   // 仍在说却这么久没转录 → 判定停滞
   const WATCHDOG_SPEECH_VOL = 0.05;  // 判定「人在说话」的音量阈值（与 continuous SPEECH_VOL 同量级）
   let watchdogTimer = null;

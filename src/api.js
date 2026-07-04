@@ -2019,7 +2019,11 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
             (errMsg) => {
               try { ws.send(JSON.stringify({ type: 'error', message: errMsg })) } catch {}
             },
-            () => { try { ws.close() } catch {} },
+            () => {
+              // AetherMesh backend disconnected — DO NOT close frontend WS.
+              // Backend will auto-reconnect (createAetherMeshSession reconnects automatically).
+              // Only close frontend WS if it was intentionally closed by the user.
+            },
             // onEvent：把云端非转录事件（task-started/finished/failed）转发到前端诊断
             (event, info) => {
               try { ws.send(JSON.stringify({ type: 'diag', event, info })) } catch {}
@@ -2051,8 +2055,14 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
       }
     })
 
-    ws.on('close', () => { session?.close(); session = null })
-    ws.on('error', () => { session?.close(); session = null })
+    ws.on('close', (reason) => {
+      console.error('[cloudWss] frontend WS closed, calling session.close()')
+      session?.close(); session = null
+    })
+    ws.on('error', (err) => {
+      console.error('[cloudWss] frontend WS error, calling session.close():', err.message)
+      session?.close(); session = null
+    })
   })
 
   // ACUI WebSocket channel: bidirectional control + perception

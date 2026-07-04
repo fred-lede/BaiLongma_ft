@@ -1901,6 +1901,15 @@ body {
   word-break: break-all;
 }
 
+.ls-status {
+  font-size: 11px;
+  margin-left: 6px;
+  min-width: 20px;
+  text-align: center;
+}
+.ls-status.ok { color: #6fcf97; }
+.ls-status.missing { color: var(--warm); }
+
 /* ═══════════════ 视频模式面板 ═══════════════ */
 
 .video-panel {

@@ -3401,6 +3401,22 @@ function initTTSSettings() {
       const el = document.getElementById(id);
       if (el) el.style.display = key === provider ? "" : "none";
     }
+    if (provider === 'aethermesh') updateAethermeshLsStatus();
+  }
+
+  function updateAethermeshLsStatus() {
+    const keyEl = document.getElementById("voice-aethermesh-key-status");
+    const urlEl = document.getElementById("voice-aethermesh-baseurl-status");
+    if (keyEl) {
+      const has = !!localStorage.getItem("aethermeshKey");
+      keyEl.textContent = has ? "✓" : "✗";
+      keyEl.className = "ls-status " + (has ? "ok" : "missing");
+    }
+    if (urlEl) {
+      const has = !!localStorage.getItem("aethermeshBaseURL");
+      urlEl.textContent = has ? "✓" : "✗";
+      urlEl.className = "ls-status " + (has ? "ok" : "missing");
+    }
   }
 
   function detectVoiceProviderFromKey(key) {
@@ -3622,6 +3638,14 @@ function initTTSSettings() {
         savedProvider = data.voice.voiceProvider;
         localStorage.setItem(VOICE_PROVIDER_KEY, savedProvider);
       }
+      // Sync AetherMesh ASR settings from backend to localStorage for frontend direct WS
+      if (resp.ok && data?.voice) {
+        const am = data.voice
+        if (am.aethermeshKey && typeof am.aethermeshKey === 'string') localStorage.setItem('aethermeshKey', am.aethermeshKey)
+        if (am.aethermeshBaseURL && typeof am.aethermeshBaseURL === 'string') localStorage.setItem('aethermeshBaseURL', am.aethermeshBaseURL)
+        if (am.aethermeshAsrModel && typeof am.aethermeshAsrModel === 'string') localStorage.setItem('aethermeshAsrModel', am.aethermeshAsrModel)
+      }
+      updateAethermeshLsStatus();
     } catch {}
     if (voiceProviderSelect) voiceProviderSelect.value = savedProvider;
     applyVoiceProviderUI(savedProvider);
@@ -3678,8 +3702,10 @@ function initTTSSettings() {
       if (volcAccessKey) body.volcAsrAccessKey = volcAccessKey;
       const aethermeshKey = document.getElementById("voice-aethermesh-key")?.value?.trim();
       if (aethermeshKey) body.aethermeshKey = aethermeshKey;
+      localStorage.setItem('aethermeshKey', aethermeshKey || '');
       const aethermeshBaseURL = document.getElementById("voice-aethermesh-baseurl")?.value?.trim();
       if (aethermeshBaseURL) body.aethermeshBaseURL = aethermeshBaseURL;
+      localStorage.setItem('aethermeshBaseURL', aethermeshBaseURL || '');
 
       if (Object.keys(body).length > 0) {
         try {
@@ -3706,10 +3732,12 @@ function initTTSSettings() {
           });
           if (voiceAutoDetect) voiceAutoDetect.textContent = "";
           showFeedback(voiceFeedback, "已保存");
+          updateAethermeshLsStatus();
         } catch { showFeedback(voiceFeedback, "保存失败", true); }
         finally { saveVoiceBtn.disabled = false; }
       } else {
         showFeedback(voiceFeedback, "已保存");
+        updateAethermeshLsStatus();
       }
     });
   }

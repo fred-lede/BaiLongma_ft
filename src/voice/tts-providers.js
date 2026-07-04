@@ -2,6 +2,7 @@
 // 支持: OpenAI TTS / ElevenLabs / 火山引擎 / 豆包（方舟）
 // 统一返回 Node.js Readable stream，供 api.js pipe 到 HTTP 响应
 import '../network-proxy.js'
+import { aethermeshFetch } from '../aethermesh-fetch.js'
 import { Readable, Transform } from 'stream'
 
 export const TTS_PROVIDERS = [
@@ -435,7 +436,7 @@ async function streamAetherMesh({ text, voiceId, baseURL = 'http://localhost:800
   const timeoutId = setTimeout(() => controller.abort(), 15000)
   let resp
   try {
-    resp = await fetch(url, { method: 'POST', headers, body, signal: controller.signal })
+    resp = await aethermeshFetch(url, { method: 'POST', headers, body, signal: controller.signal })
     clearTimeout(timeoutId)
   } catch (err) {
     clearTimeout(timeoutId)

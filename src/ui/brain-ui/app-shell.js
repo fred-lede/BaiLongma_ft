@@ -470,10 +470,12 @@ const createSettingsModal = () => `
               <div class="settings-row">
                 <label class="settings-label" for="voice-aethermesh-key">API Key</label>
                 <input class="settings-input" type="password" id="voice-aethermesh-key" placeholder="留空則使用 TTS 的 Key">
+                <span class="ls-status" id="voice-aethermesh-key-status"></span>
               </div>
               <div class="settings-row">
                 <label class="settings-label" for="voice-aethermesh-baseurl">Base URL</label>
                 <input class="settings-input" type="text" id="voice-aethermesh-baseurl" placeholder="http://192.168.1.200:8001">
+                <span class="ls-status" id="voice-aethermesh-baseurl-status"></span>
               </div>
             </div>
           </div>

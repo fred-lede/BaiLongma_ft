@@ -1398,7 +1398,7 @@ const VOICE_CONFIG_KEYS = [
   'tencentSecretId', 'tencentSecretKey', 'tencentAppId',
   'xunfeiAppId', 'xunfeiApiKey', 'xunfeiApiSecret',
   'volcAsrApiKey', 'volcAsrAppKey', 'volcAsrAccessKey', 'volcAsrResourceId',
-  'aethermeshKey', 'aethermeshBaseURL',
+  'aethermeshKey', 'aethermeshBaseURL', 'aethermeshAsrModel',
 ]
 
 function isValidAliyunAsrKey(value) {
@@ -1420,15 +1420,16 @@ export function getVoiceConfig() {
   const result = { voiceProvider: stored.voiceProvider || 'aliyun' }
   for (const key of VOICE_CONFIG_KEYS) {
     if (key === 'voiceProvider') continue
-    result[key] = { configured: !!(stored[key]) }
+    if (key === 'aethermeshKey' || key === 'aethermeshBaseURL' || key === 'aethermeshAsrModel') {
+      result[key] = stored[key] || ''
+    } else {
+      result[key] = { configured: !!(stored[key]) }
+    }
     if (key === 'aliyunApiKey' && stored[key]) {
       result[key] = {
         configured: isValidAliyunAsrKey(stored[key]),
         invalidFormat: !isValidAliyunAsrKey(stored[key]),
       }
-    }
-    if (key === 'aethermeshBaseURL') {
-      result[key] = stored[key] || 'http://192.168.1.200:8001'
     }
   }
   return result

@@ -3,6 +3,7 @@ import fs from 'fs'
 import path from 'path'
 import net from 'net'
 import crypto from 'crypto'
+import { aethermeshFetch } from './aethermesh-fetch.js'
 
 // AetherMesh voice duration cache (refreshed every 5 min)
 let _amVoiceCache = { voices: [], ts: 0 }
@@ -843,7 +844,7 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
           const baseURL = (creds.aethermeshBaseURL || 'http://localhost:8001').replace(/\/$/, '')
           const proxyHeaders = {}
           if (creds.aethermeshKey) proxyHeaders['Authorization'] = `Bearer ${creds.aethermeshKey}`
-          const proxyRes = await fetch(`${baseURL}/v1/voices`, { headers: proxyHeaders, signal: AbortSignal.timeout(8000) })
+          const proxyRes = await aethermeshFetch(`${baseURL}/v1/voices`, { headers: proxyHeaders, signal: AbortSignal.timeout(8000) })
           if (!proxyRes.ok) {
             const errText = await proxyRes.text()
             throw new Error(`AetherMesh 获取声音列表失败 (${proxyRes.status}): ${errText.slice(0, 200)}`)
@@ -879,7 +880,7 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
           const baseURL = (creds.aethermeshBaseURL || 'http://localhost:8001').replace(/\/$/, '')
           const proxyHeaders = { 'Content-Type': 'application/json' }
           if (creds.aethermeshKey) proxyHeaders['Authorization'] = `Bearer ${creds.aethermeshKey}`
-          const proxyRes = await fetch(`${baseURL}/v1/voices/${voiceId}`, {
+          const proxyRes = await aethermeshFetch(`${baseURL}/v1/voices/${voiceId}`, {
             method: 'PATCH',
             headers: proxyHeaders,
             body: JSON.stringify({ name }),
@@ -905,11 +906,13 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
           const baseURL = (creds.aethermeshBaseURL || 'http://localhost:8001').replace(/\/$/, '')
           const proxyHeaders = { 'Content-Type': req.headers['content-type'] || 'multipart/form-data' }
           if (creds.aethermeshKey) proxyHeaders['Authorization'] = `Bearer ${creds.aethermeshKey}`
-          const proxyRes = await fetch(`${baseURL}/v1/voices`, {
+          const reqBody = await new Promise((resolve, reject) => {
+            const bc = []; req.on('data', c => bc.push(c)); req.on('end', () => resolve(Buffer.concat(bc))); req.on('error', reject)
+          })
+          const proxyRes = await aethermeshFetch(`${baseURL}/v1/voices`, {
             method: 'POST',
             headers: proxyHeaders,
-            duplex: 'half',
-            body: req,
+            body: reqBody,
           })
           if (!proxyRes.ok) {
             const errText = await proxyRes.text()
@@ -933,11 +936,13 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
           const baseURL = (creds.aethermeshBaseURL || 'http://localhost:8001').replace(/\/$/, '')
           const proxyHeaders = { 'Content-Type': req.headers['content-type'] }
           if (creds.aethermeshKey) proxyHeaders['Authorization'] = `Bearer ${creds.aethermeshKey}`
-          const proxyRes = await fetch(`${baseURL}/v1/voices`, {
+          const reqBody = await new Promise((resolve, reject) => {
+            const bc = []; req.on('data', c => bc.push(c)); req.on('end', () => resolve(Buffer.concat(bc))); req.on('error', reject)
+          })
+          const proxyRes = await aethermeshFetch(`${baseURL}/v1/voices`, {
             method: 'POST',
             headers: proxyHeaders,
-            duplex: 'half',
-            body: req,
+            body: reqBody,
           })
           if (!proxyRes.ok) {
             const errText = await proxyRes.text()
@@ -968,7 +973,7 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
           const baseURL = (creds.aethermeshBaseURL || 'http://localhost:8001').replace(/\/$/, '')
           const headers = { 'Content-Type': 'application/json' }
           if (creds.aethermeshKey) headers['Authorization'] = `Bearer ${creds.aethermeshKey}`
-          const resp = await fetch(`${baseURL}/v1/audio/speech`, {
+          const resp = await aethermeshFetch(`${baseURL}/v1/audio/speech`, {
             method: 'POST', headers,
             body: JSON.stringify({ model: 'tts-1', input: '测试语音', voice: creds.voiceId, language: creds.aethermeshLanguage || 'zh-tw', response_format: 'mp3' }),
             signal: AbortSignal.timeout(15000),
@@ -2038,7 +2043,7 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
                   const baseURL = (creds.aethermeshBaseURL || 'http://localhost:8001').replace(/\/$/, '')
                   const amHeaders = {}
                   if (creds.aethermeshKey) amHeaders['Authorization'] = `Bearer ${creds.aethermeshKey}`
-                  const amRes = await fetch(`${baseURL}/v1/voices`, { headers: amHeaders, signal: AbortSignal.timeout(4000) })
+                  const amRes = await aethermeshFetch(`${baseURL}/v1/voices`, { headers: amHeaders, signal: AbortSignal.timeout(4000) })
                   if (amRes.ok) {
                     const amList = await amRes.json()
                     _amVoiceCache = { voices: Array.isArray(amList) ? amList : (amList.data || amList.voices || []), ts: now }

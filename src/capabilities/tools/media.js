@@ -63,11 +63,11 @@ function isTransientTTSError(err) {
 }
 
 // 合成：瞬时失败自动重试一次；其余直接抛给上层归一化
-async function synthSpeechBuffer({ text, provider, voiceId, creds }) {
+async function synthSpeechBuffer({ text, provider, voiceId, creds, language }) {
   let lastErr
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const nodeStream = await streamTTS({ text, provider, voiceId, keys: creds })
+      const nodeStream = await streamTTS({ text, provider, voiceId, keys: creds, language })
       const buffer = await collectAudioStream(nodeStream)
       if (!buffer.length) throw new Error('TTS 返回空音频（音色可能未在账号开通，或参数不被支持）')
       return buffer
@@ -144,7 +144,7 @@ export async function execSpeak(args) {
 
   let buffer
   try {
-    buffer = await synthSpeechBuffer({ text: textToSpeak, provider: creds.provider, voiceId, creds })
+    buffer = await synthSpeechBuffer({ text: textToSpeak, provider: creds.provider, voiceId, creds, language: targetLang || undefined })
   } catch (err) {
     if (err.name === 'AbortError') throw err
     console.warn(`[speak] 合成失败: ${err.message}`)

@@ -422,7 +422,7 @@ export function initPersonCard() {
         const ttsResp = await fetch(apiUrl('/tts/stream'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: testText, voiceId: vid }),
+          body: JSON.stringify({ text: testText, voiceId: vid, language: ttsLang }),
         });
         if (!ttsResp.ok) throw new Error(`HTTP ${ttsResp.status}`);
         const blob = await ttsResp.blob();

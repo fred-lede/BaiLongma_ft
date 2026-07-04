@@ -419,12 +419,16 @@ async function streamCustomOpenAI({ text, voiceId = 'nova', apiKey, baseURL, mod
 // POST /v1/voices        注册/克隆声音
 async function streamAetherMesh({ text, voiceId, baseURL = 'http://localhost:8001', apiKey = '', model = 'xtts-v2', language }) {
   if (!voiceId) throw new Error('AetherMesh TTS: 缺少声音 ID，请先在人物卡片中克隆或指定声音')
-  const hasChinese = /[\u4e00-\u9fff]/.test(text)
-  const detectedLang = hasChinese ? 'zh-cn' : 'en'
+  if (!language) {
+    if (/[\u4e00-\u9fff]/.test(text)) language = 'zh-cn'
+    else if (/[\u3040-\u309f\u30a0-\u30ff]/.test(text)) language = 'ja'
+    else if (/[\uac00-\ud7af]/.test(text)) language = 'ko'
+    else language = 'en'
+  }
   const url = `${baseURL.replace(/\/$/, '')}/v1/audio/speech`
   const headers = { 'Content-Type': 'application/json' }
   if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`
-  const body = JSON.stringify({ model, input: text, voice: voiceId, language: detectedLang, response_format: 'mp3' })
+  const body = JSON.stringify({ model, input: text, voice: voiceId, language, response_format: 'mp3' })
   const resp = await fetch(url, { method: 'POST', headers, body })
   if (!resp.ok) {
     const err = await resp.text()
@@ -465,7 +469,7 @@ async function streamAetherMesh({ text, voiceId, baseURL = 'http://localhost:800
 
 // ── 通用入口 ────────────────────────────────────────────────────────────────
 // Returns { stream, contentType } — contentType defaults to 'audio/mpeg' for providers that only return a stream
-export async function streamTTS({ text, provider, voiceId, keys = {} }) {
+export async function streamTTS({ text, provider, voiceId, keys = {}, language }) {
   if (!text?.trim()) throw new Error('TTS: 文本为空')
   switch (provider) {
     case 'doubao':
@@ -490,8 +494,7 @@ export async function streamTTS({ text, provider, voiceId, keys = {} }) {
     case 'custom-openai':
       return streamCustomOpenAI({ text, voiceId, apiKey: keys.customTtsKey, baseURL: keys.customTtsBaseURL, model: keys.customTtsModel })
     case 'aethermesh': {
-      const amResult = await streamAetherMesh({ text, voiceId, baseURL: keys.aethermeshBaseURL, apiKey: keys.aethermeshKey, language: keys.aethermeshLanguage })
-      // streamAetherMesh returns { stream, contentType } — we need to unwrap it
+      const amResult = await streamAetherMesh({ text, voiceId, baseURL: keys.aethermeshBaseURL, apiKey: keys.aethermeshKey, language: language || keys.aethermeshLanguage })
       return amResult
     }
     default:

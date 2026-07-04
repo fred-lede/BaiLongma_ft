@@ -2056,6 +2056,7 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
             text: text.slice(0, 800),
             provider: creds.provider,
             voiceId:  body.voiceId || creds.voiceId || undefined,
+            language: body.language || '',
             keys: {
               doubaoKey:     creds.doubaoKey,
               doubaoAppId:   creds.doubaoAppId,

@@ -2772,7 +2772,7 @@ function initTTSSettings() {
         const ttsResp = await fetch(`${API}/tts/stream`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: testText }),
+          body: JSON.stringify({ text: testText, language: testLang }),
         });
         if (!ttsResp.ok) {
           let errMsg = `合成失败（HTTP ${ttsResp.status}）`;

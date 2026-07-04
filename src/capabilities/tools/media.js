@@ -131,9 +131,15 @@ export async function execSpeak(args) {
   }
   const voiceId = resolveProviderVoiceId(creds.provider, requestedVoiceId, creds.voiceId)
 
-  // 如果目标人物偏好語言與目前文字不符，先翻譯再合成
+  // 翻譯邏輯：
+  // 1. 人物卡片 preferredLanguage 優先（逐人覆蓋）
+  // 2. 無人物卡片時，用 TTS 語言下拉作為全域翻譯目標
+  // 3. 根據文字內容自動判斷是否需要翻譯（有中文字但目標是英文，或反過來）
   const ttsLang = creds.aethermeshLanguage || ''
-  const textNeedsTranslate = targetLang && ttsLang && targetLang !== ttsLang
+  if (!targetLang && ttsLang) targetLang = ttsLang
+  const hasChinese = /[\u4e00-\u9fff]/.test(text)
+  const targetIsChinese = ['zh-tw', 'zh-cn'].includes(targetLang)
+  const textNeedsTranslate = targetLang !== '' && hasChinese !== targetIsChinese
   const textToSpeak = textNeedsTranslate ? await translateForTTS(text, targetLang) : text
 
   let buffer

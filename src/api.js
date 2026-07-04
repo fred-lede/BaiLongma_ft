@@ -2055,12 +2055,12 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
       }
     })
 
-    ws.on('close', (reason) => {
-      console.error('[cloudWss] frontend WS closed, calling session.close()')
+    ws.on('close', (event) => {
+      console.error(`[cloudWss] frontend WS closed code=${event.code} reason='${event.reason||''}', calling session.close()`)
       session?.close(); session = null
     })
     ws.on('error', (err) => {
-      console.error('[cloudWss] frontend WS error, calling session.close():', err.message)
+      console.error(`[cloudWss] frontend WS error: ${err.message||err}, calling session.close()`)
       session?.close(); session = null
     })
   })

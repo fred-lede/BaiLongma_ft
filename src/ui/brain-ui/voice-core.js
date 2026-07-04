@@ -435,8 +435,9 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
       const now = Date.now();
       if (now - lastLoudTs < 1200 && now - lastInboundTs > STALL_RECONNECT_MS) {
         diag('watchdog: stalled → force reconnect', 'sinceTx=' + (now - lastInboundTs) + 'ms');
-        lastInboundTs = now;            // 防重连窗口内重复触发
-        try { cloudWs.close(); } catch {} // onclose(!intentional) → commitPendingInterim + 重连续上
+        lastInboundTs = now;
+        cloudWsIntentional = true; // 主动关闭，不触发 reconnect
+        try { cloudWs.close(); } catch {}
       }
     }, 1000);
   }
@@ -667,9 +668,11 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
 
     ws.onerror = () => { if (cloudWs === ws) setStatus('error'); };
 
-    ws.onclose = () => {
+    ws.onclose = (ev) => {
       if (cloudWs !== ws) return; // 已被新连接取代，忽略旧连接的 close 事件
       cloudWs = null;
+      const reason = ev?.reason ? ` reason='${ev.reason}'` : '';
+      diag(`ws-closed intentional=${cloudWsIntentional} code=${ev?.code||'?'}${reason}`);
       if (!cloudWsIntentional && micActive) {
         // 非主动断开（超时/网络抖动）且用户仍在录音 → 自动重连，保留已识别文字。
         // 先把当前句未定稿的前半句提级保住，否则新会话只 finalize 尾巴会覆盖丢失。

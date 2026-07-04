@@ -9,11 +9,11 @@
     "name": "xiaoyuanda666-ship-it"
   },
   "scripts": {
-    "start": "electron .",
+    "start": "node scripts/start.mjs",
     "start:lan": "powershell -ExecutionPolicy Bypass -File scripts/start-lan.ps1 app",
-    "start:backend": "node --env-file=.env src/index.js",
+    "start:backend": "node scripts/start-backend.mjs",
     "start:backend:lan": "powershell -ExecutionPolicy Bypass -File scripts/start-lan.ps1 backend",
-    "dev": "node --env-file=.env --watch src/index.js",
+    "dev": "node scripts/start-backend.mjs --watch",
     "build": "node scripts/prebuild-clean.mjs && node scripts/build-macos-speech.mjs && node ./node_modules/@electron/rebuild/lib/cli.js -f -w better-sqlite3 -v 33.4.11 && node ./node_modules/electron-builder/cli.js",
     "build:win": "node scripts/prebuild-clean.mjs && node scripts/build-macos-speech.mjs && node ./node_modules/@electron/rebuild/lib/cli.js -f -w better-sqlite3 -v 33.4.11 && node ./node_modules/electron-builder/cli.js --win",
     "build:mac": "node scripts/build-mac.mjs",

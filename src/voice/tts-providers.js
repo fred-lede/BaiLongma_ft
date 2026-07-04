@@ -420,10 +420,12 @@ async function streamCustomOpenAI({ text, voiceId = 'nova', apiKey, baseURL, mod
 async function streamAetherMesh({ text, voiceId, baseURL = 'http://localhost:8001', apiKey = '', model = 'xtts-v2', language }) {
   if (!voiceId) throw new Error('AetherMesh TTS: 缺少声音 ID，请先在人物卡片中克隆或指定声音')
   if (!language) {
-    if (/[\u4e00-\u9fff]/.test(text)) language = 'zh-cn'
-    else if (/[\u3040-\u309f\u30a0-\u30ff]/.test(text)) language = 'ja'
+    if (/[\u3040-\u309f\u30a0-\u30ff]/.test(text)) language = 'ja'
     else if (/[\uac00-\ud7af]/.test(text)) language = 'ko'
+    else if (/[\u4e00-\u9fff]/.test(text)) language = 'zh-cn'
     else language = 'en'
+  } else if (language === 'zh-tw') {
+    language = 'zh-cn'
   }
   const url = `${baseURL.replace(/\/$/, '')}/v1/audio/speech`
   const headers = { 'Content-Type': 'application/json' }

@@ -56,7 +56,6 @@ import { extractVerbatimPayload, findRecentVerbatimPayload, hasInlineVerbatimPay
 import { refreshUserProfile } from './profile/infer.js'
 import { isSoftwareInstallRequest } from './software-install-intent.js'
 import { formatTerminalStreamContext } from './terminal-stream.js'
-import { getWeatherCardProps, isWeatherQuery } from './weather.js'
 import { scheduleSceneSurfaceRemoval } from './scene/transient-surfaces.js'
 
 function reportStartupProgress(id, status, detail, message) {

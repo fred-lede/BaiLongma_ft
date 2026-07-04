@@ -2055,13 +2055,19 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
       }
     })
 
-    ws.on('close', (event) => {
-      console.error(`[cloudWss] frontend WS closed code=${event.code} reason='${event.reason||''}', calling session.close()`)
-      session?.close(); session = null
+    ws.on('close', (code, reason) => {
+      console.error(`[cloudWss] frontend WS closed code=${code||'?'} reason='${reason||''}'`)
+      if (session) {
+        // Frontend WS closed — do NOT destroy the backend session.
+        // For AetherMesh: its own reconnect logic handles re-establishing.
+        // For other ASR providers: session stays alive for PCM forwarding.
+        // Only null out the reference; session lifecycle is independent.
+        session = null
+      }
     })
     ws.on('error', (err) => {
-      console.error(`[cloudWss] frontend WS error: ${err.message||err}, calling session.close()`)
-      session?.close(); session = null
+      console.error(`[cloudWss] frontend WS error: ${err.message||err}`)
+      if (session) { session = null }
     })
   })
 

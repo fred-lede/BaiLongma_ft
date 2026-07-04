@@ -417,12 +417,14 @@ async function streamCustomOpenAI({ text, voiceId = 'nova', apiKey, baseURL, mod
 // 服务地址默认为 http://localhost:8001
 // POST /v1/audio/speech  合成语音（OpenAI 兼容格式）
 // POST /v1/voices        注册/克隆声音
-async function streamAetherMesh({ text, voiceId, baseURL = 'http://localhost:8001', apiKey = '', model = 'xtts-v2', language = 'zh-tw' }) {
+async function streamAetherMesh({ text, voiceId, baseURL = 'http://localhost:8001', apiKey = '', model = 'xtts-v2', language }) {
   if (!voiceId) throw new Error('AetherMesh TTS: 缺少声音 ID，请先在人物卡片中克隆或指定声音')
+  const hasChinese = /[\u4e00-\u9fff]/.test(text)
+  const detectedLang = hasChinese ? 'zh-cn' : 'en'
   const url = `${baseURL.replace(/\/$/, '')}/v1/audio/speech`
   const headers = { 'Content-Type': 'application/json' }
   if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`
-  const body = JSON.stringify({ model, input: text, voice: voiceId, language, response_format: 'mp3' })
+  const body = JSON.stringify({ model, input: text, voice: voiceId, language: detectedLang, response_format: 'mp3' })
   const resp = await fetch(url, { method: 'POST', headers, body })
   if (!resp.ok) {
     const err = await resp.text()

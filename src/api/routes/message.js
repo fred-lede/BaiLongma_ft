@@ -1,4 +1,4 @@
-import { pushMessage } from '../../queue.js'
+import { pushMessage } from '../../inbound-message.js'
 import { emitEvent } from '../../events.js'
 import { getAgentName } from '../agent.js'
 import { appendInboundChatMediaMarkdown } from '../inbound-media.js'

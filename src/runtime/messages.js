@@ -252,7 +252,7 @@ export function buildLLMMessages({ systemPrompt, contextBlock = '', conversation
 
   // Prepend this round's <context>...</context> to the current user message.
   // The block is NOT persisted to db — conversations are written from the raw
-  // user content (see queue.pushMessage) and assistant outputs are stored
+  // user content (see inbound-message.pushMessage) and assistant outputs are stored
   // verbatim, so the next round's conversationWindow stays clean.
   if (contextBlock && currentMessageIndex >= 0) {
     const target = messages[currentMessageIndex]

@@ -2,7 +2,7 @@ import crypto from 'crypto'
 import { spawn, spawnSync } from 'child_process'
 import { emitEvent } from '../../events.js'
 import { insertActionLog, getConfig, setConfig } from '../../db.js'
-import { pushMessage } from '../../queue.js'
+import { pushMessage } from '../../inbound-message.js'
 import { PRIMARY_USER_ID, isVoiceChannel } from '../../identity.js'
 import { projectInstallJobToScene } from './software-install-scene.js'
 

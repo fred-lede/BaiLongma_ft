@@ -1,5 +1,5 @@
 import { emitEvent, setStickyEvent } from '../../events.js'
-import { pushMessage } from '../../queue.js'
+import { pushMessage } from '../../inbound-message.js'
 import { restartConnector } from '../../social/index.js'
 import { replaceProvider } from '../../providers/registry.js'
 import { MinimaxProvider } from '../../providers/minimax.js'

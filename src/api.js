@@ -843,7 +843,7 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
           const baseURL = (creds.aethermeshBaseURL || 'http://localhost:8001').replace(/\/$/, '')
           const proxyHeaders = {}
           if (creds.aethermeshKey) proxyHeaders['Authorization'] = `Bearer ${creds.aethermeshKey}`
-          const proxyRes = await fetch(`${baseURL}/v1/voices`, { headers: proxyHeaders })
+          const proxyRes = await fetch(`${baseURL}/v1/voices`, { headers: proxyHeaders, signal: AbortSignal.timeout(8000) })
           if (!proxyRes.ok) {
             const errText = await proxyRes.text()
             throw new Error(`AetherMesh 获取声音列表失败 (${proxyRes.status}): ${errText.slice(0, 200)}`)
@@ -2071,7 +2071,7 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
                   max_tokens: 800,
                   temperature: 0,
                 }),
-                signal: AbortSignal.timeout(10000),
+                signal: AbortSignal.timeout(8000),
               })
               if (translateResp.ok) {
                 const tData = await translateResp.json()

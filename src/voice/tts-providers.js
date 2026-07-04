@@ -431,12 +431,20 @@ async function streamAetherMesh({ text, voiceId, baseURL = 'http://localhost:800
   const headers = { 'Content-Type': 'application/json' }
   if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`
   const body = JSON.stringify({ model, input: text, voice: voiceId, language, response_format: 'mp3' })
-  const resp = await fetch(url, { method: 'POST', headers, body })
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), 15000)
+  let resp
+  try {
+    resp = await fetch(url, { method: 'POST', headers, body, signal: controller.signal })
+    clearTimeout(timeoutId)
+  } catch (err) {
+    clearTimeout(timeoutId)
+    throw new Error(`AetherMesh TTS 连不上 (${baseURL}): ${err?.cause?.code || err.message}`)
+  }
   if (!resp.ok) {
     const err = await resp.text()
     throw new Error(`AetherMesh TTS 失败 (${resp.status}): ${err.slice(0, 300)}`)
   }
-  const contentType = resp.headers.get('content-type') || 'audio/mpeg'
 
   // CUDA corrupted state detection: AetherMesh may return HTTP 200 with garbage audio
   // (e.g. silence, extremely small file, or non-MP3 header). Read the first chunk

@@ -720,8 +720,8 @@ const createSettingsModal = () => `
               <div class="settings-row">
                 <label class="settings-label" for="tts-aethermesh-lang">TTS 语言</label>
                 <select class="settings-input" id="tts-aethermesh-lang">
-                  <option value="zh-tw">中文（繁体）</option>
                   <option value="zh-cn">中文（简体）</option>
+                  <option value="zh-tw">中文（繁体）</option>
                   <option value="en">English</option>
                   <option value="ja">日本語</option>
                   <option value="ko">한국어</option>

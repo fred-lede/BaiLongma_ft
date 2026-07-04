@@ -1496,7 +1496,7 @@ export function getTTSConfig() {
     customTtsModel:   stored.customTtsModel || '',
     aethermeshKey:   { configured: !!(stored.aethermeshKey) },
     aethermeshBaseURL: stored.aethermeshBaseURL || 'http://localhost:8001',
-    aethermeshLanguage: stored.aethermeshLanguage || 'zh-tw',
+    aethermeshLanguage: stored.aethermeshLanguage || 'zh-cn',
   }
 }
 
@@ -1524,7 +1524,7 @@ export function getTTSCredentials() {
     customTtsModel: stored.customTtsModel || '',
     aethermeshKey:   stored.aethermeshKey  || '',
     aethermeshBaseURL: stored.aethermeshBaseURL || 'http://localhost:8001',
-    aethermeshLanguage: stored.aethermeshLanguage || 'zh-tw',
+    aethermeshLanguage: stored.aethermeshLanguage || 'zh-cn',
   }
 }
 

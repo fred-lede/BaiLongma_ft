@@ -50,6 +50,7 @@ import { PRIMARY_USER_ID, formatPresenceForPrompt, normalizeChannel, isExternalC
 import { truncateToolResultForUI } from './runtime/tool-result-preview.js'
 import { buildLLMMessages } from './runtime/messages.js'
 import { parseMarkers } from './runtime/markers.js'
+import { createConsciousnessLoop } from './runtime/consciousness-loop.js'
 import { buildStrictEvaluationContext, filterStrictEvaluationTools, resolveStrictEvaluationMode } from './runtime/strict-evaluation.js'
 import { extractVerbatimPayload, findRecentVerbatimPayload, hasInlineVerbatimPayload, isVerbatimOutputRequest, isVerbatimSetup, isVerbatimStart } from './runtime/verbatim.js'
 import { refreshUserProfile } from './profile/infer.js'
@@ -154,6 +155,7 @@ console.log(`[skills] Loaded ${startupSkills.length} Agent Skill(s)`)
 // AbortController for the current LLM call (used to interrupt the main loop)
 let currentAbortController = null
 let currentExecution = null
+let markCurrentTickAborted = () => {}
 
 // Watchdog：单轮 runTurn 超过这个时间未返回视为卡死（最可能是 fetch/LLM stream/三方网络调用
 // 没传 AbortSignal 也没自己超时）。触发后强 abort，把 processing 清掉，主循环能继续
@@ -740,18 +742,6 @@ function stableFocusTopic(frame) {
   const hasConclusion = Array.isArray(frame.conclusions) && frame.conclusions.length > 0
   if (hitCount < 2 && !hasConclusion) return ''
   return frame.topic.slice(0, 3).join(',')
-}
-
-function shouldPreemptFor(entry) {
-  if (!entry || !processing || !currentExecution) return true
-  const incomingPriority = entry.priority || PRIORITY.background
-  if (incomingPriority > currentExecution.priority) return true
-
-  // Allow preemption between concurrent user messages.
-  // If the current execution is stuck in a tool call, a new user message can still interrupt immediately.
-  if (incomingPriority >= PRIORITY.user && currentExecution.priority >= PRIORITY.user) return true
-
-  return false
 }
 
 function beginExecution({ priority, kind, label, controller }) {
@@ -1530,7 +1520,7 @@ async function runTurn(input, label, msg = null) {
     // WeChat-style interruption: discard partial output; the next round will naturally pick up this context from conversationWindow.
     // Mark this tick as aborted so onTick's finally block skips tick decrement and exploration advance.
     console.log('[system] Current processing interrupted by new message — partial output discarded')
-    lastTickAborted = true
+    markCurrentTickAborted()
     return
   }
 
@@ -1683,206 +1673,46 @@ async function runTurn(input, label, msg = null) {
   })
 }
 
-let processing = false
-let lastTickAborted = false
-let currentTimer = null  // timer for the next pending tick; can be cleared by pushMessage to run immediately
-
-// 把 runTurn 用 watchdog 包一层：超时 → 强 abort + reject，让 onTick 的 finally 能跑、
-// processing 清掉。runTurn 内部那个永远不 resolve 的 promise 留在后台，最终被 GC。
-async function runTurnWithWatchdog(input, label, msg) {
-  let timer = null
-  const watchdog = new Promise((_, reject) => {
-    timer = setTimeout(() => {
-      const stuckLabel = currentExecution?.label || label
-      const elapsedS = currentExecution ? Math.round((Date.now() - currentExecution.startedAt) / 1000) : null
-      console.error(`[watchdog] runTurn 卡死 ${RUN_TURN_WATCHDOG_MS / 1000}s 未返回 (label=${stuckLabel}, elapsed=${elapsedS}s)，强制 abort`)
-      try { currentAbortController?.abort?.('watchdog timeout') } catch {}
-      // 立即清掉全局 execution 引用，避免后续 message 进来还 abort 同一个 controller
-      currentAbortController = null
-      currentExecution = null
-      try { emitEvent('error', { label: 'watchdog', error: `runTurn stuck > ${RUN_TURN_WATCHDOG_MS / 1000}s` }) } catch {}
-      const err = new Error('runTurn watchdog timeout')
-      err.name = 'WatchdogTimeoutError'
-      reject(err)
-    }, RUN_TURN_WATCHDOG_MS)
-  })
-  try {
-    await Promise.race([runTurn(input, label, msg), watchdog])
-  } finally {
-    if (timer) clearTimeout(timer)
-  }
-}
-
-async function onTick() {
-  if (processing) return
-  processing = true
-  lastTickAborted = false
-  let autoTick = false
-  let selfCheckActiveAtStart = false
-
-  try {
-    enqueueDueReminders()
-    if (hasMessages()) {
-      const msg = popMessage()
-      const lane = msg.queueName === 'background' ? 'BG' : 'L1'
-      await runTurnWithWatchdog(msg.raw, `${lane} message from ${msg.fromId}`, msg)
-    } else {
-      autoTick = true
-      selfCheckActiveAtStart = !!state.startupSelfCheck?.active
-      const tick = formatTick()
-      await runTurnWithWatchdog(tick, 'L2 TICK', null)
-    }
-  } catch (err) {
-    // runTurn 抛错（含 watchdog 超时和 runTurn 内部 LLM 之后未捕获的异常）必须吞掉，
-    // 否则会冒泡到 setTimeout 回调外层，绕过 scheduleNextTick → 主循环停摆。
-    if (err?.name === 'WatchdogTimeoutError') {
-      lastTickAborted = true
-    } else {
-      console.error('[onTick] runTurn 抛出未处理异常:', err?.stack || err?.message || err)
-    }
-  } finally {
-    processing = false
-    consumeTickerTick()
-    // When interrupted by the user, do not decrement the tick or advance exploration — retry next heartbeat
-    if (!lastTickAborted) {
-      decrementAwakeningTick()
-      // Do not advance exploration index during self-check; exploration begins sequentially after self-check ends
-      if (autoTick && !selfCheckActiveAtStart) advanceExplorationTask()
-    }
-  }
-}
-
-// Schedule priority (high to low):
-//   1. Messages pending → 0
-//   2. 429 rate-limited → quota's 10-minute interval
-//   3. L2 custom cadence (ttl > 0) → L2-specified value
-//   4. Task active → 30s
-//   5. Idle → config.tickInterval
-function scheduleNextTick() {
-  if (!isRunning()) return
-  if (currentTimer) { clearTimeout(currentTimer); currentTimer = null }
-
-  enqueueDueReminders()
-
-  const hasPending = hasMessages()
-  const hasPendingUser = hasUserMessages()
-  const queueSnapshot = getQueueSnapshot()
-  const rateLimited = isRateLimited()
-  const customMs = getCustomIntervalMs()
-  const taskActive = !!state.task
-  const nextReminder = getNextPendingReminder()
-
-  let interval
-  let label
-  if (hasPendingUser) {
-    interval = 0
-    label = 'immediate (user message pending)'
-  } else if (hasPending) {
-    interval = 0
-    label = 'immediate (background message pending)'
-  } else if (rateLimited) {
-    interval = getTickInterval(config.tickInterval)
-    label = `rate-limited (${interval / 1000}s)`
-  } else if (customMs !== null) {
-    const ticker = getTickerStatus()
-    interval = customMs
-    label = `L2 custom ${interval / 1000}s (${ticker.ttl} tick(s) remaining${ticker.reason ? ' · ' + ticker.reason : ''})`
-  } else if (getAwakeningTicks() > 0) {
-    const awTicks = getAwakeningTicks()
-    interval = 10000
-    label = `awakening 10s (${awTicks} tick(s) remaining)`
-  } else if (taskActive) {
-    interval = 30000
-    label = 'task mode 30s'
-  } else {
-    interval = config.tickInterval
-    label = `${interval / 1000}s`
-  }
-
-  if (nextReminder) {
-    const dueInMs = Math.max(0, new Date(nextReminder.due_at).getTime() - Date.now())
-    if (dueInMs < interval) {
-      interval = dueInMs
-      label = `reminder fires in ${Math.ceil(dueInMs / 1000)}s`
-    }
-  }
-
-  const quota = getQuotaStatus()
-  console.log(`[quota] ${quota.rpmUsed} RPM | ${quota.tpmUsed} TPM | ratio ${quota.ratio} | queue U:${queueSnapshot.user} B:${queueSnapshot.background} | next tick ${label}`)
-  emitEvent('quota', { ...quota, nextTickMs: interval, ticker: getTickerStatus(), queue: queueSnapshot })
-  currentTimer = setTimeout(async () => {
-    currentTimer = null
-    // try/finally 兜底：即使 onTick 抛错（理论上 onTick 自己已 catch，watchdog 也吞了
-    // 异常），也保证 scheduleNextTick 总被调用，主循环不会因为单轮异常永久停摆。
-    try {
-      await onTick()
-    } catch (err) {
-      console.error('[scheduleNextTick] onTick threw:', err?.stack || err?.message || err)
-    } finally {
-      scheduleNextTick()
-    }
-  }, interval)
-}
-
-// Called when a new message arrives: clear the pending timer and run the next tick immediately.
-// If currently processing, rely on the abort mechanism to finish quickly; scheduleNextTick will use interval=0 to resume.
-function triggerImmediateTick() {
-  if (processing) return  // rely on abort + the post-finish scheduleNextTick to continue
-  if (!isRunning()) return
-  if (currentTimer) { clearTimeout(currentTimer); currentTimer = null }
-  // 异步启动一轮，不等结果
-  ;(async () => {
-    try {
-      await onTick()
-    } catch (err) {
-      console.error('[triggerImmediateTick] onTick threw:', err?.stack || err?.message || err)
-    } finally {
-      scheduleNextTick()
-    }
-  })()
-}
-
-let loopStarted = false
-
-async function startConsciousnessLoop({ runImmediateTick = true } = {}) {
-  if (loopStarted) return
-  loopStarted = true
-
-  startConsolidationLoop()
-
-  // Register the scheduler so the control layer (stop/start) can wake it up
-  setScheduler(scheduleNextTick)
-
-  // Register interrupt callback: when a new message arrives, interrupt the current LLM call and trigger the next tick immediately (don't wait for the timer)
-  setInterruptCallback((entry) => {
-    if (currentAbortController && shouldPreemptFor(entry)) {
-      console.log(`[system] Higher-priority message arrived — interrupting current processing: ${entry.fromId} (${entry.queueName})`)
-      emitEvent('processing_preempted', {
-        by: entry.fromId,
-        queueName: entry.queueName,
-        priority: entry.priority,
-        current: currentExecution,
-      })
-      currentAbortController.abort('higher-priority-message')
-    }
-    triggerImmediateTick()
-  })
-
-  // Initialize self-check state before the first tick so the first tick can run self-check
-  ensureStartupSelfCheckState()
-  if (state.startupSelfCheck?.active) {
-    console.log('[system] Startup self-check starting')
-    const selfCheckPayload = { version: STARTUP_SELF_CHECK_VERSION }
-    setStickyEvent('startup_self_check_started', selfCheckPayload)
-    emitEvent('startup_self_check_started', selfCheckPayload)
-  }
-
-  // Whether to fire an immediate L2 TICK is up to the caller; initial activation uses it to trigger self-check.
-  if (runImmediateTick) {
-    await onTick()
-  }
-  scheduleNextTick()
-}
+const consciousnessLoop = createConsciousnessLoop({
+  runTurn,
+  runTurnWatchdogMs: RUN_TURN_WATCHDOG_MS,
+  getCurrentExecution: () => currentExecution,
+  getCurrentAbortController: () => currentAbortController,
+  clearCurrentExecution: () => {
+    currentAbortController = null
+    currentExecution = null
+  },
+  emitEvent,
+  enqueueDueReminders,
+  hasMessages,
+  popMessage,
+  hasUserMessages,
+  getQueueSnapshot,
+  formatTick,
+  consumeTickerTick,
+  decrementAwakeningTick,
+  advanceExplorationTask,
+  isStartupSelfCheckActive: () => !!state.startupSelfCheck?.active,
+  isRunning,
+  setScheduler,
+  setInterruptCallback,
+  isRateLimited,
+  getTickInterval,
+  getBaseTickInterval: () => config.tickInterval,
+  getCustomIntervalMs,
+  getTickerStatus,
+  getAwakeningTicks,
+  isTaskActive: () => !!state.task,
+  getNextPendingReminder,
+  getQuotaStatus,
+  startConsolidationLoop,
+  ensureStartupSelfCheckState,
+  setStickyEvent,
+  startupSelfCheckVersion: STARTUP_SELF_CHECK_VERSION,
+  priorities: PRIORITY,
+})
+markCurrentTickAborted = consciousnessLoop.markLastTickAborted
+const startConsciousnessLoop = consciousnessLoop.start
 
 async function main() {
   console.log('Jarvis starting...')

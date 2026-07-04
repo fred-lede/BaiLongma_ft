@@ -1868,10 +1868,12 @@ async function playTTSReply(text) {
   // 取消上一段仍在进行的流式读取，避免旧网络流继续占用
   if (ttsStreamReader) { try { ttsStreamReader.cancel(); } catch {} ttsStreamReader = null; }
   try {
+    const ttsLangEl = document.getElementById("tts-aethermesh-lang");
+    const lang = ttsLangEl?.value || '';
     const resp = await fetch(`${API}/tts/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text, language: lang }),
     });
     if (!resp.ok) {
       let errMsg = `HTTP ${resp.status}`;
@@ -1985,10 +1987,12 @@ async function pumpSttsQueue() {
     pumpSttsQueue();
   };
   try {
+    const ttsLangEl = document.getElementById("tts-aethermesh-lang");
+    const lang = ttsLangEl?.value || '';
     const resp = await fetch(`${API}/tts/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: seg }),
+      body: JSON.stringify({ text: seg, language: lang }),
     });
     if (!sttsActive) return; // 期间被打断/收尾
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);

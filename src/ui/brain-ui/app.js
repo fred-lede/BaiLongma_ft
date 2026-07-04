@@ -2746,16 +2746,27 @@ function initTTSSettings() {
         if (customBaseURL2) preBody.customTtsBaseURL = customBaseURL2;
         const customModel2 = document.getElementById("tts-custom-model")?.value?.trim();
         if (customModel2) preBody.customTtsModel = customModel2;
+        const aethermeshKey2 = document.getElementById("tts-aethermesh-key")?.value?.trim();
+        if (aethermeshKey2) preBody.aethermeshKey = aethermeshKey2;
+        const aethermeshBaseURL2 = document.getElementById("tts-aethermesh-baseurl")?.value?.trim();
+        if (aethermeshBaseURL2) preBody.aethermeshBaseURL = aethermeshBaseURL2;
+        const aethermeshLang2 = document.getElementById("tts-aethermesh-lang")?.value?.trim();
+        if (aethermeshLang2) preBody.aethermeshLanguage = aethermeshLang2;
         await fetch(`${API}/settings/tts`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(preBody),
         });
         if (testStatus) testStatus.textContent = "合成中…";
+        const aethermeshLangEl2 = document.getElementById("tts-aethermesh-lang");
+        const testLang = aethermeshLangEl2?.value || 'zh-cn';
+        const testText = testLang.startsWith('en')
+          ? "Hello, this is a TTS voice test. Does it sound clear and natural?"
+          : "你好，这是一段语音合成测试，听起来清晰自然吗？";
         const ttsResp = await fetch(`${API}/tts/stream`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: "你好，这是一段语音合成测试，听起来清晰自然吗？" }),
+          body: JSON.stringify({ text: testText }),
         });
         if (!ttsResp.ok) {
           let errMsg = `合成失败（HTTP ${ttsResp.status}）`;

@@ -404,10 +404,10 @@ export function initPersonCard() {
         await saveVoiceId(vid);
         let ttsLang = 'zh-tw';
         try {
-          const cfgResp = await fetch(apiUrl('/config'));
+          const cfgResp = await fetch(apiUrl('/settings/tts'));
           if (cfgResp.ok) {
             const cfg = await cfgResp.json();
-            ttsLang = cfg?.tts?.aethermeshLanguage || cfg?.aethermeshLanguage || 'zh-tw';
+            ttsLang = cfg?.tts?.aethermeshLanguage || 'zh-cn';
           }
         } catch {}
         const testText = ttsLang.startsWith('en')

@@ -467,7 +467,7 @@ function createAetherMeshSession(config, lang, onTranscript, onError, onClose) {
   const baseURL = (config.aethermeshBaseURL || 'http://192.168.1.200:8001').replace(/\/+$/, '').replace(/^http:/, 'ws:').replace(/^https:/, 'wss:')
   const apiKey = config.aethermeshKey || ''
   const model = config.aethermeshAsrModel || 'whisper-large-v3'
-  const wsURL = `${baseURL}/v1/audio/transcriptions/stream?model=${encodeURIComponent(model)}&language=${lang || 'zh'}&interim=true`
+  const wsURL = `${baseURL}/v1/audio/transcriptions/stream?model=${encodeURIComponent(model)}&interim=true`
   let closed = false
   let ws = null
   let reconnectTimer = null

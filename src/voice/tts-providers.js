@@ -445,6 +445,7 @@ async function streamAetherMesh({ text, voiceId, baseURL = 'http://localhost:800
     const err = await resp.text()
     throw new Error(`AetherMesh TTS 失败 (${resp.status}): ${err.slice(0, 300)}`)
   }
+  const contentType = resp.headers.get('content-type') || 'audio/mpeg'
 
   // CUDA corrupted state detection: AetherMesh may return HTTP 200 with garbage audio
   // (e.g. silence, extremely small file, or non-MP3 header). Read the first chunk

@@ -1470,7 +1470,7 @@ const TTS_CONFIG_KEYS = [
   'elevenLabsKey',
   'volcanoAppId', 'volcanoToken',
   'customTtsKey', 'customTtsBaseURL', 'customTtsModel',
-  'aethermeshKey', 'aethermeshBaseURL', 'aethermeshLanguage',
+  'aethermeshKey', 'aethermeshBaseURL', 'aethermeshLanguage', 'aethermeshTtsTranslate',
 ]
 
 export function getTTSConfig() {

@@ -1868,10 +1868,14 @@ async function playTTSReply(text) {
   // 取消上一段仍在进行的流式读取，避免旧网络流继续占用
   if (ttsStreamReader) { try { ttsStreamReader.cancel(); } catch {} ttsStreamReader = null; }
   try {
+    const ttsLangEl = document.getElementById("tts-aethermesh-lang");
+    const translateEl = document.getElementById("tts-aethermesh-translate");
+    const translate = !!translateEl?.checked;
+    const lang = translate ? (ttsLangEl?.value || '') : '';
     const resp = await fetch(`${API}/tts/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text, translate, language: lang }),
     });
     if (!resp.ok) {
       let errMsg = `HTTP ${resp.status}`;
@@ -1985,10 +1989,14 @@ async function pumpSttsQueue() {
     pumpSttsQueue();
   };
   try {
+    const ttsLangEl = document.getElementById("tts-aethermesh-lang");
+    const translateEl = document.getElementById("tts-aethermesh-translate");
+    const translate = !!translateEl?.checked;
+    const lang = translate ? (ttsLangEl?.value || '') : '';
     const resp = await fetch(`${API}/tts/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: seg }),
+      body: JSON.stringify({ text: seg, translate, language: lang }),
     });
     if (!sttsActive) return; // 期间被打断/收尾
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -2639,6 +2647,8 @@ function initTTSSettings() {
     if (aethermeshBaseEl && tts?.aethermeshBaseURL) aethermeshBaseEl.value = tts.aethermeshBaseURL;
     const aethermeshLangEl = document.getElementById("tts-aethermesh-lang");
     if (aethermeshLangEl && tts?.aethermeshLanguage) aethermeshLangEl.value = tts.aethermeshLanguage;
+    const aethermeshTranslateEl = document.getElementById("tts-aethermesh-translate");
+    if (aethermeshTranslateEl) aethermeshTranslateEl.checked = !!tts?.aethermeshTtsTranslate;
     showCredSection(provider);
   }).catch(() => { showCredSection(providerSel.value); });
 
@@ -2691,6 +2701,8 @@ function initTTSSettings() {
       if (aethermeshBaseURL) ttsBody.aethermeshBaseURL = aethermeshBaseURL;
       const aethermeshLang = document.getElementById("tts-aethermesh-lang")?.value?.trim();
       if (aethermeshLang) ttsBody.aethermeshLanguage = aethermeshLang;
+      const aethermeshTranslate = document.getElementById("tts-aethermesh-translate");
+      ttsBody.aethermeshTtsTranslate = !!aethermeshTranslate?.checked;
 
       fetch(`${API}/settings/tts`, {
         method: "POST",

@@ -2052,11 +2052,44 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
               } catch {} // best-effort check; proceed on failure
             }
           }
+          // 翻译模式：先翻译文本到目标语言再合成
+          let textToSynthesize = text
+          let ttsLanguage = body.language || creds.aethermeshLanguage || ''
+          if (body.translate && ttsLanguage) {
+            if (ttsLanguage === 'zh-tw') ttsLanguage = 'zh-cn'
+            try {
+              const targetLangLabel = { 'zh-cn': '简体中文', 'en': 'English', 'ja': '日本語', 'ko': '한국어', 'es': 'Español' }[ttsLanguage] || ttsLanguage
+              const translateResp = await fetch(`${(config.baseURL || '').replace(/\/+$/, '')}/v1/chat/completions`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', ...(config.apiKey ? { 'Authorization': `Bearer ${config.apiKey}` } : {}) },
+                body: JSON.stringify({
+                  model: config.model || 'gpt-4o',
+                  messages: [
+                    { role: 'system', content: `You are a professional translator. Translate the user's message to ${targetLangLabel}. Only output the translation, nothing else.` },
+                    { role: 'user', content: text.slice(0, 400) }
+                  ],
+                  max_tokens: 800,
+                  temperature: 0,
+                }),
+                signal: AbortSignal.timeout(10000),
+              })
+              if (translateResp.ok) {
+                const tData = await translateResp.json()
+                const translated = tData?.choices?.[0]?.message?.content?.trim()
+                if (translated) {
+                  textToSynthesize = translated
+                  console.log(`[TTS] 翻译 (${ttsLanguage}): "${text.slice(0, 30)}..." → "${translated.slice(0, 30)}..."`)
+                }
+              }
+            } catch (e) {
+              console.warn('[TTS] 翻译失败, 使用原文:', e.message)
+            }
+          }
           const ttsResult = await streamTTS({
-            text: text.slice(0, 800),
+            text: textToSynthesize.slice(0, 800),
             provider: creds.provider,
             voiceId:  body.voiceId || creds.voiceId || undefined,
-            language: body.language || '',
+            language: ttsLanguage,
             keys: {
               doubaoKey:     creds.doubaoKey,
               doubaoAppId:   creds.doubaoAppId,

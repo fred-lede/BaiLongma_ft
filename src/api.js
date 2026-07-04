@@ -2059,7 +2059,7 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
             if (ttsLanguage === 'zh-tw') ttsLanguage = 'zh-cn'
             try {
               const targetLangLabel = { 'zh-cn': '简体中文', 'en': 'English', 'ja': '日本語', 'ko': '한국어', 'es': 'Español' }[ttsLanguage] || ttsLanguage
-              const translateResp = await fetch(`${(config.baseURL || '').replace(/\/+$/, '')}/v1/chat/completions`, {
+              const translateResp = await fetch(`${(config.baseURL || '').replace(/\/+$/, '')}/chat/completions`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', ...(config.apiKey ? { 'Authorization': `Bearer ${config.apiKey}` } : {}) },
                 body: JSON.stringify({

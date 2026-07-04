@@ -737,6 +737,7 @@ const createSettingsModal = () => `
 
             <div class="settings-row" style="margin-top:8px;">
               <button class="settings-save-btn" id="tts-test-btn" type="button" style="padding:4px 12px;font-size:12px;">试听</button>
+              <button class="settings-save-btn" id="tts-translate-test-btn" type="button" style="padding:4px 12px;font-size:12px;margin-left:6px;">翻译试听</button>
               <span id="tts-test-status" style="color:var(--ink2);font-size:12px;margin-left:8px;"></span>
             </div>
           </div>

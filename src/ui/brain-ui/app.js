@@ -2813,6 +2813,95 @@ function initTTSSettings() {
       }
     });
   }
+
+  const translateTestBtn = document.getElementById("tts-translate-test-btn");
+  if (translateTestBtn) {
+    translateTestBtn.addEventListener("click", async () => {
+      translateTestBtn.disabled = true;
+      if (testStatus) testStatus.textContent = "保存配置中…";
+      try {
+        const preBody = { ttsProvider: providerSel.value };
+        let previewVoice;
+        if (providerSel.value === "custom-openai") {
+          previewVoice = customVoiceId?.value?.trim();
+        } else {
+          previewVoice = voiceSel?.value?.trim();
+        }
+        if (previewVoice) { preBody.ttsVoiceId = previewVoice; activeTTSVoiceId = previewVoice; }
+        // collect all credential fields
+        const minimaxKey = document.getElementById("tts-minimax-key")?.value?.trim();
+        if (minimaxKey) preBody.minimaxKey = minimaxKey;
+        const doubaoKey = document.getElementById("tts-doubao-key")?.value?.trim();
+        if (doubaoKey) preBody.doubaoKey = doubaoKey;
+        const doubaoAppId = document.getElementById("tts-doubao-appid")?.value?.trim();
+        if (doubaoAppId) preBody.doubaoAppId = doubaoAppId;
+        const doubaoAccessKey = document.getElementById("tts-doubao-access-key")?.value?.trim();
+        if (doubaoAccessKey) preBody.doubaoAccessKey = doubaoAccessKey;
+        const doubaoResourceId = document.getElementById("tts-doubao-resourceid")?.value?.trim();
+        if (doubaoResourceId) preBody.doubaoResourceId = doubaoResourceId;
+        const doubaoStyle = document.getElementById("tts-doubao-style")?.value?.trim();
+        if (doubaoStyle) preBody.doubaoStyle = doubaoStyle;
+        const doubaoSpeechRate = document.getElementById("tts-doubao-speechrate")?.value?.trim();
+        if (doubaoSpeechRate) preBody.doubaoSpeechRate = doubaoSpeechRate;
+        const openaiKey = document.getElementById("tts-openai-key")?.value?.trim();
+        if (openaiKey) preBody.openaiTtsKey = openaiKey;
+        const elevenKey = document.getElementById("tts-elevenlabs-key")?.value?.trim();
+        if (elevenKey) preBody.elevenLabsKey = elevenKey;
+        const volcanoAppId = document.getElementById("tts-volcano-appid")?.value?.trim();
+        if (volcanoAppId) preBody.volcanoAppId = volcanoAppId;
+        const volcanoToken = document.getElementById("tts-volcano-token")?.value?.trim();
+        if (volcanoToken) preBody.volcanoToken = volcanoToken;
+        const customKey2 = document.getElementById("tts-custom-key")?.value?.trim();
+        if (customKey2) preBody.customTtsKey = customKey2;
+        const customBaseURL2 = document.getElementById("tts-custom-baseurl")?.value?.trim();
+        if (customBaseURL2) preBody.customTtsBaseURL = customBaseURL2;
+        const customModel2 = document.getElementById("tts-custom-model")?.value?.trim();
+        if (customModel2) preBody.customTtsModel = customModel2;
+        const aethermeshKey2 = document.getElementById("tts-aethermesh-key")?.value?.trim();
+        if (aethermeshKey2) preBody.aethermeshKey = aethermeshKey2;
+        const aethermeshBaseURL2 = document.getElementById("tts-aethermesh-baseurl")?.value?.trim();
+        if (aethermeshBaseURL2) preBody.aethermeshBaseURL = aethermeshBaseURL2;
+        const aethermeshLang2 = document.getElementById("tts-aethermesh-lang")?.value?.trim();
+        if (aethermeshLang2) preBody.aethermeshLanguage = aethermeshLang2;
+        await fetch(`${API}/settings/tts`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(preBody),
+        });
+        if (testStatus) testStatus.textContent = "翻译合成中…";
+        const targetLang = aethermeshLang2 || 'zh-cn';
+        const ttsResp = await fetch(`${API}/tts/stream`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: "你好，这是一段语音合成测试。请把我翻译成目标语言并朗读。", translate: true, language: targetLang }),
+        });
+        if (!ttsResp.ok) {
+          let errMsg = `翻译合成失败（HTTP ${ttsResp.status}）`;
+          try { const j = await ttsResp.json(); errMsg = j.error || errMsg; } catch {}
+          if (testStatus) testStatus.textContent = errMsg;
+          return;
+        }
+        const ttsBlob = await ttsResp.blob();
+        if (ttsBlob.size === 0) {
+          if (testStatus) testStatus.textContent = "翻译合成失败：接口返回空数据";
+          return;
+        }
+        const ttsUrl = URL.createObjectURL(ttsBlob);
+        const ttsAudio = new Audio(ttsUrl);
+        attachJarvisFx(ttsAudio, voiceSel?.value || activeTTSVoiceId);
+        ttsAudio.onended = () => { URL.revokeObjectURL(ttsUrl); if (testStatus) testStatus.textContent = ""; };
+        ttsAudio.onerror = () => { URL.revokeObjectURL(ttsUrl); if (testStatus) testStatus.textContent = "播放失败"; };
+        await applyOutputSink(ttsAudio).catch(() => {});
+        await ttsAudio.play();
+        if (testStatus) testStatus.textContent = "播放中";
+        setTimeout(() => { if (testStatus && testStatus.textContent === "播放中") testStatus.textContent = ""; }, 8000);
+      } catch {
+        if (testStatus) testStatus.textContent = "失败 — 请检查 LLM 配置和 API Key";
+      } finally {
+        translateTestBtn.disabled = false;
+      }
+    });
+  }
 }
 
 // ── Settings modal ──

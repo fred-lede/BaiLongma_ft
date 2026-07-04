@@ -562,7 +562,6 @@ function createAetherMeshSession(config, lang, onTranscript, onError, onClose) {
       ws.send(JSON.stringify({ type: 'flush' }))
     },
     async close() {
-      console.error('[AetherMesh-ASR] close() called, closed=' + closed, new Error().stack.split('\n').slice(1,4).join(' | '))
       if (closed) return
       closed = true
       if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
@@ -571,7 +570,6 @@ function createAetherMeshSession(config, lang, onTranscript, onError, onClose) {
         try { ws.close() } catch {}
         ws = null
       }
-      console.error('[AetherMesh-ASR] calling onClose callback')
       onClose()
     },
   }

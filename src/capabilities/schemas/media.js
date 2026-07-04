@@ -1,4 +1,4 @@
-// 媒体类工具 schema：speak / generate_lyrics / media_mode / generate_video / generate_music / generate_image / music
+// 媒体类工具 schema：speak / generate_lyrics / media_mode / generate_music / generate_image / music
 export const mediaSchemas = {
   speak: {
     type: 'function',
@@ -77,39 +77,6 @@ Music mode rules:
     }
   },
 
-  generate_video: {
-    type: 'function',
-    function: {
-      name: 'generate_video',
-      description: `Generate an AI video with Seedance (Volcengine Ark), or just open the dedicated right-side "AI 视频生成" panel for the user to fill in.
-action:
-  - "open": just open the panel in an empty input state so the USER can type a prompt and/or drop a reference image in the panel itself, then click 生成. Use this when the user says things like "打开AI视频生成模式/面板" without giving any content. Do NOT invent a prompt and generate on their behalf.
-  - "generate" (default): submit a generation now. Requires prompt.
-Two generation modes (action=generate):
-  - Text-to-video: pass prompt only.
-  - Image+text-to-video: pass prompt AND image_url (a publicly reachable http(s) image URL, or a data: base64 URL). The image is used as the first frame / reference.
-Behavior:
-  - This is async. The tool submits the task, opens the panel in a "generating" state, polls in the background (usually 1-5 minutes), then auto-plays the finished video. You do NOT need to poll or call it again.
-  - On success reply to the user with only a short confirmation (e.g. "在生成了"). Do not narrate the process or repeat the prompt.
-  - If the tool returns error="not_configured", relay the included guide: ask the user to send their Volcengine Ark API key so it can be auto-configured (e.g. "火山视频 <APIKEY>"), optionally with the model id / endpoint (ep-xxxx). Do not pretend to generate before it is configured.
-  - If creating the task fails because the model id is wrong, relay the hint asking the user to provide the correct Seedance model id / inference endpoint.
-Write a vivid, concrete prompt: subject, action, camera movement, lighting, style. Keep duration short (5s default) unless the user asks for longer.`,
-      parameters: {
-        type: 'object',
-        properties: {
-          action: { type: 'string', enum: ['open', 'generate', 'set_prompt'], description: 'open = just open the empty input panel for the user to fill in. generate (default) = submit a generation now (needs prompt). set_prompt = write a prompt into the panel\'s input box (overwrites the current draft). ONLY use set_prompt AFTER the user explicitly agrees to apply your optimized prompt — when they first ask to "优化/改写提示词" you must NOT call set_prompt; instead reply with the improved prompt in chat and let them confirm (or copy it themselves). The panel\'s current open/closed state and the user\'s live prompt draft are injected into your context under <aivideo-panel>, so you can read what they typed without asking.' },
-          prompt: { type: 'string', description: 'Video description / instruction. Required for text-to-video; also recommended for image-to-video to describe the desired motion. Not needed when action="open".' },
-          image_url: { type: 'string', description: 'Optional. A publicly reachable http(s) image URL (or data: base64 URL) used as the reference / first frame. Providing this switches to image+text-to-video.' },
-          images: { type: 'array', items: { type: 'string' }, description: 'Optional. Up to 2 image URLs (http(s) or data: base64). 1 image = image-to-video; 2 images = first-and-last-frame mode (first image = first frame, second = last frame). Takes precedence over image_url.' },
-          ratio: { type: 'string', enum: ['adaptive', '16:9', '9:16', '4:3', '3:4', '1:1', '21:9'], description: 'Aspect ratio. Default 16:9 for text-to-video. When an image is provided, prefer "adaptive" so the output keeps the input image aspect ratio.' },
-          resolution: { type: 'string', enum: ['480p', '720p', '1080p'], description: 'Output resolution, default 720p.' },
-          duration: { type: 'number', description: 'Video length in seconds, 1-15, default 5.' },
-        },
-        required: []
-      }
-    }
-  },
-
   generate_music: {
     type: 'function',
     function: {
@@ -152,7 +119,7 @@ Write a vivid, concrete prompt: subject, action, camera movement, lighting, styl
 Supported actions:
   - list: list all tracks in the library, including id, title, artist, and file_path.
   - search: search by song title or artist.
-  - download: download a song as mp3 and add it to the library. PREFERRED: pass query="song artist" (or title/artist) and the tool auto-searches and downloads the first match — you do NOT need to find or guess a URL. Optionally set platform="youtube"|"bilibili" (use bilibili for CN users); the tool falls back to the other platform automatically if the first fails. Pass url= only when you already have a confirmed video page URL. Lyrics are fetched automatically when possible.
+  - download: download a song as mp3 and add it to the library. PREFERRED: pass query="song artist" (or title/artist) and let the tool handle it: it scans/reuses existing local files, resolves YouTube/Bilibili direct video links, tries platform search fallbacks, and prepares/refreshes yt-dlp when needed. Do NOT use web_search, fetch_url, or exec_command to manually hunt links after this tool fails; call music(download) with a better query/title/artist instead, or ask the user for a local file/direct audio URL. Optionally set platform="youtube"|"bilibili" (use bilibili for CN users). Pass url= only when you already have a confirmed video page URL. Lyrics are fetched automatically when possible.
   - add: add an existing local audio file, such as mp3/flac/wav/aac, to the library.
   - scan: scan the music directory and add all audio files in batch.
   - get_lyrics: fetch LRC lyrics from lrclib.net and save them to the library. Requires title + artist.

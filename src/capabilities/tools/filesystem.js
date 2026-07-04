@@ -2,6 +2,7 @@ import fs from 'fs'
 import path from 'path'
 import { throwIfAborted } from '../abort-utils.js'
 import { SANDBOX_ROOT, assertInSandbox, normalizeSandboxPath } from '../sandbox.js'
+import { streamWriteFileExecutionPreview } from '../../write-file-preview.js'
 
 const PROTECTED_FILES = new Set(['readme.txt', 'world.txt', 'package.json'])
 
@@ -72,10 +73,12 @@ export async function execWriteFile(args, context = {}) {
   const resolved = path.resolve(SANDBOX_ROOT, filePath)
   assertInSandbox(resolved)
   fs.mkdirSync(path.dirname(resolved), { recursive: true })
+  streamWriteFileExecutionPreview({ path: filePath, content })
   fs.writeFileSync(resolved, content, 'utf-8')
   const verifiedContent = fs.readFileSync(resolved, 'utf-8')
   const verified = verifiedContent === String(content)
   const bytes = Buffer.byteLength(verifiedContent, 'utf-8')
+  streamWriteFileExecutionPreview({ path: filePath, content, bytes, verified })
   if (!verified) {
     return toolJson({
       ok: false,

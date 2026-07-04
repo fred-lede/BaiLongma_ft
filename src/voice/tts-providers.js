@@ -1,6 +1,7 @@
 // 流式 TTS 服务商接入层
 // 支持: OpenAI TTS / ElevenLabs / 火山引擎 / 豆包（方舟）
 // 统一返回 Node.js Readable stream，供 api.js pipe 到 HTTP 响应
+import '../network-proxy.js'
 import { Readable, Transform } from 'stream'
 
 export const TTS_PROVIDERS = [

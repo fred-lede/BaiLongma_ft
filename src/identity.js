@@ -6,13 +6,13 @@
 // - 渠道标签对 LLM 简化：WECHAT_CLAWBOT/WECHAT_OFFICIAL 都呈现为 WECHAT；本地各种入口都归 TUI
 
 import { getDB, normalizeConversationPartyId } from './db.js'
-import { normalizeChannel, PUBLIC_CHANNELS } from './runtime/channel.js'
+import { normalizeChannel, PUBLIC_CHANNELS, isVoiceChannel } from './runtime/channel.js'
 
 export const PRIMARY_USER_ID = 'ID:000001'
 export const SINGLE_USER_MODE = true
 
-const EXTERNAL_PREFIX_REGEX = /^(wechat|discord|feishu|wecom|telegram):/i
-export { normalizeChannel, PUBLIC_CHANNELS }
+const EXTERNAL_PREFIX_REGEX = /^(wechat|discord|feishu|wecom):/i
+export { normalizeChannel, PUBLIC_CHANNELS, isVoiceChannel }
 
 export function isExternalChannel(channel) {
   const norm = normalizeChannel(channel)

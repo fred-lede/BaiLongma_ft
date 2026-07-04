@@ -309,7 +309,7 @@ export function detectSeedanceConfig(text) {
 //   null                           — 未识别到任何 key，正常流程
 export async function tryAutoConfigureKey(text, _recentContext = '') {
   // Seedance 视频生成 key 优先识别（写入即生效，不需要网络验证；
-  // model ID 是否正确留给首次调用 generate_video 时由 Ark 报错引导）。
+  // model ID 是否正确留给 AI 视频面板提交任务时由 Ark 报错引导）。
   const seedance = detectSeedanceConfig(text)
   if (seedance) {
     setSeedanceConfig(seedance)

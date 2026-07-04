@@ -99,7 +99,6 @@ function deriveArtifactsFromLog(turnToolLog) {
     else if (e.name === 'delete_file' && a.path) out.push(`file deleted: ${a.path}`)
     else if (e.name === 'exec_command' && a.command) out.push(`command run: ${String(a.command).slice(0, 120)}`)
     else if (e.name === 'generate_image' && (a.prompt || a.path)) out.push(`image generated`)
-    else if (e.name === 'generate_video') out.push(`video generated`)
   }
   return out
 }

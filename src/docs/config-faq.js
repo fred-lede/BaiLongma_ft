@@ -193,10 +193,13 @@ MiniMax 一个 Key 同时供 LLM 与 TTS 两用。`,
       },
       {
         title: '飞书 / Discord 配置',
-        content: `■ 飞书机器人
-→ 配置字段：FEISHU_APP_ID + FEISHU_APP_SECRET + FEISHU_VERIFICATION_TOKEN
-→ 申请：https://open.feishu.cn/ → 创建应用 → 事件订阅
-→ 回调 URL：http://你的IP:端口/social/feishu
+        content: `■ 飞书机器人（推荐长连接模式）
+→ 配置字段：FEISHU_APP_ID + FEISHU_APP_SECRET
+→ 申请：https://open.feishu.cn/ → 创建应用 → 添加「机器人」能力 → 权限里加 im:message
+→ 长连接模式无需公网回调地址：填好 App ID/Secret 即自动建立 WebSocket 收发消息
+→ 事件订阅里选「使用长连接接收事件」，订阅 im.message.receive_v1，不要开启加密推送
+→ 国际版 Lark 改用 FEISHU_DOMAIN=lark
+（旧的 webhook 模式仍兼容：配 FEISHU_VERIFICATION_TOKEN + 回调 URL http://你的IP:端口/social/feishu/webhook，但桌面端无公网地址，建议用长连接）
 
 ■ Discord Bot
 → 配置字段：DISCORD_BOT_TOKEN

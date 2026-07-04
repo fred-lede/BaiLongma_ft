@@ -32,14 +32,22 @@ try {
   }).then(r => r.json())
   if (challenge.challenge !== 'ok-challenge') throw new Error('Feishu challenge failed')
 
-  await postJson('/social/feishu/webhook', {
-    header: { event_type: 'im.message.receive_v1' },
-    token: 'smoke-feishu-token',
+  const feishuEvent = await postJson('/social/feishu/webhook', {
+    schema: '2.0',
+    header: {
+      event_id: 'ev_smoke',
+      event_type: 'im.message.receive_v1',
+      token: 'smoke-feishu-token',
+      create_time: String(Date.now()),
+      tenant_key: 'tenant_smoke',
+      app_id: 'cli_smoke',
+    },
     event: {
       sender: { sender_id: { open_id: 'ou_smoke' } },
       message: { chat_id: 'oc_smoke', message_id: 'om_smoke', content: JSON.stringify({ text: 'hello feishu' }) },
     },
   })
+  if (!feishuEvent.ok) throw new Error(`Feishu event failed: ${feishuEvent.status}`)
   const feishuMsg = popMessage()
   if (
     feishuMsg?.externalPartyId !== 'feishu:open_id:ou_smoke'

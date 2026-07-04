@@ -1,8 +1,11 @@
+import './network-proxy.js'
 import { config, getMinimaxKey as _getMinimaxKey, getSecurity } from './config.js'
 import { callLLM } from './llm.js'
 import { buildSystemPrompt, buildContextBlock, combinePromptForPreview } from './prompt.js'
 import { enqueueTurnForRecognition, configureRecognizerScheduler } from './memory/recognizer-scheduler.js'
-import { runInjector, formatMemoriesForPrompt, formatActivePoliciesForPrompt, formatTaskKnowledge, formatPrefetchedItems, formatActiveUICards, formatTemporalRecall, formatAIVideoPanel } from './memory/injector.js'
+import { runInjector, formatMemoriesForPrompt, formatActivePoliciesForPrompt, formatTaskKnowledge, formatPrefetchedItems, formatSceneManifest, formatTemporalRecall, formatAIVideoPanel } from './memory/injector.js'
+import { formatToolPromptHintsForSchemas } from './memory/active-policies.js'
+import { sceneStore } from './scene/scene-store.js'
 import {
   ensureThreadState, attributeUserMessage, buildThreadView, getForegroundThread,
   getThreadById, openCommitment, closeCommitment, touchCommitmentThread,
@@ -12,6 +15,7 @@ import { summarizeThread } from './memory/thread-summarize.js'
 import { classifyThreadAttribution } from './memory/thread-classifier.js'
 import { runMemoryRefreshLoop } from './memory/refresh-loop.js'
 import { startConsolidationLoop } from './memory/consolidation-loop.js'
+import { recordSelfEvolutionFromMemories } from './memory/self-evolution.js'
 import { runRuntimeInjector } from './context/runtime-injector.js'
 import { selectContextSections } from './context/section-gate.js'
 import { getDB, getConfig, setConfig, getKnownEntities, getOrInitBirthTime, insertConversation, insertMemory, getRecentConversationPartners, getDueReminders, markReminderFired, advanceReminderDueAt, getNextPendingReminder, getMemoryCount, getRecentConversationTimeline, loadFocusStack, loadThreadState, saveThreadState, setCurrentFocusTopic, setCurrentThreadId, updateUserMessageFocusTopic, reassignConversationsThread, insertActionLog } from './db.js'
@@ -19,7 +23,7 @@ import { calculateNextDueAt, autoSpeakForVoiceReply, detectOpenFollowupQuestion 
 import { popMessage, hasMessages, hasUserMessages, getQueueSnapshot, setInterruptCallback, requeueMessage, pushMessage } from './queue.js'
 import { startTUI } from './tui.js'
 import { startAPI } from './api.js'
-import { emitEvent, emitUICommand, addActiveUICard, hasACUIClient, setStickyEvent, clearStickyEvent } from './events.js'
+import { emitEvent, setStickyEvent, clearStickyEvent } from './events.js'
 import { formatTick, nowTimestamp, describeExistence } from './time.js'
 import { getAdaptiveTickInterval, getQuotaStatus, setRateLimited, isRateLimited, getTickInterval } from './quota.js'
 import { registerProvider } from './providers/registry.js'
@@ -27,11 +31,11 @@ import { MinimaxProvider } from './providers/minimax.js'
 import { isRunning, setScheduler } from './control.js'
 import { getCustomIntervalMs, consumeTick as consumeTickerTick, getStatus as getTickerStatus } from './ticker.js'
 import { seedSandboxOnce, seedMusicOnce, rescueDataFromInstallDir } from './paths.js'
-import { ensureSkillMemories } from './memory/seed-skills.js'
 import { loadInstalledTools } from './capabilities/marketplace/index.js'
 import { resumePendingVideoJobs, getAIVideoPanelState } from './capabilities/tools/media.js'
 import { dispatchSocialMessage } from './social/dispatch.js'
 import { startSocialConnectors } from './social/index.js'
+import { getFeishuStatusBlock } from './social/feishu-ws.js'
 import { startTelegramTyping } from './social/telegram.js'
 import { getWeatherCardProps, isWeatherQuery } from './weather.js'
 import { collectSystemInfo, getSystemInfoBlock, getBatteryBlock, getDesktopPath } from './system-info.js'
@@ -39,19 +43,31 @@ import { collectDesktopInfo, getDesktopBlock } from './desktop-scanner.js'
 import { collectInstalledSoftware, getInstalledSoftwareBlock } from './installed-software-scanner.js'
 import { collectLocalResources } from './local-resources-scanner.js'
 import { collectGeoWeather, getGeoWeatherBlock } from './geo-weather.js'
-import { collectTrending, getTrendingBlock } from './trending.js'
+import { collectTrending } from './trending.js'
 import { collectAgents, buildAgentContextBlock, buildDelegationAskDirections } from './agents/registry.js'
 import { refreshSkills, selectSkillsForMessage, formatSkillsForContext } from './skills/registry.js'
 import { tryAutoConfigureKey } from './key-auto-config.js'
-import { PRIMARY_USER_ID, formatPresenceForPrompt, normalizeChannel, isExternalChannel } from './identity.js'
+import { PRIMARY_USER_ID, formatPresenceForPrompt, normalizeChannel, isExternalChannel, isVoiceChannel } from './identity.js'
 import { truncateToolResultForUI } from './runtime/tool-result-preview.js'
 import { buildLLMMessages } from './runtime/messages.js'
 import { parseMarkers } from './runtime/markers.js'
 import { buildStrictEvaluationContext, filterStrictEvaluationTools, resolveStrictEvaluationMode } from './runtime/strict-evaluation.js'
 import { extractVerbatimPayload, findRecentVerbatimPayload, hasInlineVerbatimPayload, isVerbatimOutputRequest, isVerbatimSetup, isVerbatimStart } from './runtime/verbatim.js'
 import { refreshUserProfile } from './profile/infer.js'
+import { isSoftwareInstallRequest } from './software-install-intent.js'
+import { formatTerminalStreamContext } from './terminal-stream.js'
+import { getWeatherCardProps, isWeatherQuery } from './weather.js'
+import { scheduleSceneSurfaceRemoval } from './scene/transient-surfaces.js'
+
+function reportStartupProgress(id, status, detail, message) {
+  try {
+    const reporter = globalThis.bailongmaStartupProgress
+    if (typeof reporter === 'function') reporter({ id, status, detail, message })
+  } catch {}
+}
 
 // On first launch, copy sandbox seed files from the resource directory to the user data directory (Electron install)
+reportStartupProgress('resources', 'running', '复制沙箱与音乐资源', '正在准备工作区')
 seedSandboxOnce()
 seedMusicOnce()
 
@@ -69,9 +85,11 @@ try {
 } catch (err) {
   console.warn('[startup] 安装目录数据迁移检查失败:', err?.message || err)
 }
+reportStartupProgress('resources', 'done', '工作区已准备', '工作区已准备')
 
 // Collect host system environment info (full scan + persist on first run, then refresh dynamic fields).
 // Must complete before the main loop starts so buildSystemPrompt can inject the env block.
+reportStartupProgress('environment', 'running', '系统、桌面、软件与本地资源', '正在扫描本机环境')
 await collectSystemInfo()
 
 // Scan the user's desktop (shortcuts cached by mtime, regular files scanned every time)
@@ -84,20 +102,53 @@ collectInstalledSoftware()
 // for the "Self-Sufficient Execution" prompt — so the agent already knows what
 // the user has before being asked "上服务器看看".
 collectLocalResources()
+reportStartupProgress('environment', 'done', '本机环境已扫描', '本机环境已扫描')
+
+// 启动期"自感知"采集(地理/天气/热点/本机 agent/已装工具)是可选的、依赖网络或子进程的步骤,
+// 绝不应阻塞后端启动:某个外部调用卡死(如 DNS/connect 被挂住,连 AbortController 都打不断)
+// 不能把整个 startAPI 拖到永不执行。给每个采集套硬上限,超时即跳过(非致命),保证一定能启动。
+function withStartupTimeout(promise, ms, label) {
+  return Promise.race([
+    Promise.resolve(promise).catch(err => { console.warn(`${label} 失败(忽略):`, err?.message || err); return null }),
+    new Promise(resolve => setTimeout(() => { console.warn(`${label} 超时 ${ms}ms,跳过(不阻塞启动)`); resolve(null) }, ms)),
+  ])
+}
 
 // Collect geo-location + live weather (refresh on IP change or after 7 days; weather refreshed every time)
-const geoResult = await collectGeoWeather()
+reportStartupProgress('geo', 'running', '读取缓存或请求实时天气', '正在刷新天气位置')
+const geoResult = await withStartupTimeout(collectGeoWeather(), 12000, '[startup] geo-weather')
+reportStartupProgress('geo', 'done', '天气位置已刷新', '天气位置已刷新')
 
 // Collect trending topics (CN → Weibo+Zhihu, others → HN+Reddit; 1h cache)
-await collectTrending(geoResult?.location?.country_code)
+reportStartupProgress('trending', 'running', '加载今日热点源', '正在采集热点')
+await withStartupTimeout(collectTrending(geoResult?.location?.country_code), 12000, '[startup] trending')
+reportStartupProgress('trending', 'done', '热点采集完成', '热点采集完成')
 
 // Scan locally installed AI agents (Claude Code, Codex, Hermes, OpenClaw, etc.) and persist to known_agents table
-await collectAgents()
+reportStartupProgress('agents', 'running', 'Claude Code / Codex / Hermes', '正在扫描本地 Agent')
+await withStartupTimeout(collectAgents(), 15000, '[startup] agents')
+reportStartupProgress('agents', 'done', '本地 Agent 扫描完成', '本地 Agent 扫描完成')
 
 // Load persisted installed tools
-await loadInstalledTools()
+reportStartupProgress('tools', 'running', '恢复已安装能力', '正在加载工具槽')
+await withStartupTimeout(loadInstalledTools(), 12000, '[startup] installed-tools')
+reportStartupProgress('tools', 'done', '工具槽已加载', '工具槽已加载')
+
+// 本地嵌入模型预热：provider==='local' 时后台 fire-and-forget 建好 pipeline（含首次模型下载），
+// 让首条向量召回不被冷启动撞穿超时。绝不阻塞启动，失败静默（召回会自动退化为 FTS5）。
+;(async () => {
+  try {
+    const { getEmbeddingCredentials } = await import('./config.js')
+    const cred = getEmbeddingCredentials()
+    if (cred?.provider === 'local' && cred.model) {
+      const { warmupLocalEmbedding } = await import('./embedding-local.js')
+      warmupLocalEmbedding(cred.model).catch(() => {})
+    }
+  } catch {}
+})().catch(() => {})
 
 // Load Agent Skills metadata. Full SKILL.md bodies are injected only when a turn matches.
+reportStartupProgress('skills', 'running', '技能目录、SQLite、线程状态', '正在加载技能和记忆')
 const startupSkills = refreshSkills()
 console.log(`[skills] Loaded ${startupSkills.length} Agent Skill(s)`)
 
@@ -129,6 +180,7 @@ if (getMemoryCount() === 0) {
 }
 const birthTime = getOrInitBirthTime()
 refreshUserProfile(PRIMARY_USER_ID)
+reportStartupProgress('skills', 'done', `已加载 ${startupSkills.length} 个技能并恢复记忆`, '技能和记忆已加载')
 
 // Awakening phase: first 10 heartbeat ticks after initial activation run at a fixed 10s cadence
 const AWAKENING_CONFIG_KEY = 'awakening_ticks_remaining'
@@ -139,26 +191,32 @@ function getAwakeningTicks() {
 }
 function decrementAwakeningTick() {
   const current = getAwakeningTicks()
-  if (current > 0) setConfig(AWAKENING_CONFIG_KEY, String(current - 1))
+  if (current > 0) {
+    const next = current - 1
+    setConfig(AWAKENING_CONFIG_KEY, String(next))
+    // 觉醒期结束:收起 awakening surface(单 surface 的生命周期到此为止;幂等，不存在则无操作）。
+    if (next === 0) sceneStore.set('awakening', null)
+  }
 }
 
 // Awakening exploration tasks: after self-check completes, each autonomous heartbeat tick completes one in order
 const EXPLORATION_INDEX_KEY = 'awakening_exploration_index'
-// AwakeningCard call template — must be executed after completing each exploration step:
-// ui_show("AwakeningCard", { index: N, total: 3, title: "title", finding: "one-sentence finding", emoji: "emoji" })
+// Awakening surface call template — must be executed after completing each exploration step.
+// Single surface "awakening" that morphs through findings (SCENE-PROTOCOL §6 kind=awakening):
+// ui_set({ id: "awakening", kind: "awakening", intent: "ambient", data: { index: N, total: 3, title: "title", finding: "one-sentence finding", emoji: "emoji" } })
 const AWAKENING_EXPLORATION_TASKS = [
   // 1. Read existing memories
   `Exploration (1/2): See what you already know.
 Go through the injected memories silently and take stock: who do you know, what do you know, are there any threads with no follow-up.
 [HARD RULE — DO NOT VIOLATE] During the awakening exploration phase the user has not started a conversation with you yet. Calling send_message to proactively open a topic — including any "casual mention" of memories you uncovered — is forbidden. Record findings only in the AwakeningCard below; do not turn them into outbound messages.
-When done, call ui_show("AwakeningCard", { index:1, total:2, title:"Reading memories", finding:"(one sentence: the most notable lead in the memory store, or 'memory store ready')", emoji:"🧠" }).
+When done, call ui_set({ id:"awakening", kind:"awakening", intent:"ambient", data:{ index:1, total:2, title:"Reading memories", finding:"(one sentence: the most notable lead in the memory store, or 'memory store ready')", emoji:"🧠" } }).
 If later the user opens a conversation and the topic is relevant, you may bring the finding in then — not before.`,
 
   // 2. Surface an unfinished thread
   `Exploration (2/2): Find a forgotten thread.
 Look through memories silently — what did the user mention before but never bring up again? A plan, an idea, something they said they wanted to do but never did?
 [HARD RULE — DO NOT VIOLATE] Same as Task 1: send_message is forbidden during awakening exploration. Do not "casually bring it up". Do not ask "do you need me to move this forward?". Do not draft an opening line to the user. The thread, if found, lives only in the AwakeningCard finding field; it waits for the user to start the conversation.
-When done, call ui_show("AwakeningCard", { index:2, total:2, title:"Unfinished thread", finding:"(one sentence describing the forgotten thread, or 'no open threads found')", emoji:"🔍" }).`,
+When done, call ui_set({ id:"awakening", kind:"awakening", intent:"ambient", data:{ index:2, total:2, title:"Unfinished thread", finding:"(one sentence describing the forgotten thread, or 'no open threads found')", emoji:"🔍" } }).`,
 ]
 
 function getExplorationIndex() {
@@ -263,8 +321,12 @@ const TASK_IDLE_TICK_LIMIT = 5  // auto-clear task after N consecutive task tick
 configureRecognizerScheduler({
   onResult: (memories) => {
     emitEvent('memories_written', { count: memories?.length || 0, memories: memories || [] })
+    const evolved = recordSelfEvolutionFromMemories(memories || [], { emitEvent })
     if (Array.isArray(memories) && memories.length > 0) {
       refreshUserProfile(PRIMARY_USER_ID)
+    }
+    if (evolved.length > 0) {
+      console.log(`[self-evolution] learned ${evolved.length} behavior update(s)`)
     }
   },
 })
@@ -285,6 +347,7 @@ function summarizeToolCall(t = {}) {
     return `read_file(${pathArg}${range})${status}`
   }
   if (t.name === 'exec_command') return `exec_command(${String(args.command || '').slice(0, 80)})${status}`
+  if (t.name === 'install_software') return `install_software(${String(args.query || args.package_id || args.job_id || '?').slice(0, 80)})${status}`
   return `${t.name || 'tool'}${status}`
 }
 
@@ -389,13 +452,13 @@ function buildStartupSelfCheckDirections(checkState) {
   if (!checkState?.active) return ''
   return [
     `This is the L2 startup self-check flow (${STARTUP_SELF_CHECK_VERSION}). It runs once; when finished you must call complete_startup_self_check to record the results — it will not run again.`,
-    `[HARD RULE — DO NOT VIOLATE] During self-check, calling send_message is strictly forbidden. No text output of any kind (including "checking…", "self-check complete", or any other text). All status must be expressed through speak (voice) and ui_show (cards). The text channel must remain completely silent; any text output counts as self-check failure.`,
-    `Complete the following 3 checks in order. Before each one, you must simultaneously play a Chinese voice announcement and show a progress card. After the check completes, close the card before moving to the next:`,
-    `1. Call speak text="正在检查文件读写能力"; call ui_show("SelfCheckStepCard", {step:1, total:3, name:"文件读写", icon:"📁"}) and save the returned id as step_card_id. Then: use write_file to write self_check.txt in the sandbox root (content = current timestamp), then read_file it back to verify consistency. Record the result and call ui_hide(step_card_id).`,
-    `2. Call speak text="正在检查热点面板"; call ui_show("SelfCheckStepCard", {step:2, total:3, name:"热点面板", icon:"🌐"}) and save the returned id as step_card_id. Then: hotspot_mode action=show; confirm it returns ok, then hotspot_mode action=hide. Record the result and call ui_hide(step_card_id).`,
-    `3. Call speak text="正在检查视频模式"; call ui_show("SelfCheckStepCard", {step:3, total:3, name:"视频模式", icon:"🎬"}) and save the returned id as step_card_id. Then: web_search for "bilibili Iron Man JARVIS" ONCE — this is only a self-check, so take the FIRST BV number that appears in the results and stop immediately; do NOT keep searching for more videos or compare options, one valid BV id is enough. media_mode mode=video action=show url=https://www.bilibili.com/video/<BV> autoplay=true; wait ~5 seconds; media_mode mode=video action=hide. Record the result and call ui_hide(step_card_id).`,
+    `[HARD RULE — DO NOT VIOLATE] During self-check, calling send_message is strictly forbidden. No text output of any kind (including "checking…", "self-check complete", or any other text). All status must be expressed through speak (voice) and ui_set (the self-check surface). The text channel must remain completely silent; any text output counts as self-check failure.`,
+    `There is ONE self-check surface, id="self-check" (SCENE-PROTOCOL kind=selfcheck). It morphs in place through every step — never use a different id, never remove it between steps. Each step: play a Chinese voice announcement, then ui_set the running state of this one surface.`,
+    `1. Call speak text="正在检查文件读写能力"; call ui_set({ id:"self-check", kind:"selfcheck", intent:"inform", data:{ phase:"running", step:1, total:3, name:"文件读写", icon:"📁" } }). Then: use write_file to write self_check.txt in the sandbox root (content = current timestamp), then read_file it back to verify consistency. Record the result.`,
+    `2. Call speak text="正在检查热点面板"; call ui_set({ id:"self-check", kind:"selfcheck", intent:"inform", data:{ phase:"running", step:2, total:3, name:"热点面板", icon:"🌐" } }). Then: hotspot_mode action=show; confirm it returns ok, then hotspot_mode action=hide. Record the result.`,
+    `3. Call speak text="正在检查视频模式"; call ui_set({ id:"self-check", kind:"selfcheck", intent:"inform", data:{ phase:"running", step:3, total:3, name:"视频模式", icon:"🎬" } }). Then: web_search for "bilibili Iron Man JARVIS" ONCE — this is only a self-check, so take the FIRST BV number that appears in the results and stop immediately; do NOT keep searching for more videos or compare options, one valid BV id is enough. media_mode mode=video action=show url=https://www.bilibili.com/video/<BV> autoplay=true; wait ~5 seconds; media_mode mode=video action=hide. Record the result.`,
     `Result values: use ok, degraded, error, or skipped_* for each item. Continue to the next item even if one fails.`,
-    `[FINAL TWO STEPS — REQUIRED]\n(a) Call ui_show to display SelfCheckCard with props: { results: [{name:"文件读写",status:"ok/error",...},{name:"热点面板",...},{name:"视频模式",...}], overall:"ok/degraded/error" }. Infer overall from actual results: all ok → ok; any skipped → degraded; any error → error.\n(b) Call complete_startup_self_check with a summary (one sentence) and the results object.`,
+    `[FINAL THREE STEPS — REQUIRED, in order]\n(a) Morph the SAME surface to its done state: ui_set({ id:"self-check", kind:"selfcheck", intent:"inform", data:{ phase:"done", results:[{name:"文件读写",status:"ok/error/skipped",note:"..."},{name:"热点面板",status:"..."},{name:"视频模式",status:"..."}], overall:"ok/degraded/error" } }). Infer overall from actual results: all ok → ok; any skipped → degraded; any error → error.\n(b) Call complete_startup_self_check with a summary (one sentence) and the results object.\n(c) Clear the surface: ui_set({ id:"self-check", remove:true }).`,
   ].join('\n')
 }
 
@@ -408,18 +471,7 @@ function buildStartupSelfCheckDirections(checkState) {
 function deliverFallbackReply(msg, content, timestamp) {
   const channel = msg.channel || ''
   const externalPartyId = msg.externalPartyId || ''
-  emitEvent('message', {
-    from: 'consciousness',
-    to: msg.fromId,
-    content,
-    timestamp,
-    channel,
-    external_party_id: externalPartyId,
-  })
-  if (externalPartyId) {
-    dispatchSocialMessage(externalPartyId, content).catch(err => console.warn('[social] fallback send failed:', err.message))
-  }
-  insertConversation({
+  const insertedId = insertConversation({
     role: 'jarvis',
     from_id: 'jarvis',
     to_id: msg.fromId,
@@ -430,6 +482,18 @@ function deliverFallbackReply(msg, content, timestamp) {
     // P0-2：fallback 投递的 reply 同样检测末尾是否是 follow-up 悬念
     open_question: detectOpenFollowupQuestion(content) ? 1 : 0,
   })
+  emitEvent('message', {
+    from: 'consciousness',
+    to: msg.fromId,
+    content,
+    timestamp,
+    conversation_id: insertedId,
+    channel,
+    external_party_id: externalPartyId,
+  })
+  if (externalPartyId) {
+    dispatchSocialMessage(externalPartyId, content).catch(err => console.warn('[social] fallback send failed:', err.message))
+  }
   // 同步登记 action_log，让 self-snapshot 能用 action_log 作为身份锚的真值源。
   // tool 仍为 send_message，但 source 标 'fallback' 以便区分主动调用与协议兜底。
   try {
@@ -448,59 +512,6 @@ function deliverFallbackReply(msg, content, timestamp) {
   } catch (e) {
     console.warn('[fallback] insertActionLog failed:', e?.message || e)
   }
-}
-
-function formatQuickWeatherReply(cardProps) {
-  if (!cardProps) return ''
-  const city = cardProps.city || '当地'
-  const temp = Number.isFinite(cardProps.temp) ? `${Math.round(cardProps.temp)}度` : ''
-  const feel = Number.isFinite(cardProps.feel) ? `体感${Math.round(cardProps.feel)}` : ''
-  const condition = cardProps.condition || cardProps.desc || ''
-  const parts = [temp, feel, condition].filter(Boolean)
-  return parts.length ? `${city}现在${parts.join('，')}。` : ''
-}
-
-async function tryHandleDirectWeatherTurn(input, msg, { finishTurn } = {}) {
-  if (!msg || !isWeatherQuery(input)) return false
-
-  emitEvent('action', {
-    tool: 'weather_query',
-    summary: '查询天气',
-    detail: String(input || '').slice(0, 120),
-  })
-
-  const cardProps = await getWeatherCardProps(input)
-  if (!cardProps) return false
-
-  const reply = formatQuickWeatherReply(cardProps)
-  if (!reply) return false
-
-  // P0-1：天气快速路径绕开了 updateFocusFrame，需要手动给本轮 user 消息和
-  //   即将写入的 jarvis 回复打上"天气"焦点标签；否则 conversationWindow 里
-  //   这两行 focus_topic 永远是空，破坏话题边界标注。
-  setCurrentFocusTopic('天气')
-  setCurrentThreadId('')  // 天气是一次性叶子，不归属任何线索
-  try { updateUserMessageFocusTopic(msg.fromId, msg.timestamp, '天气') } catch {}
-
-  const timestamp = nowTimestamp()
-  if (isVoiceChannel(msg.channel)) autoSpeakForVoiceReply(reply)
-  deliverFallbackReply(msg, reply, timestamp)
-
-  if (hasACUIClient()) {
-    const id = `weathercard-${Date.now()}`
-    emitUICommand({
-      op: 'mount',
-      id,
-      component: 'WeatherCard',
-      props: cardProps,
-      hint: { placement: 'notification', enter: 'flash-in', exit: 'flash-out' },
-    })
-    addActiveUICard(id, { component: 'WeatherCard' })
-    emitEvent('action', { tool: 'ui_show', summary: '推送卡片', detail: 'WeatherCard' })
-  }
-
-  finishTurn?.(reply)
-  return true
 }
 
 export function buildToolContext({ currentTargetId = null, conversationWindow = [], includeRecentPartners = false } = {}) {
@@ -522,8 +533,12 @@ export function buildToolContext({ currentTargetId = null, conversationWindow = 
 }
 
 function buildToolContextForProcess(msg, injection) {
+  const currentChannel = msg?.notificationChannel || msg?.channel || null
+  const voiceReply = msg?.notificationVoiceReply === true
+    || msg?.voiceReply === true
+    || isVoiceChannel(currentChannel)
   const base = buildToolContext({
-    currentTargetId: msg?.reminderTargetId || msg?.fromId || null,
+    currentTargetId: msg?.notificationTargetId || msg?.reminderTargetId || msg?.fromId || null,
     conversationWindow: injection.conversationWindow || [],
     includeRecentPartners: true,
   })
@@ -531,8 +546,9 @@ function buildToolContextForProcess(msg, injection) {
   return {
     ...base,
     // 当前 turn 的渠道信息：execSendMessage 在 AUTO 模式下优先用这里，确保"在哪儿收的消息就回到哪儿"
-    currentChannel: msg?.channel || null,
-    currentExternalPartyId: msg?.externalPartyId || null,
+    currentChannel,
+    currentExternalPartyId: msg?.notificationExternalPartyId || msg?.externalPartyId || null,
+    voiceReply,
     currentUserMessage: msg?.content || null,
     // 自我感知信号：传给工具执行层（如 upsert_memory 守门），让"镜像污染"在写入长期记忆前就被拦截
     selfPerception: injection.selfPerception || null,
@@ -657,10 +673,6 @@ function throwIfAborted(signal) {
 function getProcessPriority(msg) {
   if (!msg) return PRIORITY.tick
   return typeof msg.priority === 'number' ? msg.priority : PRIORITY.background
-}
-
-function isVoiceChannel(channel) {
-  return channel === 'voice' || channel === '语音识别' || channel === 'FocusBanner'
 }
 
 // 语音轮里"明显要往外部/社交渠道发送"的意图——命中则保留 send_message 工具，
@@ -835,11 +847,6 @@ function detectChannelSwitch(msg, conversationWindow) {
   return false
 }
 
-function isSoftwareInstallRequest(text = '') {
-  const t = String(text || '').toLowerCase()
-  return /安装软件|安装应用|安装程序|安装客户端|装软件|装应用|装程序|装客户端|下载安装包|下载软件|软件下载|软件安装包|安装包|官方安装包|安装微信|装微信|下载微信|微信安装包|安装剪映|装剪映|下载剪映|剪映安装包|capcut|install app|install software|install program|install client|download installer|download setup|software installer|setup\.exe|\.msi|\.exe/.test(t)
-}
-
 // Build systemEnv on demand: inject each block based on keywords in the message
 function buildSystemEnv(msg) {
   const text = (typeof msg === 'string' ? msg : msg?.content || '').toLowerCase()
@@ -851,11 +858,65 @@ function buildSystemEnv(msg) {
     blocks.push(getDesktopBlock())
   if (isSoftwareInstallRequest(text) || /软件|应用|程序|客户端|工具|装了什么|用了什么|代理|科学上网|翻墙|\bvpn\b|\bproxy\b|clash|mihomo|v2ray|xray|sing-?box|shadowrocket|shadowsocks|wireguard|tailscale|zerotier|openvpn/.test(text))
     blocks.push(getInstalledSoftwareBlock())
-  if (/天气|气温|温度|下雨|下雪|晴天|气候|风力|风速|台风|位置|城市|在哪个城市/.test(text))
+  if (/位置|在哪个城市/.test(text))
     blocks.push(getGeoWeatherBlock())
-  if (/热点|新闻|热搜|热榜|今天发生|最近发生|微博|知乎|头条/.test(text))
-    blocks.push(getTrendingBlock())
+  // 飞书：注入实时连接状态，避免 Agent 在「是不是连上了」上瞎猜、误报未连接。
+  if (/飞书|feishu|lark/.test(text))
+    blocks.push(getFeishuStatusBlock())
+  // 热点不再按关键词预喂热搜数据：是否取数/开面板交由 Agent 调 hotspot_mode 自决（见 prompt Hotspot Panel 规则）。
   return blocks.filter(Boolean).join('\n\n')
+}
+
+function weatherSurfaceId(city = '') {
+  const slug = String(city || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48)
+  return `weather-${slug || 'local'}`
+}
+
+function normalizeWeatherSurfaceData(cardProps = {}) {
+  const forecast = Array.isArray(cardProps.forecast)
+    ? cardProps.forecast.map(f => ({
+      day: f.day || '',
+      low: f.low,
+      high: f.high,
+      condition: f.condition || '',
+    }))
+    : []
+  return {
+    variant: cardProps.variant || 'compact',
+    city: cardProps.city || '当前位置',
+    temp: cardProps.temp,
+    condition: cardProps.condition || '',
+    forecast,
+  }
+}
+
+async function projectWeatherSurfaceForTurn(message = '') {
+  if (!isWeatherQuery(message)) return null
+
+  const cardProps = await getWeatherCardProps(message)
+  if (!cardProps) return null
+
+  const data = normalizeWeatherSurfaceData(cardProps)
+  const id = weatherSurfaceId(data.city)
+  const changed = sceneStore.set(id, {
+    kind: 'weather',
+    data,
+    intent: 'ambient',
+  })
+  scheduleSceneSurfaceRemoval(id, { kind: 'weather' })
+  if (changed) {
+    emitEvent('action', {
+      tool: 'weather_surface',
+      summary: '已显示天气卡片',
+      detail: data.city,
+    })
+  }
+  return { id, data, changed }
 }
 
 async function runTurn(input, label, msg = null) {
@@ -923,12 +984,15 @@ async function runTurn(input, label, msg = null) {
       }
     }
 
-    if (!isTick && await tryHandleDirectWeatherTurn(input, msg, { finishTurn })) {
-      return
-    }
+    // 天气不走"绕开 LLM 的快速回复"：仍交回 LLM 回答。
+    // 但天气 surface 是确定性 UI 能力,不能完全依赖模型是否记得调用 ui_set。
 
     // 1. Injector
-    const injection = await runInjector({ message: input, state })
+    const injection = await runInjector({
+      message: input,
+      state,
+      currentChannel: msg ? normalizeChannel(msg.channel || '') : '',
+    })
     throwIfAborted(controller.signal)
 
     // 1b. 线索模型（DynamicMemoryPool.md 第 8 章）—— 专注栈的继任者。
@@ -1057,9 +1121,8 @@ async function runTurn(input, label, msg = null) {
     if (fastUserPath) {
       directions.unshift('Current turn is a real-time external user message. Understand it quickly and reply directly with send_message. If no slow tool is needed, send exactly one final answer and stop. Use heavier tools only when the reply depends on them. During longer execution, send progress only for meaningful new findings or blockers; do not send an acknowledgement and then a near-duplicate final answer.')
     }
-    if (!isTick && isSoftwareInstallRequest(input)) {
-      directions.unshift('Software install workflow: first use injected installed-software context to see whether the app is already installed. If installation is still needed, prefer official vendor sources found via web_search/fetch_url; download installers with download_file so progress events are available. Save installers under sandbox downloads. Only run an installer with exec_task_command/exec_command after you have a concrete local file path or official installer command. Read the tool result before claiming success; if the installer opens a GUI, tell the user exactly what is now waiting for them instead of pretending it completed silently.')
-    }
+    // 软件安装工作流已收敛为 software-install 能力的 context，统一经 buildSystemPrompt 注入
+    //   （见 capabilities/capability-registry.js）。此处不再以 direction 重复注入同一份文本。
     if (isVoiceChannel(msg?.channel)) {
       directions.push('Voice mode: answer with judgment and meaning first. Do not read out an inventory. If details are merely evidence, compress them into the situation they prove.')
       directions.push('Voice mode style: speak like a person in the room. Default to one or two short sentences. No Markdown, no bullets, no headings, no process acknowledgement, no repeated summary. Say the situation, then stop.')
@@ -1079,7 +1142,7 @@ async function runTurn(input, label, msg = null) {
 
     // Real-time user messages take the fast path: skip heavy context gathering to avoid slowdowns from task background.
     const prefetchText = formatPrefetchedItems(injection.prefetchedItems)
-    const runtimeInjection = await runRuntimeInjector({
+    const runtimeInjectionPromise = runRuntimeInjector({
       message: msg?.content || input,
       task: state.task,
       taskKnowledge: taskKnowledgeText,
@@ -1087,16 +1150,14 @@ async function runTurn(input, label, msg = null) {
       fastUserPath,
       signal: controller.signal,
     })
+    const weatherSurfacePromise = (!isTick && msg && !silentSignal)
+      ? projectWeatherSurfaceForTurn(msg.content || input)
+      : Promise.resolve(null)
+    const [runtimeInjection] = await Promise.all([runtimeInjectionPromise, weatherSurfacePromise])
     throwIfAborted(controller.signal)
 
-    // When weather keywords are detected, auto-pop WeatherCard after 1 second
-    if (runtimeInjection.weatherCardProps && hasACUIClient()) {
-      setTimeout(() => {
-        const id = `weathercard-${Date.now()}`
-        emitUICommand({ op: 'mount', id, component: 'WeatherCard', props: runtimeInjection.weatherCardProps, hint: { placement: 'notification', enter: 'flash-in', exit: 'flash-out' } })
-        addActiveUICard(id, { component: 'WeatherCard' })
-      }, 1000)
-    }
+    // 天气卡片投影与 runRuntimeInjector 并发;显式城市天气共用 in-flight wttr.in 请求。
+    // 不使用启动期 IP geo-weather 作为天气卡兜底,避免 VPN 出口城市污染结果。
 
     // 用户跨渠道可达性快照（让 L2 主动消息能选对渠道：用户在外面就发微信，在电脑前就发本地）
     const presenceText = formatPresenceForPrompt(PRIMARY_USER_ID)
@@ -1166,7 +1227,8 @@ async function runTurn(input, label, msg = null) {
     const agentName = getConfig('agent_name') || '小白龙'
     const entities = getKnownEntities()
     const hasActiveTask = !!state.task
-    const extraContextJoined = [presenceText, runtimeInjection.contextText, prefetchText, injection.uiSignalSummary, formatActiveUICards(injection.activeUICards), formatAIVideoPanel(getAIVideoPanelState())].filter(Boolean).join('\n\n')
+    const terminalStreamContext = formatTerminalStreamContext()
+    const extraContextJoined = [presenceText, runtimeInjection.contextText, terminalStreamContext, prefetchText, injection.uiSignalSummary, formatSceneManifest(sceneStore.manifest()), formatAIVideoPanel(getAIVideoPanelState())].filter(Boolean).join('\n\n')
     const skillSelection = selectSkillsForMessage(msg?.content || input || '')
     const agentSkillsText = formatSkillsForContext(skillSelection)
     if (skillSelection.active.length > 0 || skillSelection.catalogRequested) {
@@ -1199,6 +1261,7 @@ async function runTurn(input, label, msg = null) {
       birthTime,
       userMessage: msg?.content || input || '',
       currentChannel: msg ? normalizeChannel(msg.channel || '') : '',
+      isVoiceTurn: isVoiceChannel(msg?.channel),
       hasWechatHistory: false,
       hasActiveFocus: false,
       currentCountryCode: geoResult?.location?.country_code || '',
@@ -1236,6 +1299,7 @@ async function runTurn(input, label, msg = null) {
       focusTickCounter: state.tickCounter || 0,
       selfPerception: injection.selfPerception || null,
       selfSnapshot: injection.selfSnapshot || null,
+      selfEvolution: injection.selfEvolution || '',
     }
 
     // ① 统一相关度门（动态上下文记忆池 / 少即是强：排除导向的精细化管理）。
@@ -1356,6 +1420,20 @@ async function runTurn(input, label, msg = null) {
     if (voiceTurn && !silentSignal && !voiceTurnNeedsSendMessage(input)) {
       turnTools = turnTools.filter(t => t !== 'send_message')
     }
+    // 能力展示是本地可视化动作。若 capability_demo 已按需注入，保留 send_message 会让模型
+    // 走成"只发一句看屏幕"的普通回复；本地轮次最终文字本来就能用 plain text 投递。
+    if (localReply && turnTools.includes('capability_demo')) {
+      turnTools = turnTools.filter(t => t !== 'send_message')
+    }
+    const capabilityDemoTurn = localReply && turnTools.includes('capability_demo')
+    const toolPromptHints = formatToolPromptHintsForSchemas(injection.activePolicies || [], turnTools)
+    if (Object.keys(toolPromptHints).length > 0) {
+      toolContext.toolPromptHints = toolPromptHints
+      emitEvent('tool_prompt_hints', {
+        tools: Object.keys(toolPromptHints),
+        count: Object.values(toolPromptHints).reduce((sum, hints) => sum + (Array.isArray(hints) ? hints.length : 0), 0),
+      })
+    }
     // thinking 不用"消息是否 trivial"的正则判定来开关 reasoning：浅层模式不该替模型决定"这题用不用想"
     // ——复合意图下会把需要 reasoning 的部分误判。是否思考由「用户在设置里的显式选择」(config.thinking) 决定，
     // 默认关闭、用户主动开启才思考；这是用户的选择，不是 runtime 按难度替它判定。
@@ -1401,16 +1479,11 @@ async function runTurn(input, label, msg = null) {
         // 优先压缩 stdout/stderr/content/snippet 等长字段，再整体 stringify，而非粗暴 slice。
         const resultForEvent = truncateToolResultForUI(parsed, resultText)
         emitEvent('tool_call', { name, args: cleanArgs, result: resultForEvent, ok })
-        toolCallLog.push({ name, args: cleanArgs, result: resultText.slice(0, 500), ok, fallback: isFallbackDelivery, ack: isAckDelivery })
-        // 注：send_message 的 conversations 写入已由 executor.js 内统一处理（带 channel + external_party_id）
-        // 这里仅处理语音输入的 TTS 自动回放
-        // 语音渠道才自动播报。本轮若流出过正文（sawTextStream），说明前端已边出边逐句流式合成，
-        // 后端不再整段补一次，否则会和前端流式重复念。仅当没有正文流（极少：模型直接发了 send_message
-        // 而没流任何正文）时才由后端兜底整段合成，保证语音不会变哑。
-        if (name === 'send_message' && args?.content && isVoiceChannel(msg?.channel) && !sawTextStream) {
-          const speakText = String(args.content).trim()
-          if (speakText) autoSpeakForVoiceReply(speakText)
-        }
+        const recognizerResultLimit = ok ? 500 : 1200
+        toolCallLog.push({ name, args: cleanArgs, result: resultText.slice(0, recognizerResultLimit), ok, fallback: isFallbackDelivery, ack: isAckDelivery })
+        // send_message playback is driven by executor.js via message.speak.
+        // That covers explicit sends, slow acknowledgements, fallback delivery,
+        // and background job completion notifications through the same frontend path.
       },
       onRetry: ({ attempt, nextAttempt, maxAttempts, delayMs, error }) => {
         emitEvent('llm_retry', { attempt, nextAttempt, maxAttempts, delayMs, error })
@@ -1421,6 +1494,7 @@ async function runTurn(input, label, msg = null) {
       onStream: ({ event, mode, text, name }) => {
         if (event === 'start') {
           curStreamMode = mode
+          if (capabilityDemoTurn && mode === 'text') return
           // plainReply：本地渠道（语音 / TUI，非社交）下正文流即用户可见回复——前端据此把正文实时
           //   打进聊天气泡（社交渠道回复在 send_message 工具参数里，正文流非回复，不实时显示）。
           // speak：语音轮才自动播报——前端据此对正文流逐句流式合成。
@@ -1430,9 +1504,16 @@ async function runTurn(input, label, msg = null) {
             speak: mode === 'text' && voiceTurn && !silentSignal,
           })
         } else if (event === 'chunk') {
+          if (capabilityDemoTurn && curStreamMode === 'text') return
           if (curStreamMode === 'text') sawTextStream = true
           emitEvent('stream_chunk', { text, mode: curStreamMode })
-        } else if (event === 'end') emitEvent('stream_end', { mode: curStreamMode })
+        } else if (event === 'end') {
+          if (capabilityDemoTurn && curStreamMode === 'text') {
+            curStreamMode = null
+            return
+          }
+          emitEvent('stream_end', { mode: curStreamMode })
+        }
         else if (event === 'tool_preparing') emitEvent('tool_preparing', { name })
       },
     })
@@ -1822,8 +1903,6 @@ async function main() {
     }
   }
 
-  // Sync ACUI skill memories (compare AGENT_GUIDE.md hash, update skill-ui-* entries as needed)
-  ensureSkillMemories()
 
   const persona = getConfig('persona')
   if (persona) {
@@ -1834,6 +1913,7 @@ async function main() {
 
   // Start HTTP API — must start regardless of activation status; the activation page depends on it
   const apiPort = Number(process.env.BAILONGMA_PORT) || 3721
+  reportStartupProgress('api', 'running', `准备监听 127.0.0.1:${apiPort}`, '正在启动本地 API')
   startAPI(apiPort, {
     getStateSnapshot: () => ({
       action: state.action,
@@ -1853,6 +1933,7 @@ async function main() {
       startConsciousnessLoop({ runImmediateTick: true }).catch(err => console.error('[system] Main loop failed to start:', err))
     },
   })
+  reportStartupProgress('api', 'running', `等待 127.0.0.1:${apiPort} 就绪`, '正在等待本地 API 就绪')
   startSocialConnectors({ pushMessage, emitEvent }).catch(err => console.warn('[social] startup failed:', err.message))
 
   // 恢复重启前未完成的 AI 视频生成任务（继续轮询，避免面板永远卡“生成中”）

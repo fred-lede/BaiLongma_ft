@@ -1,6 +1,6 @@
 ﻿import { renderBrainUiApp } from "./app-shell.js";
 import { API } from "./api-client.js";
-import { bootstrapACUI } from "./acui/bootstrap.js";
+import { bootstrapScene } from "../scene-shell/bootstrap.js";
 import { initChat, friendlyChannelLabel } from "./chat.js";
 import { initPanelCollapse } from "./panel-collapse.js";
 import { ThoughtStream } from "./thought-stream.js";
@@ -10,6 +10,7 @@ import { initWorldcup, toggleWorldcup, setWorldcupMode } from "./worldcup.js";
 import { enrichVisiblePersonCardFromText, initPersonCard, setPersonCardMode, showPersonCardByName } from "./person-card.js";
 import { initDocPanel, setDocPanelMode } from "./doc.js";
 import { initWechatPopup, showWechatPopup } from "./wechat-popup.js";
+import { initFeishuPopup, showFeishuPopup } from "./feishu-popup.js";
 import { attachJarvisAudioGraph, attachJarvisFx, isFxEnabledForVoice, setFxEnabledForVoice, getJarvisFxParams, setJarvisFxParams, resetJarvisFxParams, isFxUnlocked, tryUnlockFx } from "./tts-fx.js";
 import { initAudioOutputRouting, applyOutputSink, listOutputDevices, getOutputPreference, setOutputPreference } from "./audio-output.js";
 renderBrainUiApp(document.body);
@@ -1053,7 +1054,7 @@ const AI_TOOL_GROUPS = {
   "执行命令": new Set(["exec_command", "exec_quick_command", "exec_task_command", "exec_background_command", "download_file", "kill_process", "list_processes"]),
   "上网": new Set(["fetch_url", "web_search", "browser_read"]),
   "调取记忆": new Set(["search_memory", "recall_memory", "probe_memory", "upsert_memory", "merge_memories", "downgrade_memory"]),
-  "推送界面": new Set(["ui_show", "ui_update", "ui_hide", "ui_patch", "ui_register", "focus_banner"]),
+  "推送界面": new Set(["ui_set", "focus_banner"]),
   "处理多媒体": new Set(["speak", "generate_lyrics", "generate_music", "generate_image", "music", "media_mode"]),
   "回复用户": new Set(["send_message", "express"]),
 };
@@ -1438,18 +1439,22 @@ function handle({ type, data = {} }) {
     case "message":
       if (data.from === "consciousness") {
         lastJarvisContent = data.content;
+        const shouldSpeakMessage = data.speak === true;
         const viaLabel = friendlyChannelLabel(data.channel);
         const content = viaLabel ? `_→ ${viaLabel}_  \n${data.content}` : data.content;
+        const messageId = data.conversation_id || data.conversationId || "";
         // 若本轮正文已流式进了实时气泡：用权威全文定稿同一个气泡，避免新建重复气泡
         if (chat.hasLiveJarvisMsg()) {
-          chat.finalizeLiveJarvisMsg(content);
+          chat.finalizeLiveJarvisMsg(content, { messageId });
         } else {
-          addMsg("jarvis", content);
+          addMsg("jarvis", content, { messageId });
         }
         // 语音轮的 TTS 收尾：逐句会话进行中 → flush 尾句并收尾；若未走逐句（流式合成关闭）→ 整段播一次
         if (liveTurnSpeak) {
           if (sttsActive) finalizeStreamingTTS();
           else playTTSReply(toPlainSpeech(data.content));
+        } else if (shouldSpeakMessage) {
+          playTTSReplyIfReadable(data.content);
         }
         liveReplyActive = false;
         liveRawText = "";
@@ -1466,7 +1471,7 @@ function handle({ type, data = {} }) {
         || (data.from_id && /^(wechat|discord|feishu|wecom|telegram):/i.test(data.from_id));
       if (isExternal) {
         const label = friendlyChannelLabel(data.channel) || data.from_id || "External";
-        addMsg("external", data.content, { label, alert: false });
+        addMsg("external", data.content, { label, alert: false, messageId: data.conversation_id || data.conversationId || "" });
         openChat(true);
       }
       break;
@@ -1497,6 +1502,9 @@ function handle({ type, data = {} }) {
       break;
     case "show_wechat_popup":
       showWechatPopup();
+      break;
+    case "show_feishu_popup":
+      showFeishuPopup();
       break;
     case "audio_created":
       if (data.autoPlay && data.path) {
@@ -1914,6 +1922,11 @@ function toPlainSpeech(md) {
     .trim();
 }
 
+function playTTSReplyIfReadable(text) {
+  const plain = toPlainSpeech(text);
+  if (plain && sttsHasReadable(plain)) playTTSReply(plain);
+}
+
 // ── 逐句流式 TTS 队列 ──────────────────────────────────────────────────────────
 function beginStreamingTTS() {
   // 停掉上一段仍在进行的单段播放 / 流读取
@@ -2168,9 +2181,10 @@ initDocPanel().catch((err) => console.warn('[DocPanel] init failed:', err));
 chat.restoreChatHistory();
 chat.unlockAudioOnFirstGesture();
 
-bootstrapACUI();
+bootstrapScene();  // Scene 架构 shell(/scene):声明式 Agent-UI 投影层。
 initPanelCollapse();
 initWechatPopup();
+initFeishuPopup();
 
 // ── TTS settings panel init ───────────────────────────────────────────────────
 function initTTSSettings() {
@@ -2779,6 +2793,7 @@ function initTTSSettings() {
   const closeBtn        = document.getElementById("settings-close");
   const providerSelect  = document.getElementById("settings-provider-select");
   const modelSelect     = document.getElementById("settings-model-select");
+  const officialCustomModelInput = document.getElementById("settings-official-custom-model");
   const llmKeyInput     = document.getElementById("settings-llm-key");
   const llmKeyToggle    = document.getElementById("settings-llm-key-toggle");
   const saveLlmBtn      = document.getElementById("settings-save-llm");
@@ -2814,6 +2829,7 @@ function initTTSSettings() {
   let cachedLlm = null;
   let llmKeyVisible = false;
   const agentNameRe = /^[一-龥A-Za-z0-9 _-]+$/;
+  const CUSTOM_MODEL_VALUE = "__custom_model__";
 
   overlay.querySelectorAll(".settings-nav-item").forEach(btn => {
     btn.addEventListener("click", () => {
@@ -2854,12 +2870,38 @@ function initTTSSettings() {
     }
   }
 
+  function escapeHtml(text) {
+    return String(text ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  function syncOfficialCustomModelRow() {
+    const customRow = document.getElementById("settings-official-custom-model-row");
+    if (!customRow || !modelSelect) return;
+    customRow.style.display = modelSelect.value === CUSTOM_MODEL_VALUE ? "" : "none";
+  }
+
   function populateModelSelect(models, current) {
     if (!modelSelect || !models) return;
-    modelSelect.innerHTML = models
-      .map(m => `<option value="${m.id}"${m.deprecated ? " data-deprecated" : ""}>${m.label}</option>`)
+    const list = Array.isArray(models) ? models.filter(m => m?.id) : [];
+    const currentModel = String(current || "").trim();
+    const hasCurrent = currentModel && list.some(m => m.id === currentModel);
+    modelSelect.innerHTML = list
+      .map(m => `<option value="${escapeHtml(m.id)}"${m.deprecated ? " data-deprecated" : ""}>${escapeHtml(m.label || m.id)}</option>`)
+      .concat(`<option value="${CUSTOM_MODEL_VALUE}">手动输入模型名…</option>`)
       .join("");
-    if (current) modelSelect.value = current;
+    if (hasCurrent) {
+      modelSelect.value = currentModel;
+      if (officialCustomModelInput) officialCustomModelInput.value = "";
+    } else if (currentModel) {
+      modelSelect.value = CUSTOM_MODEL_VALUE;
+      if (officialCustomModelInput) officialCustomModelInput.value = currentModel;
+    }
+    syncOfficialCustomModelRow();
   }
 
   function populateProviderSelect(providers, current) {
@@ -2868,7 +2910,7 @@ function initTTSSettings() {
     const options = [`<option value="auto">Auto-detect</option>`]
       .concat(Object.entries(providers).map(([id, provider]) => {
         const label = provider.label || id;
-        return `<option value="${id}">${label}</option>`;
+        return `<option value="${escapeHtml(id)}">${escapeHtml(label)}</option>`;
       }));
     providerSelect.innerHTML = options.join("");
     providerSelect.value = providers[selected] || selected === "auto" ? selected : "auto";
@@ -2902,9 +2944,11 @@ function initTTSSettings() {
     const providerCfg = getProviderConfigForUI(provider, typeof providerOrLlm === "object" ? providerOrLlm : cachedLlm);
     const customSection = document.getElementById("settings-custom-llm-section");
     const modelRow = document.getElementById("settings-model-row");
+    const officialCustomModelRow = document.getElementById("settings-official-custom-model-row");
     if (provider === "auto") {
       if (customSection) customSection.style.display = "none";
       if (modelRow) modelRow.style.display = "none";
+      if (officialCustomModelRow) officialCustomModelRow.style.display = "none";
       if (llmKeyInput) llmKeyInput.value = "";
       setLlmKeyVisible(false);
       return;
@@ -2912,6 +2956,7 @@ function initTTSSettings() {
     if (provider === "custom") {
       if (customSection) customSection.style.display = "";
       if (modelRow) modelRow.style.display = "none";
+      if (officialCustomModelRow) officialCustomModelRow.style.display = "none";
       const baseUrlEl = document.getElementById("settings-custom-baseurl");
       const modelEl = document.getElementById("settings-custom-model");
       if (baseUrlEl) baseUrlEl.value = providerCfg.baseURL || "";
@@ -3604,6 +3649,10 @@ function initTTSSettings() {
     });
   }
 
+  if (modelSelect) {
+    modelSelect.addEventListener("change", syncOfficialCustomModelRow);
+  }
+
   saveAgentNameBtn?.addEventListener("click", async () => {
     const nextName = agentNameInput?.value?.trim() || "";
     if (nextName.length > 32) {
@@ -3665,7 +3714,16 @@ function initTTSSettings() {
         }
         body.apiKey = apiKey;
       } else {
-        body.model = modelSelect.value;
+        if (modelSelect.value === CUSTOM_MODEL_VALUE) {
+          body.model = officialCustomModelInput?.value?.trim();
+          if (!body.model) {
+            showFeedback(llmFeedback, "请填入模型名称", true);
+            saveLlmBtn.disabled = false;
+            return;
+          }
+        } else {
+          body.model = modelSelect.value;
+        }
         if (apiKey && apiKey !== (selectedCfg.apiKey || "")) body.apiKey = apiKey;
       }
 

@@ -14,6 +14,7 @@
 import { createVoiceCore } from './voice-core.js';
 import { createContinuousPolicy } from './voice-continuous.js';
 import { createPttController } from './voice-ptt.js';
+import { createWakeFlow } from './voice-wake.js';
 
 export function initVoicePanel({
   btnId, panelId, canvasId, statusId, transcriptId,
@@ -45,9 +46,20 @@ export function initVoicePanel({
     cancelAutoSend: continuous.cancelAutoSend,
   });
 
+  // 唤醒会话编排（命中「小白龙」→ 悬浮球入场 → 10s 无话退场）。非 Electron 环境内部自动失能。
+  const wake = createWakeFlow(core);
+
   // 安装模式策略钩子：continuous = 会话默认策略；PTT 通过 core.pttHolding 在其上叠加。
-  core.setOnFrame(continuous.onFrame);
-  core.setOnTranscript(continuous.onTranscript);
+  // 每帧：先喂唤醒编排（把状态+真实音量+文字推给悬浮球窗），再走 continuous 打断检测。
+  core.setOnFrame((vol, frame) => {
+    wake.onFrame(vol, frame);
+    continuous.onFrame(vol, frame);
+  });
+  // 转写到达：先喂唤醒编排（用于「10s 内是否识别到语音」判定），再走 continuous 自动发送策略。
+  core.setOnTranscript((msg, isFinal) => {
+    wake.onTranscript(msg, isFinal);
+    continuous.onTranscript(msg, isFinal);
+  });
   core.setOnSessionStop(continuous.onSessionStop);
   core.setOnSuspendForTTS(continuous.onSuspendForTTS);
   core.setOnResume(continuous.onResume);

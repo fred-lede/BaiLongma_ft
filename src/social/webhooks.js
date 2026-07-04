@@ -34,8 +34,36 @@ function verifyWechatSignature(url) {
 function enqueueSocialMessage(fromId, content, channel, social = {}) {
   const trimmed = String(content || '').trim()
   if (!trimmed) return
-  pushMessage(fromId, trimmed, channel, { social })
-  emitEvent('message_in', { from_id: fromId, content: trimmed, channel, timestamp: new Date().toISOString() })
+  const queued = pushMessage(fromId, trimmed, channel, { social })
+  emitEvent('message_in', {
+    from_id: fromId,
+    content: trimmed,
+    channel,
+    timestamp: new Date().toISOString(),
+    conversation_id: queued?.conversationId || 0,
+  })
+}
+
+function feishuVerificationToken(body) {
+  return String(body?.header?.token || body?.token || '').trim()
+}
+
+// 从飞书消息事件里抽出 { fromId, content, chatId, messageId }，无法定位发件人/正文时 fromId/content 为空串。
+// webhook 入站与长连接（feishu-ws.js）入站共用此函数，确保两条链路的 ID 映射、正文解析完全一致、不会漂移。
+// 入参 event 等价于 webhook 的 body.event，也等价于 SDK EventDispatcher 回调收到的 data。
+export function extractFeishuMessage(event = {}) {
+  const message = event.message || {}
+  let content = ''
+  try {
+    const parsed = JSON.parse(message.content || '{}')
+    content = parsed.text || parsed.content || ''
+  } catch {
+    content = message.content || ''
+  }
+  const openId = event.sender?.sender_id?.open_id || event.sender?.sender_id?.user_id || ''
+  const chatId = message.chat_id || ''
+  const fromId = openId ? `feishu:open_id:${openId}` : (chatId ? `feishu:chat_id:${chatId}` : '')
+  return { fromId, content, chatId, messageId: message.message_id || '' }
 }
 
 async function handleFeishu(req, res) {
@@ -49,15 +77,17 @@ async function handleFeishu(req, res) {
     return jsonResponse(res, 400, { ok: false, error: 'invalid json' })
   }
 
+  const providedToken = feishuVerificationToken(body)
+
   // challenge 握手在鉴权之前响应（飞书要求）
   if (body.challenge) {
-    if (body.token !== expectedToken) return jsonResponse(res, 403, { ok: false, error: 'invalid token' })
+    if (providedToken !== expectedToken) return jsonResponse(res, 403, { ok: false, error: 'invalid token' })
     return jsonResponse(res, 200, { challenge: body.challenge })
   }
 
   if (body.encrypt) return jsonResponse(res, 400, { ok: false, error: 'encrypted Feishu events are not enabled in Bailongma yet' })
 
-  if (body.token !== expectedToken) {
+  if (providedToken !== expectedToken) {
     return jsonResponse(res, 403, { ok: false, error: 'invalid token' })
   }
 
@@ -65,17 +95,8 @@ async function handleFeishu(req, res) {
   const event = body.event || {}
   const message = event.message || {}
   if (headerType === 'im.message.receive_v1' || message.message_id) {
-    let content = ''
-    try {
-      const parsedContent = JSON.parse(message.content || '{}')
-      content = parsedContent.text || parsedContent.content || ''
-    } catch {
-      content = message.content || ''
-    }
-    const openId = event.sender?.sender_id?.open_id || event.sender?.sender_id?.user_id || ''
-    const chatId = message.chat_id || ''
-    const fromId = openId ? `feishu:open_id:${openId}` : (chatId ? `feishu:chat_id:${chatId}` : '')
-    if (fromId && content) enqueueSocialMessage(fromId, content, 'FEISHU', { platform: 'feishu', chat_id: chatId, message_id: message.message_id })
+    const { fromId, content, chatId, messageId } = extractFeishuMessage(event)
+    if (fromId && content) enqueueSocialMessage(fromId, content, 'FEISHU', { platform: 'feishu', chat_id: chatId, message_id: messageId })
   }
 
   return jsonResponse(res, 200, { ok: true })

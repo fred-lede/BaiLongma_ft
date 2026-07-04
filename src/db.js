@@ -145,7 +145,7 @@ function initSchema() {
   // 迁移：P0-2 标记 agent 自己留下的"未答悬念"（follow-up question）。
   //   open_question=1 表示这条 jarvis 消息末尾留了一个非澄清型问号悬念。
   //   conversationWindow 渲染时：若该悬念在 N 轮内未被用户接茬 / 话题已切换，
-  //   marker 末尾追加 "[expired follow-up — ignore]"，避免模糊代词被钩到这里。
+  //   在 conversation_metadata 中标记 expired_open_question，避免模糊代词被钩到这里。
   try { db.exec(`ALTER TABLE conversations ADD COLUMN open_question INTEGER NOT NULL DEFAULT 0`) } catch {}
 
   db.exec(`
@@ -227,10 +227,13 @@ function initSchema() {
   // 用 PRAGMA table_info 检查，保证幂等：已有 embedding 列时彻底 no-op。
   try {
     const cols = db.prepare(`PRAGMA table_info(memories)`).all()
-    const hasEmbedding = cols.some(c => c.name === 'embedding')
-    if (!hasEmbedding) {
-      db.exec(`ALTER TABLE memories ADD COLUMN embedding BLOB`)
-    }
+    const have = new Set(cols.map(c => c.name))
+    if (!have.has('embedding')) db.exec(`ALTER TABLE memories ADD COLUMN embedding BLOB`)
+    // embedding_dim：向量维度（=BLOB 字节数/4）。切换嵌入模型后维度会变（如云端 1536/2048 →
+    // 本地 bge-large 1024），召回时只比同维度向量，避免旧维度向量静默失效或拖累。
+    // embedding_model：来源模型名，便于排查 / 决定哪些行需要 force 重算。
+    if (!have.has('embedding_dim'))   db.exec(`ALTER TABLE memories ADD COLUMN embedding_dim INTEGER`)
+    if (!have.has('embedding_model')) db.exec(`ALTER TABLE memories ADD COLUMN embedding_model TEXT`)
   } catch {}
 
   // 迁移（兜底）：visibility / hidden_at / merged_into 三件套。
@@ -2069,15 +2072,24 @@ export function searchMemories(keyword, limit = 10) {
 //
 // 数量级 < 50k 之前先用 JS 内存全表扫描，避免引入 sqlite-vec 扩展。
 
-export function updateMemoryEmbedding(memId, embeddingBuffer) {
+export function updateMemoryEmbedding(memId, embeddingBuffer, model = null) {
   if (!memId) return
   const db = getDB()
-  // null 也允许写入（清除某条的 embedding）
+  // null 也允许写入（清除某条的 embedding）；同时清掉维度/来源
   const value = embeddingBuffer == null ? null : embeddingBuffer
+  // 维度从 BLOB 字节长度反推（Float32 = 4 字节），与召回端的维度过滤对齐
+  const dim = value && value.byteLength > 0 ? Math.floor(value.byteLength / 4) : null
+  const modelTag = value && typeof model === 'string' && model ? model : null
   try {
-    db.prepare(`UPDATE memories SET embedding = ? WHERE mem_id = ?`).run(value, memId)
+    db.prepare(`UPDATE memories SET embedding = ?, embedding_dim = ?, embedding_model = ? WHERE mem_id = ?`)
+      .run(value, dim, modelTag, memId)
   } catch {
-    // 静默忽略（schema 未迁移、磁盘只读、并发冲突等）— 不让 embedding 写入影响主流程
+    // 老库 embedding_dim/embedding_model 列还没迁移时，退回只写 embedding，保证不影响主流程
+    try {
+      db.prepare(`UPDATE memories SET embedding = ? WHERE mem_id = ?`).run(value, memId)
+    } catch {
+      // 静默忽略（schema 未迁移、磁盘只读、并发冲突等）— 不让 embedding 写入影响主流程
+    }
   }
 }
 
@@ -2115,9 +2127,15 @@ export function searchByEmbedding(queryBuffer, limit = 20) {
   if (!queryBuffer || !(queryBuffer instanceof Buffer) || queryBuffer.byteLength === 0) return []
   const db = getDB()
 
+  // 只比与 query 同维度的向量：切换嵌入模型后旧维度向量（如云端 1536/2048）既不参与
+  // 召回、也不挤占 VEC_FULL_SCAN_LIMIT 名额。embedding_dim IS NULL 是迁移前写入的历史行，
+  // 一并纳入候选，由 cosineSimilarity 的 byteLength 守卫兜底剔除真正不同维度的。
+  const queryDim = Math.floor(queryBuffer.byteLength / 4)
+  const DIM_CLAUSE = `(embedding_dim = ${queryDim} OR embedding_dim IS NULL)`
+
   // 上限保护：先 COUNT，超限直接返回。better-sqlite3 + WAL + 索引扫描，几 ms 就回。
   try {
-    const countRow = db.prepare(`SELECT COUNT(*) AS c FROM memories WHERE embedding IS NOT NULL AND ${VISIBLE_CLAUSE}`).get()
+    const countRow = db.prepare(`SELECT COUNT(*) AS c FROM memories WHERE embedding IS NOT NULL AND ${DIM_CLAUSE} AND ${VISIBLE_CLAUSE}`).get()
     if (countRow && countRow.c > VEC_FULL_SCAN_LIMIT) {
       // 静默跳过，不打 warn——这条会被 inject 链路每条消息都走一次，
       // 噪声日志反而干扰调试。需要时把这里改成节流日志。
@@ -2130,10 +2148,14 @@ export function searchByEmbedding(queryBuffer, limit = 20) {
   let rows
   try {
     // 软隐藏过滤：被隐藏的记忆即使有 embedding 也不参与召回
-    rows = db.prepare(`SELECT * FROM memories WHERE embedding IS NOT NULL AND ${VISIBLE_CLAUSE}`).all()
+    rows = db.prepare(`SELECT * FROM memories WHERE embedding IS NOT NULL AND ${DIM_CLAUSE} AND ${VISIBLE_CLAUSE}`).all()
   } catch {
-    // 老库 schema 未迁移 / embedding 列不存在
-    return []
+    // 老库 embedding_dim 列未迁移：退回不带维度过滤的原查询（cosine 守卫仍会剔除异维度）
+    try {
+      rows = db.prepare(`SELECT * FROM memories WHERE embedding IS NOT NULL AND ${VISIBLE_CLAUSE}`).all()
+    } catch {
+      return []
+    }
   }
   if (!rows.length) return []
 

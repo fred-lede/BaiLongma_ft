@@ -61,17 +61,16 @@ async function loadFresh(json) {
 
 // ── 场景 B：合法 provider，但 model 在新版列表里已不存在 → 激活成功且回退默认，security 仍保留 ──
 {
-  const { config, __internals } = await loadFresh({
+  const { config } = await loadFresh({
     provider: 'deepseek',
     apiKey: 'sk-deepseek-valid-key-1234567890',
     model: 'deepseek-some-retired-model',
     temperature: 0.9,
     security: { execSandbox: false },
   })
-  const validIds = new Set(__internals.DEEPSEEK_MODELS.map(m => m.id))
   assert(config.needsActivation === false, 'B: 合法 provider 正常激活')
   assert(config.provider === 'deepseek', 'B: provider 正确')
-  assert(validIds.has(config.model), `B: 退役 model 已归一到 deepseek 合法值（实得 ${config.model}）`)
+  assert(config.model === 'deepseek-some-retired-model', 'B: official provider preserves unknown model names for manual entry')
   assert(config.security.execSandbox === false, 'B: 激活路径下 security 同样保留')
 }
 
@@ -141,8 +140,9 @@ async function loadFresh(json) {
   assert(chain[1] === 'mimo-v2.5', 'G: MiMo fallback tries standard v2.5 next')
   assert(chain.includes('MiMo-V2.5-Pro-UltraSpeed'), 'G: UltraSpeed (极速版) stays available as a fallback option')
   assert(new Set(chain).size === chain.length, 'G: MiMo fallback chain has no duplicates')
-  const invalidChain = getProviderModelFallbacks(MIMO_PROVIDER, 'missing-mimo-model')
-  assert(invalidChain[0] === DEFAULT_MIMO_MODEL, 'G: invalid MiMo model normalizes to the default before fallback')
+  const customChain = getProviderModelFallbacks(MIMO_PROVIDER, 'future-mimo-model')
+  assert(customChain[0] === 'future-mimo-model', 'G: custom MiMo model is tried before built-in fallbacks')
+  assert(customChain.includes(DEFAULT_MIMO_MODEL), 'G: custom MiMo model still keeps built-in fallbacks')
 }
 
 // Scenario H: Zhipu defaults to GLM-5.1 and validates with a lightweight no-thinking ping.
@@ -153,13 +153,26 @@ async function loadFresh(json) {
   assert(zhipuModels.has('glm-5.1'), 'H: Zhipu model list includes glm-5.1')
   assert(zhipuModels.has('glm-5-turbo'), 'H: Zhipu model list includes glm-5-turbo')
   assert(zhipuModels.has('glm-5'), 'H: Zhipu model list includes glm-5')
-  const invalidChain = getProviderModelFallbacks(ZHIPU_PROVIDER, 'missing-zhipu-model')
-  assert(invalidChain.length === 1 && invalidChain[0] === DEFAULT_ZHIPU_MODEL, 'H: invalid Zhipu model normalizes to GLM-5.1')
+  const customChain = getProviderModelFallbacks(ZHIPU_PROVIDER, 'future-glm-model')
+  assert(customChain.length === 1 && customChain[0] === 'future-glm-model', 'H: custom Zhipu model is preserved')
   const ping = __internals.buildPingParams(ZHIPU_PROVIDER, DEFAULT_ZHIPU_MODEL)
   assert(ping.thinking?.type === 'disabled', 'H: Zhipu activation ping disables thinking')
 }
 
 // Scenario I: provider files preserve old keys and allow switching back without re-entering a key.
+{
+  const { DEFAULT_MOONSHOT_MODEL, MOONSHOT_PROVIDER, __internals } = await loadFresh({ schemaVersion: 2 })
+  assert(DEFAULT_MOONSHOT_MODEL === 'kimi-k2.6', 'I: Moonshot defaults to kimi-k2.6')
+  const moonshotModels = new Set(__internals.MOONSHOT_MODELS.map(m => m.id))
+  assert(moonshotModels.has('kimi-k2.7-code'), 'I: Moonshot list includes kimi-k2.7-code')
+  assert(moonshotModels.has('kimi-k2.7-code-highspeed'), 'I: Moonshot list includes kimi-k2.7-code-highspeed')
+  assert(moonshotModels.has('kimi-k2.6'), 'I: Moonshot list includes kimi-k2.6')
+  assert(moonshotModels.has('moonshot-v1-128k'), 'I: Moonshot list includes moonshot-v1-128k')
+  const ping = __internals.buildPingParams(MOONSHOT_PROVIDER, 'kimi-k2.6')
+  assert(ping.temperature === undefined, 'I: Kimi activation ping omits temperature')
+}
+
+// Scenario J: provider files preserve old keys and allow switching back without re-entering a key.
 {
   const mod = await loadFresh({
     provider: 'deepseek',

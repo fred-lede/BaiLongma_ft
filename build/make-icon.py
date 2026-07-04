@@ -1,8 +1,9 @@
-"""Generate rounded-corner icon.png + multi-resolution icon.ico from icon.png.
+"""Generate rounded-corner PNG, ICO, and ICNS icons from icon-source.png.
 
 Windows 11 app-icon style: squircle-ish rounded corners (~22% radius),
 anti-aliased via supersampling, subtle top highlight for depth.
 """
+from io import BytesIO
 from pathlib import Path
 from PIL import Image, ImageDraw
 
@@ -15,6 +16,19 @@ CORNER_RATIO = 0.22
 SS = 4  # supersample factor for clean corner AA
 
 ICO_SIZES = [16, 24, 32, 48, 64, 128, 256]
+ICNS_ENTRIES = [
+    ("icp4", 16),
+    ("ic11", 32),
+    ("icp5", 32),
+    ("ic12", 64),
+    ("icp6", 64),
+    ("ic07", 128),
+    ("ic13", 256),
+    ("ic08", 256),
+    ("ic14", 512),
+    ("ic09", 512),
+    ("ic10", 1024),
+]
 
 
 def rounded_mask(size: int, radius: int) -> Image.Image:
@@ -71,6 +85,23 @@ def render_icon(size: int, with_polish: bool) -> Image.Image:
     return out
 
 
+def png_bytes(image: Image.Image) -> bytes:
+    buf = BytesIO()
+    image.save(buf, "PNG", optimize=True)
+    return buf.getvalue()
+
+
+def write_icns(path: Path):
+    chunks = []
+    for kind, size in ICNS_ENTRIES:
+        image = render_icon(size, with_polish=(size >= 48))
+        data = png_bytes(image)
+        chunks.append(kind.encode("ascii") + (len(data) + 8).to_bytes(4, "big") + data)
+
+    body = b"".join(chunks)
+    path.write_bytes(b"icns" + (len(body) + 8).to_bytes(4, "big") + body)
+
+
 def main():
     # Large clean PNG for BrowserWindow (512) with polish
     big = render_icon(512, with_polish=True)
@@ -103,6 +134,10 @@ def main():
         append_images=icons[:-1],
     )
     print(f"wrote installerHeaderIcon.ico")
+
+    icns = BUILD_DIR / "icon.icns"
+    write_icns(icns)
+    print(f"wrote icon.icns sizes={[s for _, s in ICNS_ENTRIES]}")
 
 
 if __name__ == "__main__":

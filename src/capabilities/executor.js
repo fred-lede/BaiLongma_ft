@@ -1,9 +1,12 @@
 import crypto from 'crypto'
 import fs from 'fs'
 import path from 'path'
+import { fileURLToPath } from 'url'
 import { nowTimestamp } from '../time.js'
 import { normalizeConversationPartyId, upsertPrefetchTask, removePrefetchTask, listPrefetchTasks, insertConversation, setConfig as dbSetConfig, markConversationOpenQuestion, findRecentJarvisDuplicate, getRecentActionLogs } from '../db.js'
-import { emitEvent, emitUICommand, hasACUIClient, addActiveUICard, setStickyEvent } from '../events.js'
+import { emitEvent, setStickyEvent } from '../events.js'
+import { getTerminalStreamSnapshot, recordTerminalStreamEvent } from '../terminal-stream.js'
+import { streamToolFileWriteExecutionPreview } from '../write-file-preview.js'
 import { dispatchSocialMessage } from '../social/dispatch.js'
 import { setCustomInterval as setTickerInterval, getStatus as getTickerStatus } from '../ticker.js'
 import { setHotspotPanelState, getHotspotPanelState } from '../hotspots.js'
@@ -16,25 +19,32 @@ import { installTool, uninstallTool, listInstalledTools, isInstalledTool, execut
 import { execManageToolFactory } from './tool-factory.js'
 import { TOOL_SCHEMAS } from './schemas.js'
 import { TOOL_GROUPS } from '../memory/tool-router.js'
+import { findCapabilitiesByQuery } from './capability-registry.js'
 import { throwIfAborted } from './abort-utils.js'
-import { execUIHide, execUIRegister, execUIShow, execUIUpdate, execUIPatch, execManageApp } from './tools/ui.js'
+import { execUISet } from './tools/scene.js'
+import { SANDBOX_ROOT } from './sandbox.js'
+import { sceneStore } from '../scene/scene-store.js'
+import { sceneClientCount } from '../scene/scene-server.js'
 import { evaluateToolPolicy } from './tool-policy.js'
 import { inferToolStatus, writeToolAuditLog } from './tool-audit.js'
 import { execDeleteFile, execListDir, execMakeDir, execReadFile, execWriteFile } from './tools/filesystem.js'
 import { execBackgroundCommand, execCommand, execDownloadFile, execKillProcess, execListProcesses, execQuickCommand, execTaskCommand } from './tools/shell.js'
+import { execInstallSoftware, listSoftwareInstallJobs } from './tools/software-install.js'
 import { execBrowserRead, execFetchUrl, execWebSearch } from './tools/web.js'
 import { execDowngradeMemory, execMergeMemories, execProbeMemory, execRecallMemory, execSearchMemory, execSkipConsolidation, execSkipRecognition, execUpsertMemory } from './tools/memory.js'
 import { execManageReminder } from './tools/reminders.js'
-import { execGenerateImage, execGenerateLyrics, execGenerateMusic, execGenerateVideo, execMediaMode, execMusic, execSpeak } from './tools/media.js'
+import { execGenerateImage, execGenerateLyrics, execGenerateMusic, execMediaMode, execMusic, execSpeak } from './tools/media.js'
+import { execAnalyzeImage, execManageApiCapability, execRunApiCapability } from './tools/api-capability.js'
 import { execManageRule } from './tools/rules.js'
 import { runWorkReview } from '../review/reviewer.js'
+import { CAPABILITY_DEMO_INTRO, runCapabilityDemo } from '../capability-demo.js'
+import { persistChatMediaPath } from '../chat-media.js'
 export { calculateNextDueAt } from './tools/reminders.js'
 export { autoSpeakForVoiceReply } from './tools/media.js'
-export { persistAppState } from './tools/ui.js'
 
 import { config, setSecurity } from '../config.js'
-import { paths } from '../paths.js'
-import { lookupReplyTarget, normalizeChannel, suggestProactiveChannel } from '../identity.js'
+import { lookupReplyTarget, normalizeChannel, suggestProactiveChannel, isVoiceChannel, isExternalChannel } from '../identity.js'
+import { sanitizeAssistantReplyForDelivery } from '../runtime/markers.js'
 
 // P0-2：识别 send_message 末尾是否留了"非澄清型 follow-up question"。
 //   触发条件：
@@ -47,6 +57,37 @@ const FOLLOWUP_VERB_RE = /(要不要|需不需要|要么|要|想|需要|是否|�
 const FOLLOWUP_EN_RE = /\b(should|want|need|shall|would you like|do you want|may i|can i)\b/i
 const OUTBOUND_IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'])
 const OUTBOUND_VIDEO_EXTS = new Set(['.mp4', '.mov', '.webm', '.mkv', '.avi'])
+const OUTBOUND_MESSAGE_DEDUPE_TTL_MS = 30_000
+const recentOutboundMessages = new Map()
+
+function pruneRecentOutboundMessages(now = Date.now()) {
+  for (const [key, entry] of recentOutboundMessages) {
+    if (!entry || now - entry.timestamp > OUTBOUND_MESSAGE_DEDUPE_TTL_MS) {
+      recentOutboundMessages.delete(key)
+    }
+  }
+}
+
+function outboundMessageKey({ toId, channel, externalTargetId, content }) {
+  return JSON.stringify([
+    normalizeConversationPartyId(toId || ''),
+    String(channel || '').toUpperCase(),
+    String(externalTargetId || ''),
+    String(content || '').trim(),
+  ])
+}
+
+function claimOutboundMessage(key) {
+  const now = Date.now()
+  pruneRecentOutboundMessages(now)
+  if (recentOutboundMessages.has(key)) return false
+  recentOutboundMessages.set(key, { timestamp: now })
+  return true
+}
+
+function sendMessageResult(payload = {}) {
+  return toolJson({ tool: 'send_message', ...payload })
+}
 
 export function detectOpenFollowupQuestion(text = '') {
   const s = String(text || '').trim()
@@ -72,13 +113,7 @@ function inferOutboundMediaKind(filePath = '') {
 // 失败（如磁盘错误）时返回 null，调用方退化为仅文本标记，不阻断消息发送。
 function persistChatMedia(resolvedPath) {
   try {
-    const buf = fs.readFileSync(resolvedPath)
-    const hash = crypto.createHash('sha256').update(buf).digest('hex')
-    const ext = path.extname(resolvedPath).toLowerCase()
-    const storedName = `${hash}${ext}`
-    const storedPath = path.join(paths.mediaDir, storedName)
-    if (!fs.existsSync(storedPath)) fs.writeFileSync(storedPath, buf)
-    return `/media/chat/${storedName}`
+    return persistChatMediaPath(resolvedPath).url
   } catch (err) {
     console.warn(`[media] 聊天媒体落盘失败（退化为纯文本标记）：${err.message}`)
     return null
@@ -160,6 +195,171 @@ function makeSocialPayload(text, media) {
 }
 
 // 工具执行器：根据工具名和参数执行对应操作，返回结果字符串
+function inferFileWritePreviewOutcome(result = '') {
+  try {
+    const parsed = JSON.parse(String(result || ''))
+    if (parsed && typeof parsed === 'object') {
+      const bytes = parsed.bytes ?? parsed.size ?? parsed.length
+      const ok = parsed.ok
+      const verified = parsed.verified ?? (ok === undefined ? true : ok !== false)
+      return { bytes, verified }
+    }
+  } catch {}
+  return { verified: true }
+}
+
+function getDesktopWindowLayoutSnapshot() {
+  try {
+    const reader = globalThis?.getBailongmaWindowLayoutSnapshot
+    return typeof reader === 'function' ? reader() : null
+  } catch {
+    return null
+  }
+}
+
+function normalizeOptionalBoolean(value) {
+  if (value === undefined) return undefined
+  if (value === true || value === false) return value
+  const text = String(value).trim().toLowerCase()
+  if (['true', '1', 'yes', 'on'].includes(text)) return true
+  if (['false', '0', 'no', 'off', ''].includes(text)) return false
+  return !!value
+}
+
+const LOCAL_FILE_OPEN_COMMAND_RE = /\b(Start-Process|Invoke-Item|ii|explorer(?:\.exe)?|notepad(?:\.exe)?|wordpad(?:\.exe)?|typora(?:\.exe)?|code(?:\.cmd|\.exe)?|subl(?:ime_text)?(?:\.exe)?|notepad\+\+(?:\.exe)?)\b|(?:^|[;&|])\s*start(?:\s|$)|\bcmd(?:\.exe)?\s+\/c\s+start(?:\s|$)/i
+const LOCAL_OPEN_FILE_EXT_SOURCE = 'md|markdown|mdx|txt|rtf|html?|css|js|jsx|ts|tsx|json|ya?ml|xml|csv|log|py|sh|bash|ps1|bat|cmd|sql|rst|adoc|docx?'
+const LOCAL_OPEN_FILE_EXT_PART = `(?:${LOCAL_OPEN_FILE_EXT_SOURCE})`
+const LOCAL_OPEN_FILE_EXT_RE = new RegExp(`\\.(${LOCAL_OPEN_FILE_EXT_SOURCE})$`, 'i')
+
+function normalizeComparablePath(filePath = '') {
+  const resolved = path.normalize(path.resolve(String(filePath || '')))
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved
+}
+
+function addComparablePath(out, filePath = '') {
+  if (!filePath) return
+  out.add(normalizeComparablePath(filePath))
+  try {
+    if (fs.existsSync(filePath)) out.add(normalizeComparablePath(fs.realpathSync.native(filePath)))
+  } catch {}
+}
+
+function resolveShellCwd(args = {}) {
+  const raw = String(args?.cwd || '').trim()
+  if (!raw) return SANDBOX_ROOT
+  return path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(SANDBOX_ROOT, raw)
+}
+
+function cleanOpenPathToken(value = '') {
+  let text = String(value || '').trim()
+  text = text.replace(/^[`"'([{]+/, '').replace(/[`"',;)\]}]+$/, '')
+  if (!text) return ''
+  if (/^(https?|mailto):\/\//i.test(text)) return ''
+  if (/^file:\/\//i.test(text)) {
+    try {
+      text = fileURLToPath(text)
+    } catch {
+      return ''
+    }
+  }
+  return LOCAL_OPEN_FILE_EXT_RE.test(text) ? text : ''
+}
+
+function resolveOpenFileCandidate(rawPath = '', cwd = SANDBOX_ROOT) {
+  const cleaned = cleanOpenPathToken(rawPath)
+  if (!cleaned) return ''
+  return path.isAbsolute(cleaned) ? path.resolve(cleaned) : path.resolve(cwd, cleaned)
+}
+
+function extractLocalOpenFileCandidates(command = '', cwd = SANDBOX_ROOT) {
+  const text = String(command || '')
+  if (!LOCAL_FILE_OPEN_COMMAND_RE.test(text)) return []
+
+  const candidates = new Set()
+  const add = (value) => {
+    const resolved = resolveOpenFileCandidate(value, cwd)
+    if (resolved) candidates.add(normalizeComparablePath(resolved))
+  }
+
+  const quoted = new RegExp(`["']([^"']+\\.${LOCAL_OPEN_FILE_EXT_PART})["']`, 'ig')
+  let match
+  while ((match = quoted.exec(text)) !== null) add(match[1])
+
+  const bare = new RegExp(`(^|[\\s=])([^\\s"'|;&<>]+\\.${LOCAL_OPEN_FILE_EXT_PART})(?=$|[\\s)'";|&<>])`, 'ig')
+  while ((match = bare.exec(text)) !== null) add(match[2])
+
+  return Array.from(candidates)
+}
+
+function currentWriteFileArtifactPaths(snapshot) {
+  const out = new Set()
+  const artifactPath = String(snapshot?.artifact_path || '').trim()
+  if (!artifactPath) return out
+  if (path.isAbsolute(artifactPath)) {
+    addComparablePath(out, artifactPath)
+  } else {
+    addComparablePath(out, path.resolve(SANDBOX_ROOT, artifactPath))
+  }
+  return out
+}
+
+function commandResultLooksSuccessful(result = '') {
+  try {
+    const obj = JSON.parse(String(result || '{}'))
+    if (obj.ok === false) return false
+    if (obj.exit_code !== undefined && obj.exit_code !== null) return Number(obj.exit_code) === 0
+    return true
+  } catch {
+    return true
+  }
+}
+
+function maybeCloseWriteFilePreviewAfterLocalOpen(args = {}, result = '') {
+  if (!commandResultLooksSuccessful(result)) return null
+  const command = String(args.command || args.cmd || '')
+  const candidates = extractLocalOpenFileCandidates(command, resolveShellCwd(args))
+  if (candidates.length === 0) return null
+
+  const snapshot = getTerminalStreamSnapshot('write_file')
+  if (!snapshot || snapshot.closed || !snapshot.artifact_path) return null
+
+  const artifactPaths = currentWriteFileArtifactPaths(snapshot)
+  const openedPath = candidates.find(candidate => artifactPaths.has(candidate))
+  if (!openedPath) return null
+
+  try {
+    globalThis?.terminalStreamBridge?.emit?.('close', {
+      stream_id: 'write_file',
+      source: 'local_file_open',
+      artifact_path: snapshot.artifact_path,
+    })
+  } catch {}
+  recordTerminalStreamEvent({ action: 'close', stream_id: 'write_file', force: true })
+  return {
+    stream_id: 'write_file',
+    reason: 'local_file_open',
+    artifact_path: snapshot.artifact_path,
+    opened_path: openedPath,
+  }
+}
+
+function addTerminalCloseInfo(result = '', closeInfo = null) {
+  if (!closeInfo) return result
+  try {
+    const obj = JSON.parse(String(result || '{}'))
+    obj.terminal_stream_closed = closeInfo
+    return toolJson(obj)
+  } catch {
+    return result
+  }
+}
+
+async function execShellToolAndMaybeCloseWritePreview(runner, args, context) {
+  const result = await runner(args, context)
+  const closeInfo = maybeCloseWriteFilePreviewAfterLocalOpen(args, result)
+  return addTerminalCloseInfo(result, closeInfo)
+}
+
 async function executeToolUnchecked(name, args, context = {}) {
   try {
     throwIfAborted(context.signal)
@@ -178,20 +378,22 @@ async function executeToolUnchecked(name, args, context = {}) {
         return await execDeleteFile(args, context)
       case 'make_dir':
         return await execMakeDir(args, context)
+      case 'install_software':
+        return await execInstallSoftware(args, context)
       case 'exec_command':
-        return await execCommand(args, context)
+        return await execShellToolAndMaybeCloseWritePreview(execCommand, args, context)
       case 'exec_quick_command':
-        return await execQuickCommand(args, context)
+        return await execShellToolAndMaybeCloseWritePreview(execQuickCommand, args, context)
       case 'exec_task_command':
-        return await execTaskCommand(args, context)
+        return await execShellToolAndMaybeCloseWritePreview(execTaskCommand, args, context)
       case 'exec_background_command':
-        return await execBackgroundCommand(args, context)
+        return await execShellToolAndMaybeCloseWritePreview(execBackgroundCommand, args, context)
       case 'download_file':
         return await execDownloadFile(args, context)
       case 'kill_process':
         return await execKillProcess(args)
       case 'list_processes':
-        return await execListProcesses(args)
+        return await execListProcessesWithSoftwareJobs(args)
       case 'web_search':
         return await execWebSearch(args, context)
       case 'fetch_url':
@@ -220,8 +422,6 @@ async function executeToolUnchecked(name, args, context = {}) {
         return await execGenerateMusic(args)
       case 'generate_image':
         return await execGenerateImage(args)
-      case 'generate_video':
-        return await execGenerateVideo(args)
       case 'set_tick_interval':
         return execSetTickInterval(args)
       case 'media_mode':
@@ -245,20 +445,16 @@ async function executeToolUnchecked(name, args, context = {}) {
         return execManagePrefetchTask(args)
       case 'manage_rule':
         return execManageRule(args)
-      case 'ui_show':
-        return execUIShow(args)
-      case 'ui_update':
-        return execUIUpdate(args)
-      case 'ui_hide':
-        return execUIHide(args)
-      case 'ui_patch':
-        return execUIPatch(args)
-      case 'manage_app':
-        return execManageApp(args)
-      case 'ui_register':
-        return execUIRegister(args)
+      case 'ui_set':
+        return execUISet(args)
+      case 'capability_demo':
+        return execCapabilityDemo(args, context)
       case 'focus_banner':
         return execFocusBanner(args)
+      case 'terminal_stream':
+        return execTerminalStream(args)
+      case 'voice_retire':
+        return execVoiceRetire(args)
       case 'set_location':
         return execSetLocation(args)
       case 'set_agent_name':
@@ -289,15 +485,27 @@ async function executeToolUnchecked(name, args, context = {}) {
         return execListTools()
       case 'manage_tool_factory':
         return await execManageToolFactory(args)
+      case 'run_capability':
+      case 'run_api_capability':
+        return await execRunApiCapability(args, context)
+      case 'analyze_image':
+        return await execAnalyzeImage(args, context)
+      case 'manage_api_capability':
+        return execManageApiCapability(args)
       case 'find_tool':
         return execFindTool(args)
       case 'connect_wechat':
         return execConnectWechat()
+      case 'connect_feishu':
+        return execConnectFeishu()
       case 'set_security':
         return execSetSecurity(args)
       default:
         if (isInstalledTool(name)) {
-          return await executeInstalledTool(name, args)
+          const previewed = streamToolFileWriteExecutionPreview(name, args)
+          const result = await executeInstalledTool(name, args)
+          if (previewed) streamToolFileWriteExecutionPreview(name, args, inferFileWritePreviewOutcome(result))
+          return result
         }
         return `错误：未知工具 "${name}"`
     }
@@ -339,12 +547,29 @@ export async function executeTool(name, args, context = {}) {
 }
 
 // express：表达器入口，根据 format 路由到对应输出渠道
+// Extend the existing process list with structured software-install jobs.
+async function execListProcessesWithSoftwareJobs(args = {}) {
+  const result = await execListProcesses(args)
+  try {
+    const parsed = JSON.parse(result)
+    const softwareInstallJobs = listSoftwareInstallJobs({ includeTerminal: true, detail: true })
+    return toolJson({
+      ...parsed,
+      software_install_count: softwareInstallJobs.length,
+      software_install_jobs: softwareInstallJobs,
+    })
+  } catch {
+    return result
+  }
+}
+
+// express: expression entrypoint; route to the requested output format.
 async function execExpress({ target_id, content, channel = 'AUTO', format = 'text' }, context = {}) {
   if (!content?.trim()) return '错误：未提供表达内容'
   if (format === 'voice') {
     // 语音表达：先发文字消息再生成语音
     const sendResult = await execSendMessage({ target_id, content, channel }, context)
-    if (sendResult.startsWith('错误：') || sendResult.startsWith('执行失败：')) return sendResult
+    if (!commandResultLooksSuccessful(sendResult)) return sendResult
     const speakArgs = { text: content }
     if (context.target_name || context.target_display_name) {
       speakArgs.target_person = context.target_name || context.target_display_name
@@ -420,7 +645,7 @@ async function execSendMessage({ target_id, content = '', channel = 'AUTO', imag
   if (!target_id) return '错误：未提供 target_id'
 
   const resolvedId = normalizeConversationPartyId(target_id)
-  const cleanedContent = content == null ? '' : String(content).trim()
+  const cleanedContent = content == null ? '' : sanitizeAssistantReplyForDelivery(content)
   const media = prepareOutboundMedia({ image_path, media_path })
   if (media?.error) return `错误：${media.error}`
   if (!cleanedContent && !media) return '错误：未提供消息内容'
@@ -437,6 +662,28 @@ async function execSendMessage({ target_id, content = '', channel = 'AUTO', imag
   //   常见诱因：启动期 directions（delegation ask 等）在用户回应前每 tick 都注入相同指令，
   //   模型每次都被驱动着发一遍同一句话。让 send_message 直接拦下来，并告知模型该停。
   //   判定细节见 db.findRecentJarvisDuplicate：以"用户是否已回应"为界，5 分钟窗只是兜底下限。
+  const channelLabel = delivery.deliveryChannel || (delivery.isLocal ? 'TUI' : '')
+  const outboxKey = outboundMessageKey({
+    toId: resolvedId,
+    channel: channelLabel,
+    externalTargetId: delivery.externalTargetId || '',
+    content: outboundContent,
+  })
+  if (!claimOutboundMessage(outboxKey)) {
+    const preview = outboundContent.length > 50 ? outboundContent.slice(0, 50) + '...' : outboundContent
+    return sendMessageResult({
+      ok: false,
+      skipped: 'duplicate_outbound',
+      duplicate: true,
+      delivered: false,
+      message_sent: false,
+      target_id: resolvedId,
+      channel: channelLabel,
+      error: `Duplicate outbound message suppressed: "${preview}"`,
+      reason: 'The same message to the same target/channel is already being sent or was just sent. End the round; do not send it again.',
+    })
+  }
+
   const dup = findRecentJarvisDuplicate(resolvedId, outboundContent, 5 * 60 * 1000)
   if (dup) {
     const ageSec = Math.max(0, Math.round(dup.ageMs / 1000))
@@ -446,7 +693,6 @@ async function execSendMessage({ target_id, content = '', channel = 'AUTO', imag
   }
 
   const timestamp = nowTimestamp()
-  const channelLabel = delivery.deliveryChannel || (delivery.isLocal ? 'TUI' : '')
   console.log(`\n[消息发送] → ${resolvedId}${delivery.externalTargetId ? ` via ${delivery.externalTargetId}` : ''}${channelLabel ? ` [${channelLabel}]` : ''}`)
   console.log(`  ${outboundContent}`)
   if (media) console.log(`  media_path: ${media.path}`)
@@ -474,13 +720,20 @@ async function execSendMessage({ target_id, content = '', channel = 'AUTO', imag
     try { markConversationOpenQuestion(insertedId, true) } catch {}
   }
 
+  const shouldSpeakLocally = Boolean(cleanedContent)
+    && !media
+    && delivery.isLocal
+    && (context.voiceReply === true || isVoiceChannel(context.currentChannel))
+
   emitEvent('message', {
     from: 'consciousness',
     to: resolvedId,
     content: outboundContent,
     timestamp,
+    conversation_id: insertedId,
     channel: channelLabel,
     external_party_id: delivery.externalTargetId || '',
+    ...(shouldSpeakLocally ? { speak: true } : {}),
     ...(media ? { media_path: media.path, media_kind: media.kind, file_name: media.fileName } : {}),
   })
 
@@ -551,6 +804,14 @@ function execFindTool({ query } = {}) {
       for (const name of group.tools) matched.add(name)
     }
   }
+  // ①b 能力发现：query 命中能力（triggers/label/summary）→ 收下其工具，并带回工作流摘要。
+  //   这是「自感知按需激活」的发现半：已迁能力（web/hotspot/worldcup/software-install）的
+  //   触发词与工具不在 TOOL_GROUPS，靠这里从能力注册表发现；命中时把能力的工作流(context)
+  //   摘要一并回给 Agent，让它即便在关键词没进 prompt 的轮次也知道「这套工具该怎么用」。
+  const capHits = findCapabilitiesByQuery(q)
+  for (const cap of capHits) {
+    for (const name of cap.tools) matched.add(name)
+  }
   // ② 英文字面：query 任一词出现在工具名或描述里
   const catalog = [
     ...Object.entries(TOOL_SCHEMAS)
@@ -563,13 +824,22 @@ function execFindTool({ query } = {}) {
     if (terms.some(t => t.length >= 2 && hay.includes(t))) matched.add(name)
   }
 
+  // 能力工作流摘要：命中的能力把 context 压成一句话回给 Agent（自感知按需激活的「怎么用」半）。
+  const capabilities = capHits.map(cap => ({
+    id: cap.id,
+    label: cap.label,
+    summary: cap.summary,
+    workflow: cap.context ? String(cap.context).replace(/\s+/g, ' ').trim().slice(0, 280) : '',
+  }))
+
   // 不把已是 CORE 的工具当"新发现"返回（模型本来就有），减少噪声。
-  const ALWAYS_PRESENT = new Set(['find_tool', 'recall_memory', 'ui_show', 'ui_update', 'ui_hide', 'ui_register', 'ui_patch'])
+  const ALWAYS_PRESENT = new Set(['find_tool', 'recall_memory', 'ui_set'])
   const found = [...matched].filter(name => !ALWAYS_PRESENT.has(name))
 
   if (found.length === 0) {
     return toolJson({
       ok: true, tool: 'find_tool', query, loaded: [], matches: [],
+      capabilities,
       note: '没找到匹配的工具。换个说法再试，或直接告诉用户这件事现在做不了。可调 list_tools 看全部工具。',
     })
   }
@@ -588,7 +858,9 @@ function execFindTool({ query } = {}) {
     query,
     loaded: matches.map(m => m.name),
     matches,
-    note: '这些工具已为本轮装载——现在直接调用你需要的那个即可，不必再 find_tool。',
+    capabilities,
+    note: '这些工具已为本轮装载——现在直接调用你需要的那个即可，不必再 find_tool。' +
+      (capabilities.length ? '相关能力的工作流见 capabilities 字段，按它行动。' : ''),
   })
 }
 
@@ -644,8 +916,40 @@ function execSetTickInterval({ seconds, ttl, reason }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ACUI · UI 控制工具
+// 面板 · 界面控制工具
 // ─────────────────────────────────────────────────────────────────────────────
+function execCapabilityDemo(args = {}, context = {}) {
+  if (isExternalChannel(context.currentChannel)) {
+    return toolJson({
+      ok: false,
+      tool: 'capability_demo',
+      error: 'capability_demo is local-only. For external channels, answer the capability question in text instead of opening local UI or speech.',
+    })
+  }
+  const spokenText = runCapabilityDemo({
+    to: context.currentTargetId || '',
+    channel: context.currentChannel || 'TUI',
+    speak: true,
+    message: true,
+  })
+  emitEvent('action', {
+    tool: 'capability_demo',
+    summary: '启动能力展示',
+    detail: args.reason || context.currentUserMessage || '',
+  })
+  return toolJson({
+    ok: true,
+    tool: 'capability_demo',
+    started: true,
+    delivered: true,
+    message_sent: true,
+    spoken: true,
+    spoken_text: spokenText,
+    intro_text: CAPABILITY_DEMO_INTRO,
+    final_reply_guidance: 'The intro message has already been sent and spoken while the visual demo starts. End the round now; do not send or speak another introduction.',
+  })
+}
+
 function execHotspotMode(args = {}) {
   const action = String(args.action || 'status').trim().toLowerCase()
   if (!['show', 'open', 'hide', 'close', 'toggle', 'status'].includes(action)) {
@@ -944,6 +1248,107 @@ function execFocusBanner({ action, task = '', current_step = '', tasks = [] }) {
   return toolJson({ ok: true, action, task, current_step, tasks: cleanTasks })
 }
 
+// 收起悬浮语音球：发 SSE 事件给渲染层(voice-wake.js)，由它在说完话后播退场动画收起。
+// 只退场屏幕上的球，不停 app、不影响可达性。无球在场时渲染层自动忽略（幂等）。
+function execTerminalStream({
+  action = 'write',
+  text = '',
+  stream_id = 'default',
+  title = 'Bailongma Terminal Stream',
+  newline = true,
+  level = 'info',
+  format = '',
+  artifact_kind = '',
+  artifact_path = '',
+  hold_open = undefined,
+  force = false,
+  placement = 'auto',
+  bounds = null,
+  focus = true,
+} = {}) {
+  const normalizedAction = String(action || 'write').trim().toLowerCase()
+  if (!['open', 'write', 'clear', 'close', 'status'].includes(normalizedAction)) {
+    return toolJson({ ok: false, error: 'action must be open, write, clear, close, or status' })
+  }
+
+  const bridge = global.terminalStreamBridge
+  const streamId = String(stream_id || 'default').trim() || 'default'
+  const cleanTitle = String(title || 'Bailongma Terminal Stream').trim() || 'Bailongma Terminal Stream'
+  const normalizedHoldOpen = normalizeOptionalBoolean(hold_open)
+  const forceClose = normalizeOptionalBoolean(force) === true
+
+  if (normalizedAction === 'status') {
+    const snapshot = getTerminalStreamSnapshot(streamId)
+    return toolJson({
+      ok: true,
+      tool: 'terminal_stream',
+      action: 'status',
+      stream_id: snapshot.stream_id,
+      title: snapshot.title,
+      format: snapshot.format,
+      artifact_kind: snapshot.artifact_kind,
+      artifact_path: snapshot.artifact_path,
+      hold_open: !!snapshot.hold_open,
+      closed: snapshot.closed,
+      chunks: snapshot.chunks.length,
+      window_available: !!bridge,
+      layout: getDesktopWindowLayoutSnapshot(),
+    })
+  }
+
+  if (normalizedAction === 'close') {
+    const snapshot = getTerminalStreamSnapshot(streamId)
+    if (snapshot.hold_open && !forceClose) {
+      return toolJson({
+        ok: false,
+        tool: 'terminal_stream',
+        action: 'close',
+        stream_id: snapshot.stream_id,
+        title: snapshot.title,
+        skipped: 'held_open_artifact',
+        reason: 'This stream is holding an article/document preview for user review. Only close it when the user explicitly asks, with force=true.',
+        window_available: !!bridge,
+      })
+    }
+  }
+
+  if (bridge && ['open', 'write', 'clear'].includes(normalizedAction)) {
+    bridge.emit('open', { title: cleanTitle, stream_id: streamId, placement, bounds, focus })
+  } else if (bridge && normalizedAction === 'close') {
+    bridge.emit('close', { stream_id: streamId })
+  }
+
+  const snapshot = recordTerminalStreamEvent({
+    action: normalizedAction,
+    stream_id: streamId,
+    title: cleanTitle,
+    text,
+    newline,
+    level,
+    format,
+    artifact_kind,
+    artifact_path,
+    hold_open: normalizedHoldOpen,
+    force: forceClose,
+  })
+
+  return toolJson({
+    ok: true,
+    tool: 'terminal_stream',
+    action: normalizedAction,
+    stream_id: snapshot.stream_id,
+    title: snapshot.title,
+    closed: snapshot.closed,
+    chunks: snapshot.chunks.length,
+    window_available: !!bridge,
+  })
+}
+
+function execVoiceRetire({ reason = '' } = {}) {
+  emitEvent('voice_retire', { reason: typeof reason === 'string' ? reason : '' })
+  return toolJson({ ok: true, tool: 'voice_retire', retired: true, reason: String(reason || '') })
+}
+
 function execSetLocation({ city }) {
   const loc = String(city || '').trim()
   if (!loc) return toolJson({ ok: false, error: '城市名称不能为空' })
@@ -965,28 +1370,59 @@ function execSetAgentName({ name }) {
 }
 
 function execConnectWechat() {
-  if (!hasACUIClient()) {
-    return toolJson({ ok: false, error: '当前没有 UI 客户端，无法弹出微信连接界面。' })
+  if (sceneClientCount() === 0) {
+    return toolJson({ ok: false, error: '当前没有界面客户端，无法弹出微信连接界面。' })
   }
   emitEvent('show_wechat_popup', {})
   return toolJson({ ok: true, status: 'popup_shown', message: '已弹出微信连接二维码界面，请告知用户扫码操作。' })
+}
+
+function execConnectFeishu() {
+  if (sceneClientCount() === 0) {
+    return toolJson({ ok: false, error: '当前没有界面客户端，无法弹出飞书配置界面。' })
+  }
+  emitEvent('show_feishu_popup', {})
+  return toolJson({
+    ok: true,
+    status: 'popup_shown',
+    message: '已弹出飞书连接配置界面（含分步引导 + App ID/Secret 输入框 + 打开飞书开放平台按钮）。请引导用户：去飞书开放平台创建企业自建应用、加机器人能力和 im:message 权限、在「事件订阅」选「使用长连接接收事件」并订阅 im.message.receive_v1（不要开加密推送），把 App ID 和 App Secret 填进弹窗点连接即可，无需公网地址。',
+  })
 }
 
 function execSetSecurity({ file_sandbox, exec_sandbox, reason = '' }) {
   if (file_sandbox === undefined && exec_sandbox === undefined) {
     return toolJson({ ok: false, error: '至少指定 file_sandbox 或 exec_sandbox 之一' })
   }
-  if (!hasACUIClient()) {
-    return toolJson({ ok: false, error: '当前没有 UI 客户端，无法弹出确认框。请告知用户到设置页面手动修改安全沙箱配置。' })
+  if (sceneClientCount() === 0) {
+    return toolJson({ ok: false, error: '当前没有界面客户端，无法弹出确认框。请告知用户到设置页面手动修改安全沙箱配置。' })
   }
 
-  const props = { reason: reason || '' }
-  if (file_sandbox !== undefined) props.file_sandbox = file_sandbox
-  if (exec_sandbox !== undefined) props.exec_sandbox = exec_sandbox
+  // 沙箱变更摘要拼进 choice 的 prompt（声明式 Scene 没有专用安全卡，复用通用 choice kind）。
+  const changeLines = []
+  if (file_sandbox !== undefined) changeLines.push(`文件沙箱将${file_sandbox ? '开启' : '关闭'}`)
+  if (exec_sandbox !== undefined) changeLines.push(`执行沙箱将${exec_sandbox ? '开启' : '关闭'}`)
+  const prompt = [reason, changeLines.join('；')].filter(Boolean).join('\n') || '确认安全设置变更？'
+
+  // 待应用的变更随 surface 走（存 data.pending）：让 SceneStore 继续做唯一真相源，
+  // 用户点确认时由 scene intent handler 回查本 surface 取出 pending 直接 apply（不另开并行 state）。
+  // choice kind 只读 prompt/options，会忽略 pending；manifest 也只暴露 id/kind/intent，不泄露给 Agent。
+  const pending = {}
+  if (file_sandbox !== undefined) pending.file_sandbox = file_sandbox
+  if (exec_sandbox !== undefined) pending.exec_sandbox = exec_sandbox
 
   const id = `security-confirm-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`
-  emitUICommand({ op: 'mount', id, component: 'SecurityConfirmCard', props, hint: { placement: 'center' } })
-  addActiveUICard(id, { component: 'SecurityConfirmCard' })
+  sceneStore.set(id, {
+    kind: 'choice',
+    intent: 'confront',   // 用户必须停下来决策：背景退后、聚焦居中
+    data: {
+      prompt,
+      options: [
+        { value: 'confirm', label: '确认', tone: 'danger' },
+        { value: 'cancel',  label: '取消', tone: 'default' },
+      ],
+      pending,
+    },
+  })
   emitEvent('action', { tool: 'set_security', summary: '等待用户确认安全设置变更', detail: id })
   // 工具返回 message 明确告诉模型"卡片已经在 UI 上、用户能直接看到"——避免模型把
   // "已弹出确认卡片"这句话当成"用户还不知道，我要 send_message 复述一遍"的口播触发。
@@ -995,7 +1431,7 @@ function execSetSecurity({ file_sandbox, exec_sandbox, reason = '' }) {
     ok: true,
     id,
     status: 'pending_confirmation',
-    message: '确认卡片已挂出（component=SecurityConfirmCard，居中弹窗，含"确认/取消"按钮）。用户在屏幕上直接看到了完整内容，不需要你再 send_message 复述卡片说什么或提醒用户去点确认 —— 那是冗余的口播。等用户点完，系统会用 silent APP_SIGNAL 通知你结果，那一轮也无需 send_message。本轮直接结束即可。',
+    message: '确认 surface 已挂出（kind=choice，居中聚焦，含"确认/取消"按钮）。用户在屏幕上直接看到了完整内容，不需要你再 send_message 复述卡片说什么或提醒用户去点确认 —— 那是冗余的口播。等用户点完，系统会用 silent APP_SIGNAL 通知你结果，那一轮也无需 send_message。本轮直接结束即可。',
   })
 }
 

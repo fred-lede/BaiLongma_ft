@@ -213,26 +213,30 @@ function hasNone(tools, names) {
   ]), '11) startupSelfCheckActive → full startup self-check tool set injected')
 }
 
-// ====== 11b) Worldcup 触发 ======
+// ====== 11b) Worldcup / Hotspot 不再被关键词自动注入 ======
+// 设计变更：worldcup_mode / hotspot_mode 不再因关键词命中而自动注入 schema；
+// 改由 Agent 依 prompt 规则自决，需要时调 find_tool 发现并当场装载（TOOL_GROUPS 仍保留触发词供 find_tool 用）。
 {
   const tools = selectTools({
     messageBody: '今天世界杯的赛况怎么样了',
     isTick: false,
     senderId: 'ID:000001',
   })
-  assert(has(tools, 'worldcup_mode'),
-    `11b) 世界杯赛况 → worldcup_mode injected (got: ${tools.join(',')})`)
-  assert(hasAll(tools, ['web_search', 'fetch_url']),
-    '11b) worldcup 触发同时带上 web 工具（追问细节要联网）')
+  assert(!has(tools, 'worldcup_mode'),
+    `11b) 世界杯关键词不再自动注入 worldcup_mode（改 Agent 经 find_tool 自决, got: ${tools.join(',')})`)
+  assert(has(tools, 'find_tool'),
+    '11b) find_tool 常驻——Agent 可据此发现并装载 worldcup_mode')
 }
 {
   const tools = selectTools({
-    messageBody: '昨晚谁赢了，几比几',
+    messageBody: '微博热搜现在有什么',
     isTick: false,
     senderId: 'ID:000001',
   })
-  assert(has(tools, 'worldcup_mode'),
-    `11c) 比分追问 → worldcup_mode injected (got: ${tools.join(',')})`)
+  assert(!has(tools, 'hotspot_mode'),
+    `11c) 热点关键词不再自动注入 hotspot_mode（非 TICK 轮, got: ${tools.join(',')})`)
+  assert(has(tools, 'find_tool'),
+    '11c) find_tool 常驻——Agent 可据此发现并装载 hotspot_mode')
 }
 
 // ====== 12) Exec 触发 ======
@@ -295,6 +299,17 @@ function hasNone(tools, names) {
     `14d) talking about the feature itself → person_card_mode NOT injected (got: ${tools.join(',')})`)
 }
 
+// ====== 14e) Terminal stream / progress window ======
+{
+  const tools = selectTools({
+    messageBody: 'please show a terminal stream progress window while writing files',
+    isTick: false,
+    senderId: 'ID:000001',
+  })
+  assert(has(tools, 'terminal_stream'),
+    `14e) terminal stream intent -> terminal_stream injected (got: ${tools.join(',')})`)
+}
+
 // ====== 15) RECALL 路径 ======
 {
   const tools = selectTools({
@@ -313,8 +328,69 @@ function hasNone(tools, names) {
     isTick: false,
     senderId: 'ID:000001',
   })
-  assert(hasAll(tools, ['web_search', 'fetch_url', 'download_file', 'exec_task_command', 'exec_command', 'list_dir']),
-    `16) software install intent -> web + download + exec + fs tools injected (got: ${tools.join(',')})`)
+  assert(hasAll(tools, ['install_software', 'find_tool']),
+    `16) software install intent -> dedicated install tool injected (got: ${tools.join(',')})`)
+  assert(hasNone(tools, ['web_search', 'download_file', 'exec_command']),
+    `16) software install intent does not expose manual web/shell fallback before install_software (got: ${tools.join(',')})`)
+}
+
+{
+  const tools = selectTools({
+    messageBody: '现在请你帮我安装一个 QQ',
+    isTick: false,
+    senderId: 'ID:000001',
+  })
+  assert(has(tools, 'install_software'),
+    `16b) natural app install request -> install_software injected (got: ${tools.join(',')})`)
+  assert(hasAll(tools, ['install_tool', 'list_tools']),
+    '16b) admin tools may also be present, but software install tools must not be missed')
+}
+
+{
+  const tools = selectTools({
+    messageBody: '安装一个工具市场里的自定义工具',
+    isTick: false,
+    senderId: 'ID:000001',
+  })
+  assert(hasNone(tools, ['exec_command', 'exec_task_command', 'download_file']),
+    `16c) marketplace/tool-factory install request does not over-trigger software installer tools (got: ${tools.join(',')})`)
+}
+
+{
+  const tools = selectTools({
+    messageBody: 'please install QQ for me',
+    isTick: false,
+    senderId: 'ID:000001',
+  })
+  assert(has(tools, 'install_software'),
+    `16b-en) English app install request -> install_software injected (got: ${tools.join(',')})`)
+}
+
+{
+  const tools = selectTools({
+    messageBody: 'https://docs.example.test/vision-api\n\nsk-testVisionRouterKey1234567890',
+    isTick: false,
+    senderId: 'ID:000001',
+  })
+  assert(has(tools, 'manage_api_capability'),
+    `17) API docs plus key -> manage_api_capability injected (got: ${tools.join(',')})`)
+}
+
+{
+  const tools = selectTools({
+    messageBody: '\u662f\u7684',
+    isTick: false,
+    senderId: 'ID:000001',
+    recentActionLog: [
+      {
+        tool: 'analyze_image',
+        status: 'error',
+        result_preview: '{"ok":false,"tool":"analyze_image","error":"not_configured"}',
+      },
+    ],
+  })
+  assert(has(tools, 'manage_api_capability'),
+    `18) confirm after unconfigured vision -> manage_api_capability injected (got: ${tools.join(',')})`)
 }
 
 {

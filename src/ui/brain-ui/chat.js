@@ -12,6 +12,10 @@ export function friendlyChannelLabel(channel) {
   return "";
 }
 
+export function shouldAttachSystemScreenshot() {
+  return false;
+}
+
 export function initChat({
   apiBase,
   maxHistory,
@@ -26,8 +30,11 @@ export function initChat({
   const msgInput = document.getElementById("msg-input");
   const chatArea = document.getElementById("chat-area");
   const sendBtn = document.getElementById("send-btn");
+  const pasteAttachments = document.getElementById("paste-attachments");
 
   let inputLocked = false;
+  const pendingLocalSends = new Set();
+  const pendingPastedImages = [];
   let closeTimer = null;
   let hasPendingJarvisMessage = false;
   let pendingMessageDismissed = false;
@@ -35,8 +42,46 @@ export function initChat({
   let audioCtx = null;
   let audioUnlocked = false;
   let warmupTimer = null;
+  const renderedMessageIds = new Set();
+  const recentRenderedKeys = new Map();
+  const RENDER_DEDUPE_TTL_MS = 2 * 60 * 1000;
 
   const PUSH_TO_TALK_PLACEHOLDER = "按住空格键开始说话";
+  const MAX_PASTED_IMAGES = 8;
+  const MAX_PASTED_IMAGE_BYTES = 12 * 1024 * 1024;
+
+  function normalizeMessageId(value) {
+    if (value === undefined || value === null || value === "") return "";
+    return String(value);
+  }
+
+  function renderedKey(role, text, label) {
+    const cleanText = String(text || "").replace(/\s+/g, " ").trim();
+    if (!cleanText) return "";
+    return `${role || ""}\n${label || ""}\n${cleanText}`;
+  }
+
+  function pruneRenderedKeys(now = Date.now()) {
+    for (const [key, ts] of recentRenderedKeys) {
+      if (now - ts > RENDER_DEDUPE_TTL_MS) recentRenderedKeys.delete(key);
+    }
+  }
+
+  function claimRenderedMessage({ messageId, role, text, label, source = "event", dedupe = true } = {}) {
+    const id = normalizeMessageId(messageId);
+    const now = Date.now();
+    pruneRenderedKeys(now);
+    if (id && renderedMessageIds.has(id)) return false;
+    const key = renderedKey(role, text, label);
+    const allowContentDedupe = source === "history" || !id;
+    if (dedupe && allowContentDedupe && key && recentRenderedKeys.has(key)) {
+      if (id) renderedMessageIds.add(id);
+      return false;
+    }
+    if (id) renderedMessageIds.add(id);
+    if (key && (!id || dedupe === false)) recentRenderedKeys.set(key, now);
+    return true;
+  }
 
   // 多行输入：每次内容变化时把高度重置为内容实际高度（上限由 CSS max-height 接管、超出后内部滚动）。
   function autoGrowInput() {
@@ -153,7 +198,7 @@ export function initChat({
   }
 
   function isTyping() {
-    return document.activeElement === msgInput || msgInput.value.trim().length > 0;
+    return document.activeElement === msgInput || msgInput.value.trim().length > 0 || pendingPastedImages.length > 0;
   }
 
   async function fetchChatHistory() {
@@ -173,9 +218,9 @@ export function initChat({
                 || /^(wechat|discord|feishu|wecom|telegram):/i.test(r.from_id || ""));
           if (isExternal) {
             const label = friendlyChannelLabel(r.channel) || r.from_id;
-            return { role: "external", text: r.content, label };
+            return { role: "external", text: r.content, label, messageId: r.id };
           }
-          return { role: r.role, text: r.content };
+          return { role: r.role, text: r.content, messageId: r.id };
         });
     } catch { return []; }
   }
@@ -198,11 +243,14 @@ export function initChat({
   }
 
   function addMsg(role, text, options = {}) {
-    const { alert = role === "jarvis", pending = true, label } = options;
+    const { alert = role === "jarvis", pending = true, label, messageId, source = "event", dedupe = true } = options;
     const defaultLabel = role === "user" ? "You" : role === "jarvis" ? getAgentName() : "Peer";
     const labelText = label || defaultLabel;
+    if (!claimRenderedMessage({ messageId, role, text, label: labelText, source, dedupe })) return false;
     const div = document.createElement("div");
     div.className = `msg msg-${role}`;
+    const normalizedId = normalizeMessageId(messageId);
+    if (normalizedId) div.dataset.messageId = normalizedId;
     const labelSpan = document.createElement("span");
     labelSpan.className = "msg-label";
     labelSpan.textContent = labelText;
@@ -225,11 +273,19 @@ export function initChat({
     }
 
     chatMessages.scrollTop = chatMessages.scrollHeight;
+    return true;
   }
 
   async function restoreChatHistory() {
     const history = await fetchChatHistory();
-    history.forEach(i => addMsg(i.role, i.text, { persist: false, alert: false, pending: false, label: i.label }));
+    history.forEach(i => addMsg(i.role, i.text, {
+      persist: false,
+      alert: false,
+      pending: false,
+      label: i.label,
+      messageId: i.messageId,
+      source: "history",
+    }));
     if (history.length) {
       pendingMessageDismissed = true;
       chatMessages.scrollTop = chatMessages.scrollHeight;
@@ -238,22 +294,201 @@ export function initChat({
 
   // text 显式传入时直接发送、不经过输入框（语音识别用：voice 完全不在 msg-input 留草稿）；
   // 不传 text 则保持原行为，从输入框读取并清空。
+  function newClientMessageId() {
+    const cryptoObj = globalThis.crypto;
+    if (cryptoObj?.randomUUID) return cryptoObj.randomUUID();
+    const rand = Math.random().toString(36).slice(2, 10);
+    return `local-${Date.now().toString(36)}-${rand}`;
+  }
+
+  function localSendKey(channel, text, attachments = []) {
+    const mediaKey = attachments
+      .map(item => `${item.id || ""}:${item.name || ""}:${String(item.data_url || "").length}`)
+      .join("|");
+    return `${String(channel || "TUI").toUpperCase()}\n${String(text || "").trim()}\n${mediaKey}`;
+  }
+
+  function safeMarkdownAlt(value, fallback = "image") {
+    return String(value || fallback).replace(/[\]\r\n]/g, " ").trim() || fallback;
+  }
+
+  function markdownImage(dataUrl, alt = "image") {
+    return `![${safeMarkdownAlt(alt)}](${dataUrl})`;
+  }
+
+  function appendAttachmentMarkdown(content = "", attachments = []) {
+    const images = attachments
+      .filter(item => item?.data_url)
+      .map(item => markdownImage(item.data_url, item.alt || item.name || "image"));
+    return [images.join("\n"), String(content || "").trim()].filter(Boolean).join("\n\n");
+  }
+
+  function imageExtFromMime(mime = "") {
+    const type = String(mime || "").split(";")[0].trim().toLowerCase();
+    if (type === "image/jpeg" || type === "image/jpg") return ".jpg";
+    if (type === "image/gif") return ".gif";
+    if (type === "image/webp") return ".webp";
+    if (type === "image/bmp") return ".bmp";
+    return ".png";
+  }
+
+  function readFileAsDataUrl(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(reader.error || new Error("failed to read pasted image"));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function collectClipboardImageFiles(event) {
+    const data = event.clipboardData;
+    if (!data) return [];
+    const files = [];
+    const seen = new Set();
+    const pushFile = (file) => {
+      if (!file || !String(file.type || "").startsWith("image/")) return;
+      const key = `${file.name || ""}:${file.type || ""}:${file.size || 0}:${file.lastModified || 0}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      files.push(file);
+    };
+
+    for (const item of Array.from(data.items || [])) {
+      if (item?.kind === "file" && String(item.type || "").startsWith("image/")) {
+        pushFile(item.getAsFile());
+      }
+    }
+    for (const file of Array.from(data.files || [])) pushFile(file);
+    return files;
+  }
+
+  function renderPastedImages() {
+    if (!pasteAttachments) return;
+    pasteAttachments.replaceChildren();
+    pasteAttachments.hidden = pendingPastedImages.length === 0;
+    pendingPastedImages.forEach((item, index) => {
+      const shell = document.createElement("div");
+      shell.className = "paste-attachment";
+
+      const img = document.createElement("img");
+      img.src = item.data_url;
+      img.alt = item.alt || "pasted image";
+      img.draggable = false;
+      shell.appendChild(img);
+
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "paste-attachment-remove";
+      remove.setAttribute("aria-label", "Remove image");
+      remove.title = "Remove image";
+      remove.textContent = "\u00d7";
+      remove.addEventListener("click", (event) => {
+        event.preventDefault();
+        pendingPastedImages.splice(index, 1);
+        renderPastedImages();
+        try { msgInput.focus(); } catch {}
+      });
+      shell.appendChild(remove);
+
+      pasteAttachments.appendChild(shell);
+    });
+  }
+
+  function clearPastedImages() {
+    pendingPastedImages.length = 0;
+    renderPastedImages();
+  }
+
+  function snapshotPastedImages() {
+    return pendingPastedImages.map(item => ({
+      id: item.id,
+      data_url: item.data_url,
+      alt: item.alt || "pasted image",
+      name: item.name || "pasted-image.png",
+      source: "paste",
+    }));
+  }
+
+  async function addPastedImageFiles(files = []) {
+    const slots = Math.max(0, MAX_PASTED_IMAGES - pendingPastedImages.length);
+    if (slots <= 0) return;
+    const accepted = files
+      .filter(file => {
+        if (!file || file.size > MAX_PASTED_IMAGE_BYTES) {
+          console.warn("[paste image] ignored oversized image");
+          return false;
+        }
+        return true;
+      })
+      .slice(0, slots);
+    if (!accepted.length) return;
+
+    const images = await Promise.all(accepted.map(async (file, offset) => {
+      try {
+        const dataUrl = await readFileAsDataUrl(file);
+        if (!/^data:image\//i.test(dataUrl)) return null;
+        const ext = imageExtFromMime(file.type);
+        return {
+          id: newClientMessageId(),
+          data_url: dataUrl,
+          alt: "pasted image",
+          name: file.name || `pasted-image-${pendingPastedImages.length + offset + 1}${ext}`,
+        };
+      } catch (error) {
+        console.warn("[paste image]", error?.message || error);
+        return null;
+      }
+    }));
+
+    // Chromium/Electron may expose one pasted image through both clipboardData.items
+    // and clipboardData.files. File metadata can differ, so dedupe after reading bytes.
+    const seenDataUrls = new Set();
+    for (const image of images) {
+      if (!image || seenDataUrls.has(image.data_url)) continue;
+      seenDataUrls.add(image.data_url);
+      pendingPastedImages.push(image);
+    }
+    renderPastedImages();
+    openChat();
+  }
+
   async function send({ channel = null, label = null, text = null } = {}) {
     if (inputLocked) return;
     const fromInput = (text == null);
-    const content = (fromInput ? msgInput.value : text).trim();
-    if (!content) return;
-    if (fromInput) { msgInput.value = ""; autoGrowInput(); }
+    const rawContent = (fromInput ? msgInput.value : text).trim();
+    const pastedAttachments = fromInput ? snapshotPastedImages() : [];
+    if (!rawContent && pastedAttachments.length === 0) return;
+    const pendingKey = localSendKey(channel, rawContent, pastedAttachments);
+    if (pendingLocalSends.has(pendingKey)) return;
+    pendingLocalSends.add(pendingKey);
+    if (fromInput) {
+      msgInput.value = "";
+      clearPastedImages();
+      autoGrowInput();
+    }
+    const prepared = { content: rawContent, displayContent: rawContent, attachments: [] };
+    prepared.attachments = [...(prepared.attachments || []), ...pastedAttachments];
+    prepared.displayContent = appendAttachmentMarkdown(prepared.displayContent || prepared.content, pastedAttachments);
+    const content = prepared.content;
+    if (!content && !prepared.attachments.length) {
+      pendingLocalSends.delete(pendingKey);
+      return;
+    }
     // If onUserMessage returns a string, use it as the backend payload; if it returns false, skip the backend call
     const override = onUserMessage?.(content);
-    addMsg("user", content, { label: label || undefined });
+    addMsg("user", prepared.displayContent || content, { label: label || undefined, dedupe: false });
     openChat();
     scheduleClose(1000);
-    if (override === false) return;
+    if (override === false) {
+      pendingLocalSends.delete(pendingKey);
+      return;
+    }
 
     try {
       const backendText = (typeof override === "string") ? override : content;
-      const payload = { content: backendText, from_id: "ID:000001" };
+      const payload = { content: backendText, from_id: "ID:000001", client_message_id: newClientMessageId() };
+      if (prepared.attachments.length && backendText === content) payload.attachments = prepared.attachments;
       if (channel) payload.channel = channel;
       const resp = await fetch(`${apiBase}/message`, {
         method: "POST",
@@ -272,6 +507,8 @@ export function initChat({
       console.warn("[send]", error.message);
       addMsg("jarvis", "发送失败 — 请检查本地服务是否运行。");
       openChat(true);
+    } finally {
+      pendingLocalSends.delete(pendingKey);
     }
   }
 
@@ -295,6 +532,13 @@ export function initChat({
     updateSlashMenu();
     if (isTyping()) openChat();
     else if (!hasPendingJarvisMessage || pendingMessageDismissed) scheduleClose();
+  });
+  msgInput.addEventListener("paste", (event) => {
+    const imageFiles = collectClipboardImageFiles(event);
+    if (imageFiles.length) {
+      addPastedImageFiles(imageFiles);
+      openChat();
+    }
   });
   msgInput.addEventListener("keydown", event => {
     if (handleSlashKeydown(event)) return;
@@ -520,9 +764,17 @@ export function initChat({
   }
 
   // text 为字符串则替换为权威全文；为 null 仅去掉 live 标记（保留已流出的内容）
-  function finalizeLiveJarvisMsg(text) {
+  function finalizeLiveJarvisMsg(text, options = {}) {
     if (!liveEl) return false;
     if (typeof text === "string") {
+      const labelText = getAgentName();
+      if (!claimRenderedMessage({ messageId: options.messageId, role: "jarvis", text, label: labelText, source: options.source || "event" })) {
+        liveEl.remove();
+        liveEl = null;
+        return false;
+      }
+      const normalizedId = normalizeMessageId(options.messageId);
+      if (normalizedId) liveEl.dataset.messageId = normalizedId;
       const children = Array.from(liveEl.children);
       for (let i = 1; i < children.length; i++) children[i].remove();
       liveEl.appendChild(createMarkdownBody(text));

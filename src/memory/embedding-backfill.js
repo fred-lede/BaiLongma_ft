@@ -33,7 +33,9 @@ export function cancelBackfill() {
   state.abortRequested = true
 }
 
-export async function runBackfill({ batchSize = 20, throttleMs = 100, signal, onProgress } = {}) {
+// force=true：全量重算所有可见记忆的 embedding（用于切换嵌入模型后，把旧维度向量刷成新维度）。
+// force=false（默认）：只补 embedding IS NULL 的存量记忆。
+export async function runBackfill({ batchSize = 20, throttleMs = 100, force = false, signal, onProgress } = {}) {
   // 防并发：已在跑就直接返回
   if (state.running) {
     return { skipped: true, reason: 'already running' }
@@ -63,14 +65,22 @@ export async function runBackfill({ batchSize = 20, throttleMs = 100, signal, on
   try {
     const { computeEmbedding } = await import('../embedding.js')
     const { getDB, updateMemoryEmbedding } = await import('../db.js')
+    // 当前嵌入模型名，落到 embedding_model 列，便于排查 / 后续判断哪些行需重算
+    let currentModel = null
+    try {
+      const { getEmbeddingCredentials } = await import('../config.js')
+      currentModel = getEmbeddingCredentials()?.model || null
+    } catch {}
 
     let rows
     try {
       const db = getDB()
-      // 不给已软隐藏（visibility=0）的记忆补 embedding：节省 API 调用，
+      // 不给已软隐藏（visibility=0）的记忆补 embedding：节省算力，
       // 隐藏意味着这条不再参与召回，连 embedding 都不必算。
+      // force：重算全部可见记忆（含已有 embedding 的，用于切模型后刷新维度）；否则只补 NULL。
+      const nullClause = force ? '' : 'embedding IS NULL AND '
       rows = db.prepare(
-        `SELECT id, mem_id, title, content FROM memories WHERE embedding IS NULL AND content IS NOT NULL AND TRIM(content) != '' AND visibility = 1`
+        `SELECT id, mem_id, title, content FROM memories WHERE ${nullClause}content IS NOT NULL AND TRIM(content) != '' AND visibility = 1`
       ).all()
     } catch (err) {
       state.lastError = err.message
@@ -98,7 +108,7 @@ export async function runBackfill({ batchSize = 20, throttleMs = 100, signal, on
 
       if (emb) {
         try {
-          updateMemoryEmbedding(m.mem_id, emb)
+          updateMemoryEmbedding(m.mem_id, emb, currentModel)
           state.processed++
         } catch (err) {
           state.lastError = err.message

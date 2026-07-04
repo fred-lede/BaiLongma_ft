@@ -9,9 +9,11 @@ let _amVoiceCache = { voices: [], ts: 0 }
 const AM_VOICE_CACHE_TTL = 5 * 60 * 1000
 import { fileURLToPath } from 'url'
 import { WebSocketServer } from 'ws'
+import { handleSceneConnection, setSceneIntentHandler } from './scene/scene-server.js'
+import { sceneStore } from './scene/scene-store.js'
 import { pushMessage } from './queue.js'
 import { getDB, getConfig, setConfig, insertUISignal, upsertMediaHistory, getMediaHistory, updateLastJarvisConversationContent, getRecentRecallAudits, getRecentExtractAudits, getRecallAuditStats, getExtractAuditStats } from './db.js'
-import { emitEvent, addSSEClient, removeSSEClient, addACUIClient, removeACUIClient, removeActiveUICard, emitUICommand, flushStickyEvents, setStickyEvent } from './events.js'
+import { emitEvent, addSSEClient, removeSSEClient, flushStickyEvents, setStickyEvent } from './events.js'
 import { getQuotaStatus } from './quota.js'
 import { isRunning, stopLoop, startLoop } from './control.js'
 import { buildHeartbeatSystemPromptPreview } from './system-prompt-preview.js'
@@ -21,17 +23,20 @@ import { streamTTS, TTS_PROVIDERS, TTS_VOICES, validateTTSConfig } from './voice
 import { restartConnector } from './social/index.js'
 // manager.js (Whisper local server) removed
 import { replaceProvider } from './providers/registry.js'
-import { persistAppState } from './capabilities/executor.js'
 import { execGenerateVideo, saveGeneratedVideo, setAIVideoPanelState, getVideoHistory, stripMarkdownForSpeech } from './capabilities/tools/media.js'
 import { MinimaxProvider } from './providers/minimax.js'
 import { handleSocialWebhook, isSocialWebhookPath } from './social/webhooks.js'
 import { getClawbotQR, logoutClawbot } from './social/wechat-clawbot.js'
+import { getFeishuStatus } from './social/feishu-ws.js'
 import { createCloudASRSession } from './voice/cloud-asr.js'
 import { getHotspots, setHotspotPanelState, getHotspotPanelState } from './hotspots.js'
 import { getWorldcup, setWorldcupPanelState, getWorldcupPanelState } from './worldcup.js'
 import { getPersonCard, setPersonCardPanelState, getPersonCardPanelState, setPersonCardVoice, setPersonCardLanguage, getPersonCardLanguage } from './person-cards.js'
 import { setDocPanelState, getDocPanelState, DOC_TOPICS } from './docs.js'
 import { getTraces, getTrace, clearTraces, getTraceStatus } from './runtime/turn-trace.js'
+import { getTerminalStreamSnapshot } from './terminal-stream.js'
+import { getSelfEvolutionSnapshot } from './memory/self-evolution.js'
+import { markdownImage, mimeFromChatMediaExt, persistChatMediaDataUrl } from './chat-media.js'
 
 export { emitEvent }
 
@@ -45,19 +50,45 @@ const SYSTEM_PROMPT_PATH = paths.systemPromptHtml
 const ACTIVATION_PATH    = paths.activationHtml
 const TURN_TRACE_PATH    = paths.turnTraceHtml
 const BRAIN_UI_ASSET_ROOT = paths.brainUiAssetRoot
+const SCENE_SHELL_ASSET_ROOT = path.join(paths.resourcesDir, 'src', 'ui', 'scene-shell')
+const TERMINAL_STREAM_PATH = path.join(paths.resourcesDir, 'src', 'ui', 'terminal-stream', 'index.html')
 const D3_VENDOR_PATH     = path.join(paths.resourcesDir, 'node_modules', 'd3', 'dist', 'd3.min.js')
 const SANDBOX_PATH       = paths.sandboxDir
 const DEFAULT_AGENT_NAME = '小白龙'
 const DEFAULT_API_HOST = '127.0.0.1'
+const INBOUND_MESSAGE_DEDUPE_TTL_MS = 10_000
+const INBOUND_MESSAGE_FALLBACK_DEDUPE_MS = 1_500
+const MAX_INBOUND_CHAT_MEDIA = 8
+const recentInboundMessages = new Map()
+
+function pruneRecentInboundMessages(now = Date.now()) {
+  for (const [key, entry] of recentInboundMessages) {
+    if (!entry || now - entry.timestamp > INBOUND_MESSAGE_DEDUPE_TTL_MS) {
+      recentInboundMessages.delete(key)
+    }
+  }
+}
+
+function normalizeClientMessageId(value = '') {
+  const text = String(value || '').trim()
+  return /^[a-zA-Z0-9._:-]{8,128}$/.test(text) ? text : ''
+}
+
+function claimInboundMessage({ fromId, channel, content, clientMessageId }) {
+  const now = Date.now()
+  pruneRecentInboundMessages(now)
+  const explicitId = normalizeClientMessageId(clientMessageId)
+  const key = explicitId
+    ? `id:${explicitId}`
+    : `body:${JSON.stringify([fromId || '', channel || '', content || ''])}`
+  const existing = recentInboundMessages.get(key)
+  const ttl = explicitId ? INBOUND_MESSAGE_DEDUPE_TTL_MS : INBOUND_MESSAGE_FALLBACK_DEDUPE_MS
+  if (existing && now - existing.timestamp <= ttl) return { claimed: false, key }
+  recentInboundMessages.set(key, { timestamp: now })
+  return { claimed: true, key }
+}
 
 // card.action signals that are lifecycle/system-internal — stored in DB for passive injector use only, not pushed to the agent queue
-const SILENT_CARD_ACTIONS = new Set([
-  'card.dismissed',  // card closed (components should use acui:dismiss; this is a fallback guard)
-  'card.mounted',    // mount complete
-  'card.dwell',      // dwell heartbeat
-  'card.error',      // render error (already handled by the card.error type signal)
-])
-
 function getApiHost() {
   const envHost = String(globalThis.process?.env?.BAILONGMA_HOST || '').trim()
   if (envHost) return envHost
@@ -230,6 +261,58 @@ function readJsonBody(req) {
   })
 }
 
+function collectInboundChatMedia(body = {}) {
+  const out = []
+  const push = (item, fallbackAlt = 'image') => {
+    if (!item) return
+    if (typeof item === 'string') {
+      out.push({ dataUrl: item, alt: fallbackAlt })
+      return
+    }
+    if (typeof item !== 'object') return
+    const dataUrl = item.data_url || item.dataUrl || item.url || item.src || item.image
+    if (!dataUrl) return
+    out.push({
+      dataUrl: String(dataUrl),
+      alt: item.alt || item.name || item.filename || fallbackAlt,
+    })
+  }
+
+  if (Array.isArray(body.attachments)) {
+    for (const item of body.attachments) push(item, 'attachment')
+  }
+  if (Array.isArray(body.images)) {
+    for (const item of body.images) push(item, 'image')
+  }
+  push(body.image_data_url || body.imageDataUrl || body.image, 'image')
+  push(body.screenshot_data_url || body.screenshotDataUrl || body.screenshot, 'system screenshot')
+
+  return out
+    .filter(item => /^data:image\//i.test(String(item.dataUrl || '').trim()))
+    .slice(0, MAX_INBOUND_CHAT_MEDIA)
+}
+
+function appendInboundChatMediaMarkdown(content = '', body = {}) {
+  const media = []
+  for (const item of collectInboundChatMedia(body)) {
+    try {
+      const stored = persistChatMediaDataUrl(item.dataUrl)
+      media.push({
+        ...stored,
+        alt: item.alt || 'image',
+        markdown: markdownImage(stored.url, item.alt || 'image'),
+      })
+    } catch (err) {
+      console.warn('[message] inbound chat media ignored:', err?.message || err)
+    }
+  }
+  if (media.length === 0) return { content, media }
+  return {
+    content: `${media.map(item => item.markdown).join('\n')}\n\n${content.trim()}`.trim(),
+    media,
+  }
+}
+
 function contentTypeFor(filePath) {
   switch (path.extname(filePath).toLowerCase()) {
     case '.html':
@@ -334,6 +417,13 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
       return jsonResponse(res, 200, { ok: true, ...getClawbotQR() })
     }
 
+    // GET /social/feishu/status — 飞书长连接当前状态 + 是否已配置凭据（配置弹窗用）
+    if (req.method === 'GET' && url.pathname === '/social/feishu/status') {
+      if (!hasAllowedAccess(req, url)) return jsonResponse(res, 403, { ok: false, error: 'forbidden' })
+      const configured = !!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)
+      return jsonResponse(res, 200, { ok: true, status: getFeishuStatus(), configured })
+    }
+
     // POST /social/wechat-clawbot/logout — clear credentials and disconnect
     if (req.method === 'POST' && url.pathname === '/social/wechat-clawbot/logout') {
       if (!requireLocalOrToken(req, res, url)) return
@@ -370,21 +460,32 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
 
     // POST /message — send message to agent
     if (req.method === 'POST' && url.pathname === '/message') {
+      let claim = null
       try {
         const body = await readJsonBody(req)
-        const { from_id = 'ID:000001', content, channel = 'API' } = body
-        if (!content?.trim()) return jsonResponse(res, 400, { error: 'content required' })
-        const trimmed = content.trim()
+        const { from_id = 'ID:000001', content = '', channel = 'API' } = body
+        const trimmed = String(content || '').trim()
+        const enhanced = appendInboundChatMediaMarkdown(trimmed, body)
+        const queuedContent = enhanced.content
+        if (!queuedContent.trim()) return jsonResponse(res, 400, { error: 'content or image required' })
+        const clientMessageId = body.client_message_id ?? body.clientMessageId ?? ''
+        claim = claimInboundMessage({ fromId: from_id, channel, content: queuedContent, clientMessageId })
+        if (!claim.claimed) {
+          return jsonResponse(res, 200, { ok: true, duplicate: true, agent_name: getAgentName() })
+        }
         const strictEvaluation = body.strict_evaluation ?? body.strictEvaluation
           ?? (String(body.evaluation_mode || body.evaluationMode || '').toLowerCase() === 'strict' ? true : undefined)
         const forbiddenTools = body.forbidden_tools ?? body.forbiddenTools
         const meta = {}
         if (strictEvaluation !== undefined) meta.strictEvaluation = strictEvaluation
         if (Array.isArray(forbiddenTools)) meta.forbiddenTools = forbiddenTools
-        pushMessage(from_id, trimmed, channel, meta)
-        emitEvent('message_in', { from_id, content: trimmed, channel, timestamp: new Date().toISOString() })
-        jsonResponse(res, 200, { ok: true, agent_name: getAgentName() })
+        if (enhanced.media.length) meta.attachments = enhanced.media
+        const queued = pushMessage(from_id, queuedContent, channel, meta)
+        const conversationId = queued?.conversationId || 0
+        emitEvent('message_in', { from_id, content: queuedContent, channel, timestamp: new Date().toISOString(), conversation_id: conversationId, attachments: enhanced.media })
+        jsonResponse(res, 200, { ok: true, agent_name: getAgentName(), conversation_id: conversationId, attachments: enhanced.media })
       } catch (e) {
+        if (claim?.claimed && claim.key) recentInboundMessages.delete(claim.key)
         jsonResponse(res, 400, { error: e.message })
       }
       return
@@ -407,6 +508,12 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
         clearInterval(keepAlive)
         removeSSEClient(res)
       })
+      return
+    }
+
+    if (req.method === 'GET' && url.pathname === '/terminal-stream/history') {
+      const streamId = url.searchParams.get('stream_id') || 'default'
+      jsonResponse(res, 200, getTerminalStreamSnapshot(streamId))
       return
     }
 
@@ -543,7 +650,19 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
     if (req.method === 'GET' && url.pathname === '/status') {
       const db = getDB()
       const { n } = db.prepare('SELECT COUNT(*) as n FROM memories').get()
-      jsonResponse(res, 200, { ok: true, memory_count: n, running: isRunning() })
+      jsonResponse(res, 200, {
+        ok: true,
+        memory_count: n,
+        running: isRunning(),
+        self_evolution: getSelfEvolutionSnapshot({ maxRecent: 5 }),
+      })
+      return
+    }
+
+    // GET /self-evolution — recent memory-backed behavior improvements
+    if (req.method === 'GET' && (url.pathname === '/self-evolution' || url.pathname === '/memory/self-evolution')) {
+      const limit = Math.max(1, Math.min(parseInt(url.searchParams.get('limit') || '20'), 24))
+      jsonResponse(res, 200, { ok: true, ...getSelfEvolutionSnapshot({ maxRecent: limit }) })
       return
     }
 
@@ -1150,12 +1269,7 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
       if (!resolvedFile.startsWith(resolvedDir + path.sep)) {
         res.writeHead(403); res.end('forbidden'); return
       }
-      const mimeMap = {
-        '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
-        '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp',
-        '.mp4': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime',
-      }
-      const contentType = mimeMap[path.extname(filename).toLowerCase()] || 'application/octet-stream'
+      const contentType = mimeFromChatMediaExt(path.extname(filename).toLowerCase())
       try {
         const stat = fs.statSync(filePath)
         res.writeHead(200, {
@@ -1396,6 +1510,15 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
       req.on('end', async () => {
         try {
           const updates = JSON.parse(Buffer.concat(chunks).toString('utf-8') || '{}')
+          // 飞书凭据是否「真的变了」——必须在 setSocialConfig 覆盖 env 之前快照旧值。
+          // 用户在弹窗里反复点「连接」会用相同凭据多次 POST；飞书长连接是 cluster 模式，
+          // 每次重启都 close 旧连接再开新连接，连发会抖、入站消息可能投到正被顶掉的连接上。
+          // 因此飞书只在凭据确实变化时才重启（与 discord 的 truthy 重启分开处理）。
+          const feishuTouched = ('FEISHU_APP_ID' in updates) || ('FEISHU_APP_SECRET' in updates)
+          const feishuChanged = feishuTouched && (
+            (updates.FEISHU_APP_ID || '') !== (process.env.FEISHU_APP_ID || '') ||
+            (updates.FEISHU_APP_SECRET || '') !== (process.env.FEISHU_APP_SECRET || '')
+          )
           setSocialConfig(updates)
           // Restart the connector for each platform whose key was updated
           const PLATFORM_KEYS = {
@@ -1409,10 +1532,23 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
               )
             }
           }
+          // 飞书：仅在凭据变化且配齐时重启（去抖，见上方快照）。断开走下方 _feishu_disconnect。
+          if (feishuChanged && process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET) {
+            restartConnector('feishu', { pushMessage, emitEvent }).catch(err =>
+              console.warn('[social] restart feishu failed:', err.message)
+            )
+          }
           // Restart the ClawBot connector when the user clicks "Connect WeChat"
           if (updates._clawbot_connect) {
             restartConnector('wechat-clawbot', { pushMessage, emitEvent }).catch(err =>
               console.warn('[social] restart wechat-clawbot failed:', err.message)
+            )
+          }
+          // 断开飞书：清空凭据是 falsy，不会命中上面 PLATFORM_KEYS 的 truthy 重启，
+          // 需显式重启 —— 新连接器读不到凭据即返回 null，状态归 idle、旧长连接被 close。
+          if (updates._feishu_disconnect) {
+            restartConnector('feishu', { pushMessage, emitEvent }).catch(err =>
+              console.warn('[social] restart feishu failed:', err.message)
             )
           }
           jsonResponse(res, 200, { ok: true, social: getSocialConfig() })
@@ -1529,6 +1665,18 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
       return
     }
 
+    if (req.method === 'GET' && (url.pathname === '/terminal-stream' || url.pathname === '/terminal-stream.html')) {
+      try {
+        const html = fs.readFileSync(TERMINAL_STREAM_PATH, 'utf-8')
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+        res.end(html)
+      } catch {
+        res.writeHead(404)
+        res.end('terminal-stream.html not found')
+      }
+      return
+    }
+
     if (req.method === 'GET' && url.pathname === '/systemPrompt.html') {
       try {
         const html = fs.readFileSync(SYSTEM_PROMPT_PATH, 'utf-8')
@@ -1553,6 +1701,38 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
       } catch {
         res.writeHead(404)
         res.end('d3.min.js not found')
+      }
+      return
+    }
+
+    // Scene 架构 shell 的静态资源(新 Agent-UI,与 brain-ui 并行)
+    if (req.method === 'GET' && url.pathname.startsWith('/src/ui/scene-shell/')) {
+      const relativePath = decodeURIComponent(url.pathname.slice('/src/ui/scene-shell/'.length))
+      const assetRoot = path.resolve(SCENE_SHELL_ASSET_ROOT)
+      const assetPath = path.resolve(SCENE_SHELL_ASSET_ROOT, relativePath)
+
+      if (!isPathInside(assetRoot, assetPath)) {
+        res.writeHead(403)
+        res.end('forbidden')
+        return
+      }
+
+      try {
+        const stat = fs.statSync(assetPath)
+        if (!stat.isFile()) {
+          res.writeHead(404)
+          res.end('asset not found')
+          return
+        }
+        res.writeHead(200, {
+          'Content-Type': contentTypeFor(assetPath),
+          'Content-Length': stat.size,
+          'Cache-Control': 'no-cache',
+        })
+        fs.createReadStream(assetPath).pipe(res)
+      } catch {
+        res.writeHead(404)
+        res.end('asset not found')
       }
       return
     }
@@ -1741,6 +1921,15 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
           const { clearEmbeddingCache } = await import('./embedding.js')
           clearEmbeddingCache()
         } catch {}
+        // 切到 local：后台 fire-and-forget 预热（含首次模型下载），不阻塞响应
+        try {
+          const { getEmbeddingCredentials } = await import('./config.js')
+          const cred = getEmbeddingCredentials()
+          if (cred?.provider === 'local' && cred.model) {
+            const { warmupLocalEmbedding } = await import('./embedding-local.js')
+            warmupLocalEmbedding(cred.model).catch(() => {})
+          }
+        } catch {}
         jsonResponse(res, 200, { ok: true, embedding: getEmbeddingConfig() })
       } catch (err) {
         jsonResponse(res, 400, { ok: false, error: err.message })
@@ -1796,9 +1985,17 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
           jsonResponse(res, 200, { ok: true, started: false, reason: 'already running', status: beforeStatus })
           return
         }
+        // force=true：全量重算（切换嵌入模型后刷新维度）；否则只补 embedding IS NULL
+        let force = false
+        try {
+          const chunks = []
+          for await (const chunk of req) chunks.push(chunk)
+          const body = JSON.parse(Buffer.concat(chunks).toString('utf-8') || '{}')
+          force = !!body.force
+        } catch {}
         // fire-and-forget：不 await，立即响应
-        runBackfill({ batchSize: 20, throttleMs: 200 }).catch(() => {})
-        jsonResponse(res, 200, { ok: true, started: true, status: getBackfillStatus() })
+        runBackfill({ batchSize: 20, throttleMs: 200, force }).catch(() => {})
+        jsonResponse(res, 200, { ok: true, started: true, force, status: getBackfillStatus() })
       } catch (err) {
         jsonResponse(res, 500, { ok: false, error: err.message })
       }
@@ -2065,79 +2262,52 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
     })
   })
 
-  // ACUI WebSocket channel: bidirectional control + perception
-  const acuiWss = new WebSocketServer({ noServer: true })
-  acuiWss.on('connection', (ws) => {
-    addACUIClient(ws)
-    try { ws.send(JSON.stringify({ v: 1, kind: 'acui:hello' })) } catch {}
+  // ---- Scene 协议(声明式 Agent-UI 架构,WS /scene)----
+  const sceneWss = new WebSocketServer({ noServer: true })
+  sceneWss.on('connection', (ws) => handleSceneConnection(ws))
 
-    ws.on('message', (raw) => {
-      try {
-        const msg = JSON.parse(raw.toString())
-        if (msg?.kind === 'ui.signal') {
-          const id = insertUISignal({
-            type: msg.type,
-            target: msg.target || null,
-            payload: msg.payload || {},
-            ts: msg.ts || Date.now(),
-          })
-          emitEvent('ui_signal', { id, type: msg.type, target: msg.target, payload: msg.payload })
-          // card.dismissed: remove from server-side active card table
-          if (msg.type === 'card.dismissed') {
-            removeActiveUICard(msg.target)
-          }
-          // Only push to the agent queue on explicit user interaction (card.action).
-          // Lifecycle signals like card.dismissed are already persisted by insertUISignal for passive injector use.
-          if (msg.type === 'card.action') {
-            const appId = msg.target || 'ui'
-            const action = msg.payload?.action || 'unknown'
-            const payload = msg.payload?.payload || msg.payload || {}
-            if (action === 'app:saveState') {
-              // Auto-reported state snapshot from the component: persist directly, do not trigger agent
-              persistAppState(appId, payload)
-            } else if (action === 'confirm_security_change') {
-              // User confirmed a security settings change: apply directly, do not push to agent queue
-              const updates = {}
-              if (payload.file_sandbox !== undefined) updates.fileSandbox = String(payload.file_sandbox) === 'true'
-              if (payload.exec_sandbox !== undefined) updates.execSandbox = String(payload.exec_sandbox) === 'true'
-              const result = Object.keys(updates).length > 0 ? setSecurity(updates) : getSecurity()
-              emitUICommand({ op: 'unmount', id: appId })
-              removeActiveUICard(appId)
-              const desc = Object.entries(updates).map(([k, v]) => `${k}=${v}`).join(', ')
-              pushMessage(
-                'SYSTEM',
-                `[security settings updated] User confirmed changes: ${desc}. changed_at=${result.updatedAt || 'not recorded'}\n(Internal context refresh only. Do NOT call send_message.)`,
-                'APP_SIGNAL',
-                { queue: 'background', persist: false, silent: true },
-              )
-            } else if (action === 'cancel_security_change') {
-              // User cancelled — close the card, do not apply changes
-              emitUICommand({ op: 'unmount', id: appId })
-              removeActiveUICard(appId)
-              pushMessage('SYSTEM', '[security settings change] User cancelled — settings unchanged\n(Internal context refresh only. Do NOT call send_message.)', 'APP_SIGNAL', { queue: 'background', persist: false, silent: true })
-            } else if (action.startsWith('app:') || SILENT_CARD_ACTIONS.has(action)) {
-              // app: prefix = system-internal signal; SILENT_CARD_ACTIONS = lifecycle signals.
-              // Both are already written to DB by insertUISignal; injector picks them up passively on the next tick.
-            } else {
-              const signalContent = `[App signal app=${appId} action=${action}]\n${JSON.stringify(payload, null, 2)}`
-              pushMessage(`APP:${appId}`, signalContent, 'APP_SIGNAL')
-            }
-          }
-        } else if (msg?.kind === 'pong') {
-          // ignore
-        }
-      } catch (e) {
-        // Reject non-JSON frames
+  // 上行 intent:落库(复用 ui_signals 表)+ 在有语义的用户意图时推进 agent 队列。
+  // 协议规定只有"有意义的用户意图"才上行;dismiss/ended 等生命周期意图只落库供被动注入,不打扰 agent。
+  const SCENE_PASSIVE_INTENTS = new Set(['dismiss', 'ended', 'mounted', 'dwell'])
+  setSceneIntentHandler((msg) => {
+    const surface = msg.surface || 'scene'
+    const name = msg.name || 'unknown'
+    const data = msg.data || {}
+    const id = insertUISignal({ type: `scene.intent.${name}`, target: msg.surface || null, payload: data, ts: msg.ts || Date.now() })
+    emitEvent('ui_signal', { id, type: name, target: msg.surface, payload: data })
+
+    // 安全确认回流：security-confirm-* 的 select intent 走 core 侧确定性处理（不卷入 Agent 回合）。
+    // 待应用的变更存在该 surface 的 data.pending（execSetSecurity 写入），这里回查后直接 apply，
+    // 与旧 ACUI confirm_security_change 行为一致；提前 return，不走下面的通用 APP_SIGNAL push。
+    if (name === 'select' && surface.startsWith('security-confirm-')) {
+      const pending = sceneStore.get(surface)?.data?.pending || {}
+      sceneStore.set(surface, null)   // 无论确认/取消都先收起确认 surface
+      if (data.value === 'confirm') {
+        const updates = {}
+        if (pending.file_sandbox !== undefined) updates.fileSandbox = pending.file_sandbox === true
+        if (pending.exec_sandbox !== undefined) updates.execSandbox = pending.exec_sandbox === true
+        const result = Object.keys(updates).length > 0 ? setSecurity(updates) : getSecurity()
+        const desc = Object.entries(updates).map(([k, v]) => `${k}=${v}`).join(', ')
+        pushMessage(
+          'SYSTEM',
+          `[security settings updated] User confirmed changes: ${desc}. changed_at=${result.updatedAt || 'not recorded'}\n(Internal context refresh only. Do NOT call send_message.)`,
+          'APP_SIGNAL',
+          { queue: 'background', persist: false, silent: true },
+        )
+      } else {
+        pushMessage('SYSTEM', '[security settings change] User cancelled — settings unchanged\n(Internal context refresh only. Do NOT call send_message.)', 'APP_SIGNAL', { queue: 'background', persist: false, silent: true })
       }
-    })
+      return
+    }
 
-    ws.on('close', () => removeACUIClient(ws))
-    ws.on('error', () => removeACUIClient(ws))
+    if (!SCENE_PASSIVE_INTENTS.has(name)) {
+      pushMessage(`UI:${surface}`, `[UI intent surface=${surface} name=${name}]\n${JSON.stringify(data, null, 2)}`, 'APP_SIGNAL')
+    }
   })
 
   server.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url, `http://localhost:${port}`)
-    if (url.pathname === '/acui') {
+    if (url.pathname === '/scene') {
       const origin = req.headers.origin
       if (origin && !isAllowedOrigin(origin)) {
         socket.write('HTTP/1.1 403 Forbidden\r\n\r\n')
@@ -2149,21 +2319,13 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
         socket.destroy()
         return
       }
-      acuiWss.handleUpgrade(req, socket, head, (ws) => acuiWss.emit('connection', ws, req))
+      sceneWss.handleUpgrade(req, socket, head, (ws) => sceneWss.emit('connection', ws, req))
     } else if (url.pathname === '/voice/cloud') {
       cloudWss.handleUpgrade(req, socket, head, (ws) => cloudWss.emit('connection', ws, req))
     } else {
       socket.destroy()
     }
   })
-
-  // Heartbeat: send ping to all ACUI clients every 30s
-  const acuiHeartbeat = setInterval(() => {
-    for (const client of acuiWss.clients) {
-      try { client.send(JSON.stringify({ v: 1, kind: 'ping' })) } catch {}
-    }
-  }, 30000)
-  acuiHeartbeat.unref?.()
 
   server.listen(port, host, () => {
     console.log(`[API] Listening at http://${host}:${port}`)
@@ -2172,7 +2334,7 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
     console.log(`[API]   GET  /memories — query memories`)
     console.log(`[API]   GET  /audit/recall, /audit/extract, /audit/stats — memory observability (Phase 0)`)
     console.log(`[API]   GET  /status   — status`)
-    console.log(`[API]   WS   /acui     — ACUI bidirectional channel (control + perception)`)
+    console.log(`[API]   WS   /scene    — Scene declarative UI channel`)
   })
 
   return server

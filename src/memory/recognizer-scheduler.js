@@ -45,6 +45,11 @@ function turnHasDurableTool(turn) {
     && turn.toolCallLog.some(t => DURABLE_INFO_TOOLS.has(t?.name) && t?.ok !== false)
 }
 
+function turnHasToolFailure(turn) {
+  return Array.isArray(turn?.toolCallLog)
+    && turn.toolCallLog.some(t => t?.ok === false && !t?.ack && !t?.fallback)
+}
+
 function turnHasExplicitMemoryRequest(turn) {
   return EXPLICIT_MEMORY_RE.test(String(turn?.userMessage || ''))
 }
@@ -74,7 +79,7 @@ export function enqueueTurnForRecognition(turn) {
   if (firstQueuedAt === 0) firstQueuedAt = Date.now()
 
   const waited = Date.now() - firstQueuedAt
-  if (turnHasExplicitMemoryRequest(turn) || turnHasDurableTool(turn) || buffer.length >= MAX_BATCH || waited >= MAX_WAIT_MS) {
+  if (turnHasExplicitMemoryRequest(turn) || turnHasDurableTool(turn) || turnHasToolFailure(turn) || buffer.length >= MAX_BATCH || waited >= MAX_WAIT_MS) {
     flushRecognizer()
     return
   }

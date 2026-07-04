@@ -1,6 +1,6 @@
 // Run: node src/test-channel.js
 
-import { PUBLIC_CHANNELS, normalizeChannel } from './runtime/channel.js'
+import { PUBLIC_CHANNELS, normalizeChannel, isVoiceChannel } from './runtime/channel.js'
 
 let failed = 0
 function assertEqual(actual, expected, label) {
@@ -29,6 +29,7 @@ assertEqual(normalizeChannel(''), 'TUI', 'empty channel defaults to TUI')
 assertEqual(normalizeChannel(null), 'TUI', 'null channel defaults to TUI')
 assertEqual(normalizeChannel('API'), 'TUI', 'API normalizes to TUI')
 assertEqual(normalizeChannel('voice'), 'TUI', 'voice normalizes to TUI')
+assertEqual(normalizeChannel('VOICE'), 'TUI', 'uppercase VOICE normalizes to TUI')
 assertEqual(normalizeChannel('语音识别'), 'TUI', 'Chinese voice channel normalizes to TUI')
 assertEqual(normalizeChannel('FocusBanner'), 'TUI', 'FocusBanner normalizes to TUI')
 assertEqual(normalizeChannel('WECHAT_CLAWBOT'), 'WECHAT', 'wechat clawbot normalizes to WECHAT')
@@ -37,6 +38,11 @@ assertEqual(normalizeChannel('REMINDER'), 'SYSTEM', 'REMINDER normalizes to SYST
 assertEqual(normalizeChannel('APP_SIGNAL'), 'SYSTEM', 'APP_SIGNAL normalizes to SYSTEM')
 assertEqual(normalizeChannel('custom_channel'), 'CUSTOM_CHANNEL', 'unknown channels uppercase')
 assert(PUBLIC_CHANNELS.includes('AUTO'), 'PUBLIC_CHANNELS includes AUTO')
+assert(isVoiceChannel('voice'), 'voice channel is recognized as voice')
+assert(isVoiceChannel('VOICE'), 'uppercase VOICE channel is recognized as voice')
+assert(isVoiceChannel('语音识别'), 'Chinese voice channel is recognized as voice')
+assert(isVoiceChannel('FocusBanner'), 'FocusBanner channel is recognized as voice')
+assert(!isVoiceChannel('TUI'), 'plain TUI is not treated as a voice turn')
 
 if (failed === 0) {
   console.log('\nAll channel checks complete.')

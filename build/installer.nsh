@@ -54,6 +54,54 @@ Function BailongmaFindForeignInstallRootItem
   bailongmaScanInstallRootNoClose:
 FunctionEnd
 
+Function BailongmaRescueForeignInstallRootItems
+  ; During upgrades, the old uninstaller may delete the whole install folder.
+  ; Move foreign items out first so third-party/user files are preserved while
+  ; the upgrade can continue.
+  StrCpy $R6 ""
+
+  bailongmaRescueForeignLoop:
+    Call BailongmaFindForeignInstallRootItem
+    ${if} $R3 == "0"
+      Return
+    ${endIf}
+
+    ${if} $R6 == ""
+      CreateDirectory "$APPDATA\Bailongma"
+      CreateDirectory "$APPDATA\Bailongma\install-root-rescue"
+      StrCpy $R8 "1"
+
+      bailongmaPickForeignRescueDir:
+        StrCpy $R6 "$APPDATA\Bailongma\install-root-rescue\upgrade-$R8"
+        IfFileExists "$R6\*.*" 0 bailongmaForeignRescueDirReady
+        IntOp $R8 $R8 + 1
+        IntCmp $R8 1000 bailongmaForeignRescueDirExhausted bailongmaPickForeignRescueDir bailongmaForeignRescueDirExhausted
+
+      bailongmaForeignRescueDirReady:
+        ClearErrors
+        CreateDirectory "$R6"
+        IfErrors bailongmaForeignRescueDirFailed
+    ${endIf}
+
+    ClearErrors
+    Rename "$INSTDIR\$R3" "$R6\$R3"
+    IfErrors bailongmaForeignRescueMoveFailed
+    DetailPrint "Moved non-Bailongma install-root item out of upgrade path: $INSTDIR\$R3 -> $R6\$R3"
+    Goto bailongmaRescueForeignLoop
+
+  bailongmaForeignRescueDirExhausted:
+    MessageBox MB_ICONSTOP|MB_OK "Bailongma could not create a unique rescue folder under:$\r$\n$\r$\n$APPDATA\Bailongma\install-root-rescue$\r$\n$\r$\nPlease move non-Bailongma content out of the install folder, then run setup again."
+    Abort
+
+  bailongmaForeignRescueDirFailed:
+    MessageBox MB_ICONSTOP|MB_OK "Bailongma could not create a rescue folder:$\r$\n$\r$\n$R6$\r$\n$\r$\nPlease move non-Bailongma content out of the install folder, then run setup again."
+    Abort
+
+  bailongmaForeignRescueMoveFailed:
+    MessageBox MB_ICONSTOP|MB_OK "Bailongma could not move non-Bailongma content out of the install folder:$\r$\n$\r$\n$INSTDIR\$R3$\r$\n$\r$\nTarget rescue folder:$\r$\n$R6$\r$\n$\r$\nPlease close programs that may be using this folder, or move it manually, then run setup again."
+    Abort
+FunctionEnd
+
 Function BailongmaValidateInstallDir
   Call BailongmaNormalizeInstallDir
 
@@ -210,13 +258,14 @@ FunctionEnd
   ; Even a folder named Bailongma can contain user-created or third-party
   ; folders. During upgrades, electron-builder invokes the *old* uninstaller
   ; before this new safe uninstaller exists, and old uninstallers recursively
-  ; remove the whole install folder. Refuse to continue if the install root
-  ; contains anything we do not recognize as Bailongma/Electron payload.
-  Call BailongmaFindForeignInstallRootItem
-  ${if} $R3 != "0"
-      MessageBox MB_ICONSTOP|MB_OK "Bailongma install folder contains non-Bailongma content:$\r$\n$\r$\n$INSTDIR\$R3$\r$\n$\r$\nTo protect your files and other software, this installer will not run the old uninstaller automatically. Please back up or move this content out of the Bailongma folder, then install again."
-      Abort
-    ${endIf}
+  ; remove the whole install folder. If this is an existing Bailongma install,
+  ; rescue foreign items to userData first. Fresh installs still validate and
+  ; refuse non-empty foreign folders on the install-directory page.
+  ${if} ${FileExists} "$INSTDIR\Bailongma.exe"
+  ${orIf} ${FileExists} "$INSTDIR\Uninstall Bailongma.exe"
+  ${orIf} ${FileExists} "$INSTDIR\resources\app.asar"
+    Call BailongmaRescueForeignInstallRootItems
+  ${endIf}
 
   ; Native Node addons are ABI-bound to Electron. Clean old unpacked copies
   ; before installing so upgrades cannot keep a stale better_sqlite3.node.

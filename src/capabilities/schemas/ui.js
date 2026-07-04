@@ -1,7 +1,22 @@
-// UI / ACUI 类工具 schema：hotspot_mode / worldcup_mode / open_doc_panel /
-// person_card_mode / ui_show / ui_hide / ui_update / manage_app / ui_patch /
-// ui_register / focus_banner
+// UI 类工具 schema：hotspot_mode / worldcup_mode / open_doc_panel /
+// person_card_mode / focus_banner
+// （声明式 Scene 的 ui_set 在 schemas/scene.js）
 export const uiSchemas = {
+  capability_demo: {
+    type: 'function',
+    function: {
+      name: 'capability_demo',
+      description: 'Start BaiLongma\'s visual and spoken capability showcase. When the user is asking what you/BaiLongma can do, or explicitly requests a capability/function demo/showcase, call this tool; it sends and speaks the intro itself while the visual sequence starts, so do not send a second introduction. Do not call for ordinary feasibility questions like "这个能做吗" or "能不能做 X". The demo runs as a paced sequence: weather card, streamed Chinese article writing, a maximized real Windows CMD window filling the screen with harmless random numbers for about 5 seconds, hotspot panel, then cleanup.',
+      parameters: {
+        type: 'object',
+        properties: {
+          reason: { type: 'string', description: 'Short reason why this message is a capability-showcase request.' },
+        },
+        required: []
+      }
+    }
+  },
+
   worldcup_mode: {
     type: 'function',
     function: {
@@ -50,7 +65,7 @@ export const uiSchemas = {
           topic: {
             type: 'string',
             enum: ['voice_asr', 'voice_tts', 'voice_config', 'model_config', 'wechat_config', 'self_architecture', 'ui_design'],
-            description: 'Required when action=open. Choose one topic: voice_asr, voice_tts, voice_config, model_config, wechat_config, self_architecture (how BaiLongma works internally), or ui_design (BaiLongma\'s interface/ACUI design). Do not invent other values. Optional when action=close.'
+            description: 'Required when action=open. Choose one topic: voice_asr, voice_tts, voice_config, model_config, wechat_config, self_architecture (how BaiLongma works internally), or ui_design (BaiLongma\'s interface / Scene UI design). Do not invent other values. Optional when action=close.'
           },
           reason: { type: 'string', description: 'Optional short reason.' },
         },
@@ -79,140 +94,6 @@ export const uiSchemas = {
           reason: { type: 'string', description: 'Optional short reason for opening or closing.' },
         },
         required: ['action']
-      }
-    }
-  },
-
-  ui_show: {
-    type: 'function',
-    function: {
-      name: 'ui_show',
-      description: 'Push a registered visual card to the user interface. Always specify component + props matching the registered component\'s propsSchema. Use only when UI expression is clearer than plain text.',
-      parameters: {
-        type: 'object',
-        properties: {
-          component: { type: 'string', description: 'Registered component type name, e.g. WeatherCard. Required.' },
-          props:     { type: 'object', description: 'Component props following the component\'s propsSchema.' },
-          hint: {
-            type: 'object',
-            description: 'Optional display hint. All fields have reasonable defaults.',
-            properties: {
-              placement: { type: 'string', enum: ['notification', 'center', 'floating', 'stage'], description: 'notification=top-right stacked slide-in (default); center=centered with overlay; floating=free draggable; stage=fullscreen.' },
-              size:      { description: 'Size: sm | md | lg | xl, or pixel object { w, h }.', oneOf: [{ type: 'string', enum: ['sm', 'md', 'lg', 'xl'] }, { type: 'object', properties: { w: { type: ['number', 'string'] }, h: { type: ['number', 'string'] } } }] },
-              draggable: { type: 'boolean', description: 'Whether draggable. floating defaults true.' },
-              modal:     { type: 'boolean', description: 'Show translucent overlay. center defaults true.' },
-              enter:     { type: 'string', description: 'Enter animation, inferred from placement by default.' },
-              exit:      { type: 'string', description: 'Exit animation, inferred from placement by default.' }
-            }
-          }
-        },
-        required: ['component']
-      }
-    }
-  },
-
-  ui_hide: {
-    type: 'function',
-    function: {
-      name: 'ui_hide',
-      description: 'Close a displayed card with its exit animation. Usually let the user close cards; proactively call only when the card information is stale.',
-      parameters: {
-        type: 'object',
-        properties: {
-          id: { type: 'string', description: 'Card instance id returned by ui_show.' }
-        },
-        required: ['id']
-      }
-    }
-  },
-
-  ui_update: {
-    type: 'function',
-    function: {
-      name: 'ui_update',
-      description: 'Update a displayed card without replaying the enter animation. Common use: change props when the user asks about another city weather instead of opening a new card.',
-      parameters: {
-        type: 'object',
-        properties: {
-          id:    { type: 'string', description: 'Card instance id returned by ui_show.' },
-          props: { type: 'object', description: 'New props, shallow-merged with existing props.' }
-        },
-        required: ['id', 'props']
-      }
-    }
-  },
-
-  manage_app: {
-    type: 'function',
-    function: {
-      name: 'manage_app',
-      description: 'Manage generated interactive apps such as games/tools: save as permanent app, reopen, list, or delete. inline-script component code is saved as a draft when generated; use save to promote it to a formal app that can be reopened later.',
-      parameters: {
-        type: 'object',
-        properties: {
-          action: {
-            type: 'string',
-            enum: ['save', 'open', 'list', 'delete'],
-            description: 'save promotes an inline-script draft to a permanent app; open remounts a saved app with automatic state restore; list lists saved apps; delete removes an app.'
-          },
-          name: {
-            type: 'string',
-            description: 'App name in lowercase snake_case, used as the storage directory, e.g. chess or todo_app. Required for save/open/delete.'
-          },
-          label: {
-            type: 'string',
-            description: 'Optional display label, e.g. Chinese chess. Provide when saving.'
-          },
-          draft_id: {
-            type: 'string',
-            description: 'Required for save: component instance id returned by ui_show(mode="inline-script"), e.g. scratch-xxx.'
-          },
-          state: {
-            type: 'object',
-            description: 'Optional state included when saving or opening. For save, pass current game/app state; for open, this overrides persisted state.'
-          },
-          hint: {
-            type: 'object',
-            description: 'Optional UI display hint, such as placement / size / draggable. Written to metadata during save and reused during open.'
-          }
-        },
-        required: ['action']
-      }
-    }
-  },
-
-  ui_patch: {
-    type: 'function',
-    function: {
-      name: 'ui_patch',
-      description: 'Send operation commands or state updates to a mounted app component. The component listens with this._app.onPatch(). Use for game turns, state machines, canvas updates, and other cases where the agent proactively pushes changes.',
-      parameters: {
-        type: 'object',
-        properties: {
-          id:   { type: 'string', description: 'Component instance id returned by ui_show.' },
-          op:   { type: 'string', description: 'Operation name defined by the component, such as applyMove, setState, or nextRound.' },
-          data: { type: 'object', description: 'Operation data interpreted by the component.' },
-        },
-        required: ['id', 'op']
-      }
-    }
-  },
-
-  ui_register: {
-    type: 'function',
-    function: {
-      name: 'ui_register',
-      description: 'Promote a verified inline component to a permanent component: write a .js file, update registry, write ui-components.json, and seed one skill.ui memory. Usually call after the inline component succeeds at least twice, the user does not immediately close it, and dwell signals are good. After registration, future similar needs can use ui_show directly.',
-      parameters: {
-        type: 'object',
-        properties: {
-          component_name: { type: 'string', description: 'Unused PascalCase component name, e.g. TodoCard or VideoPlayer.' },
-          code:           { type: 'string', description: 'Complete Web Component class code. Must include static tagName / static propsSchema / static enter / static exit and end with customElements.define.' },
-          props_schema:   { type: 'object', description: 'Object matching propsSchema in code, used as backend validation mirror, e.g. { field: { type, required } }.' },
-          use_case:       { type: 'string', description: 'When to use this component. Written into skill.ui memory as matching conditions.' },
-          example_call:   { type: 'string', description: 'Example ui_show call.' }
-        },
-        required: ['component_name', 'code', 'props_schema', 'use_case', 'example_call']
       }
     }
   },
@@ -252,6 +133,101 @@ export const uiSchemas = {
           }
         },
         required: ['action']
+      }
+    }
+  },
+
+  terminal_stream: {
+    type: 'function',
+    function: {
+      name: 'terminal_stream',
+      description: 'Open, inspect, and close a separate terminal-style progress window (black background, monospace text, with optional Markdown rendering). Use it for visible work logs, especially before/during file writing or artifact generation, so the user can see progress without waiting in Brain UI. The per-round context may tell you a terminal preview window is still visible; use this tool with action=close to dismiss it. After a file write, decide whether this window is still useful: keep it open for articles/reports/essays/notes/plans/Markdown prose that the user should review here; close it for code, config, JSON/data, temporary files, logs, build artifacts, or any file whose content does not need user review in this window after verification. If you open the same generated file in a local editor/viewer/browser, close this preview because that app becomes the review surface.',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['open', 'write', 'clear', 'close', 'status'],
+            description: 'open shows the terminal window; write appends text; clear clears the stream; close closes the window; status checks current stream state and returns screen/window layout when available.'
+          },
+          text: {
+            type: 'string',
+            description: 'Text to append when action=write. Keep it short and factual, like a terminal progress line.'
+          },
+          stream_id: {
+            type: 'string',
+            description: 'Optional stream identity. Default is "default". Reuse the same id for one continuous work session.'
+          },
+          title: {
+            type: 'string',
+            description: 'Optional terminal window title, e.g. "Writing project files".'
+          },
+          format: {
+            type: 'string',
+            enum: ['plain', 'markdown', 'code'],
+            description: 'Optional render format. Use markdown for article/report/essay/note previews so the terminal window renders headings, lists, emphasis, and code fences.'
+          },
+          artifact_kind: {
+            type: 'string',
+            description: 'Optional artifact kind such as article, report, note, code, log, or file.'
+          },
+          artifact_path: {
+            type: 'string',
+            description: 'Optional path of the file/artifact being previewed.'
+          },
+          hold_open: {
+            type: 'boolean',
+            description: 'Set true only when the preview itself should remain as the user review surface, such as article/report/essay/note/plan/Markdown prose. Use false for code, config, JSON/data, logs, temporary files, or files opened in another local app.'
+          },
+          force: {
+            type: 'boolean',
+            description: 'For action=close only. Use true when the user explicitly asked to close a held article/document preview, or when the same file has been opened in a local editor/viewer/browser. If context says visible_window=yes and hold_open=true, force=true is the expected way to close it.'
+          },
+          placement: {
+            type: 'string',
+            enum: ['auto', 'right', 'left', 'top', 'bottom', 'top-left', 'top-right', 'bottom-left', 'bottom-right', 'center'],
+            description: 'Optional window placement. Default auto avoids the main Bailongma window when possible; call status first if you need exact screen/window bounds.'
+          },
+          bounds: {
+            type: 'object',
+            properties: {
+              x: { type: 'number', description: 'Screen x coordinate in physical pixels.' },
+              y: { type: 'number', description: 'Screen y coordinate in physical pixels.' },
+              width: { type: 'number', description: 'Window width in pixels.' },
+              height: { type: 'number', description: 'Window height in pixels.' },
+            },
+            description: 'Optional explicit window bounds. If provided, the app clamps the window into the active display work area.'
+          },
+          focus: {
+            type: 'boolean',
+            description: 'Whether to focus the terminal window after opening. Defaults to true for explicit tool use; write-file previews use false so the main window keeps focus.'
+          },
+          newline: {
+            type: 'boolean',
+            description: 'When action=write, append a newline after text. Defaults to true.'
+          },
+          level: {
+            type: 'string',
+            enum: ['info', 'success', 'warning', 'error', 'muted'],
+            description: 'Optional semantic level for future renderers. Current terminal keeps a simple black/white look.'
+          },
+        },
+        required: ['action']
+      }
+    }
+  },
+
+  voice_retire: {
+    type: 'function',
+    function: {
+      name: 'voice_retire',
+      description: 'Gracefully collapse the floating voice orb — the listening ball shown on screen during a voice conversation. Call it when, in a voice conversation, the user asks you to leave / stop / says that is all (退下 / 没事了 / 再见 / 先这样), OR the task is fully complete and no follow-up is expected. It retires only the on-screen ball after you finish speaking; it does NOT end the app or stop you from being reachable. No-op if no orb is currently showing.',
+      parameters: {
+        type: 'object',
+        properties: {
+          reason: { type: 'string', description: 'Optional short reason, e.g. user said goodbye / task done.' },
+        },
+        required: []
       }
     }
   },

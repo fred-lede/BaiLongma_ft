@@ -91,11 +91,19 @@ export function formatPrefetchedItems(prefetchedItems = []) {
   return body + '\n\nThe data above has already been prefetched. Use it directly and phrase the response naturally; do not reuse the same sentence pattern every time.'
 }
 
-// 当前屏幕上的存活 ACUI 卡片列表
-export function formatActiveUICards(cards = []) {
-  if (!cards?.length) return ''
-  const lines = cards.map(c => `  - id="${c.id}"  component=${c.component}`)
-  return `[Active UI cards on screen]\n${lines.join('\n')}\nUse ui_hide with the id to close a card; use ui_update to update its content.`
+// 当前屏幕上的 scene surfaces(新 Agent-UI 架构,SceneStore 的紧凑投影)。
+// 只暴露 id/kind/intent/focus —— 让 Agent 知道"屏上有什么",但碰不到像素/data。
+// 这是设计方案 §四的闭环回注:背景状态,不是触发器。
+export function formatSceneManifest(manifest = []) {
+  if (!manifest?.length) return ''
+  const lines = manifest.map(s => {
+    const flags = []
+    if (s.focus) flags.push('focus')
+    if (s.intent && s.intent !== 'inform') flags.push(s.intent)
+    const tail = flags.length ? `  [${flags.join(', ')}]` : ''
+    return `  - id="${s.id}"  kind=${s.kind}${tail}`
+  })
+  return `[Surfaces currently on screen]\n${lines.join('\n')}\nThis is what you have placed on the interface via ui_set. To update one, call ui_set with the same id; to remove one, ui_set with that id and remove=true. Treat this as context, not a trigger — do not react merely because something is on screen.`
 }
 
 // AI 视频生成面板「感知」：把面板开关状态 + 用户正在编辑的提示词草稿贴进上下文。
@@ -108,7 +116,7 @@ export function formatAIVideoPanel(state) {
   if (draft) {
     lines.push(`The user's current draft in the prompt input box: "${draft}"`)
     lines.push('If the user asks you to "optimize / rewrite the prompt", edit the draft above directly — you can already see it, so do not ask the user again what they wrote.')
-    lines.push('By default, only give the rewritten version in the conversation for the user to review; do not auto-overwrite the input box. Only after the user explicitly says to adopt it (e.g. "用这个/就用这个") should you call generate_video(action="set_prompt", prompt="…") to write it back into the input box. The user can also copy-paste it from your reply themselves.')
+    lines.push('By default, only give the rewritten version in the conversation for the user to review; do not auto-overwrite the input box. The user can copy-paste it into the panel when ready.')
   } else if (state.open) {
     lines.push('The prompt input box is currently empty.')
   }

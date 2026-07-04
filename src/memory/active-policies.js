@@ -227,6 +227,24 @@ function hasDomainMatch(tags, domains) {
   return domains.some(domain => tags.includes(`domain:${domain}`))
 }
 
+function normalizeToolName(value) {
+  const name = normalizeTerm(value)
+  return /^[a-z][a-z0-9_]{1,49}$/.test(name) ? name : ''
+}
+
+function toolNamesFromTags(tags = []) {
+  const out = []
+  const seen = new Set()
+  for (const tag of tags) {
+    if (!String(tag).startsWith('tool:')) continue
+    const name = normalizeToolName(String(tag).slice('tool:'.length))
+    if (!name || seen.has(name)) continue
+    seen.add(name)
+    out.push(name)
+  }
+  return out
+}
+
 function scorePolicy(memory, profile, matchedTerms = new Set()) {
   const tags = safeJsonArray(memory.tags).map(String)
   const lowerText = memoryText(memory).toLowerCase()
@@ -265,6 +283,13 @@ function scorePolicy(memory, profile, matchedTerms = new Set()) {
     if (profile.termSet.has(trigger) || termInText(profile.currentText.toLowerCase(), trigger)) {
       score += 10
       reasons.push(`trigger:${trigger}`)
+    }
+  }
+
+  for (const tool of toolNamesFromTags(tags)) {
+    if (profile.termSet.has(tool) || termInText(profile.currentText.toLowerCase(), tool)) {
+      score += 10
+      reasons.push(`tool:${tool}`)
     }
   }
 
@@ -347,7 +372,8 @@ export function selectActivePolicies({
     })
     .filter(memory => {
       const matchedTerms = memory._matchedTerms?.size || 0
-      const hasStrongRoute = memory._hasPolicyDomainMatch || memory._policyReasons.some(r => r.startsWith('trigger:'))
+      const hasStrongRoute = memory._hasPolicyDomainMatch
+        || memory._policyReasons.some(r => r.startsWith('trigger:') || r.startsWith('tool:'))
       const threshold = hasStrongRoute ? 10 : 12
       return memory._policyScore >= threshold && matchedTerms > 0
     })
@@ -382,4 +408,44 @@ function formatMemoryPolicy(memory) {
 export function formatActivePoliciesForPrompt(policies = []) {
   if (!Array.isArray(policies) || policies.length === 0) return ''
   return policies.map(formatMemoryPolicy).join('\n')
+}
+
+function policyHintForTool(memory) {
+  const tags = safeJsonArray(memory.tags).map(String)
+  const kind = policyKindFromTags(tags) || (memory.event_type === 'self_constraint' ? 'constraint' : 'policy')
+  const id = memory.mem_id || `row:${memory.id}`
+  const title = memory.title ? `${memory.title}: ` : ''
+  const body = truncate(`${title}${memory.content || ''}`, 220)
+  const detail = truncate(memory.detail || '', 120)
+  const sameDetail = detail && cleanText(detail) === cleanText(memory.content || '')
+  return `[${kind}] ${id}: ${body}${detail && !sameDetail ? ` Detail: ${detail}` : ''}`
+}
+
+export function formatToolPromptHintsForSchemas(policies = [], toolNames = [], {
+  limitPerTool = 2,
+} = {}) {
+  if (!Array.isArray(policies) || policies.length === 0) return {}
+  const candidateTools = (Array.isArray(toolNames) ? toolNames : [])
+    .map(normalizeToolName)
+    .filter(Boolean)
+  const byTool = new Map()
+
+  for (const memory of policies) {
+    if (!memory) continue
+    const tags = safeJsonArray(memory.tags).map(String)
+    const explicitTools = toolNamesFromTags(tags)
+    const lowerText = memoryText(memory).toLowerCase()
+    const tools = explicitTools.length > 0
+      ? explicitTools
+      : candidateTools.filter(tool => termInText(lowerText, tool))
+
+    for (const tool of tools) {
+      const arr = byTool.get(tool) || []
+      if (arr.length >= limitPerTool) continue
+      arr.push(policyHintForTool(memory))
+      byTool.set(tool, arr)
+    }
+  }
+
+  return Object.fromEntries(byTool.entries())
 }

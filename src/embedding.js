@@ -1,14 +1,14 @@
 // Embedding module — 向量语义召回的"算 embedding"层。
 //
-// 设计目标：
-//   1. 完全 lazy init：模块加载时不做任何 IO / 网络
-//   2. 任何错误（401 / timeout / 网络 / provider 不支持）都吞掉返回 null，
-//      让上层的 FTS5 召回继续工作，绝不影响主流程
+// 设计：记忆向量召回只用本地离线模型（provider 恒为 'local'），不依赖任何云端 API。
+// 真正的推理在 src/embedding-local.js（transformers.js + onnxruntime-node 跑 ONNX）。本模块只负责：
+//   1. 完全 lazy init：模块加载时不做任何 IO / 推理
+//   2. 任何错误都吞掉返回 null，让上层的 FTS5 召回继续工作，绝不影响主流程
 //   3. 简易 LRU 缓存（Map 删除最旧项）— 不引入新依赖
 //   4. 返回 Buffer（包裹 Float32Array 的字节），方便直接写入 SQLite BLOB
 //
-// 与 chat 的 provider 配置完全独立：embedding 块在 config.json 的 "embedding" 键下，
-// 由 src/config.js 的 getEmbeddingConfig/setEmbeddingConfig 管理。
+// 配置：embedding 块在 config.json 的 "embedding" 键下（仅 model / timeoutMs 有意义），
+// 由 src/config.js 的 getEmbeddingCredentials 管理；缺省走本地默认模型，开箱即用零配置。
 
 import crypto from 'crypto'
 import { getEmbeddingCredentials } from './config.js'
@@ -16,7 +16,7 @@ import { getEmbeddingCredentials } from './config.js'
 const MAX_CACHE_ENTRIES = 200
 const MIN_TEXT_LENGTH = 2
 
-// LRU 缓存：key = sha256(text + '' + model)，value = Buffer
+// LRU 缓存：key = sha256(text + '' + model + isQuery 标记)，value = Buffer
 // 用 Map 的插入顺序近似 LRU：每次读到命中就 delete + set，让它移到尾部；
 // 写入超限时删 Map.keys().next().value （最旧的 key）
 const cache = new Map()
@@ -24,7 +24,7 @@ const cache = new Map()
 function cacheKey(text, model) {
   return crypto
     .createHash('sha256')
-    .update(text + '' + (model || ''))
+    .update(text + '' + (model || ''))
     .digest('hex')
 }
 
@@ -51,30 +51,35 @@ export function clearEmbeddingCache() {
   cache.clear()
 }
 
-// 是否已配置 embedding provider。前端读 config.json 的 embedding 块，
-// 这里通过 getEmbeddingCredentials() 间接读后端凭证视图。
-// 注意：故意做成同步且尽可能宽松——只看 apiKey + model 是否齐全，
-//      具体调用失败让 computeEmbedding 内部处理。
+// 是否已配置 embedding。本地模型零配置：只要拿得到 model（默认或 config 指定）即视为已配置。
+// 模型未下载完成 / 包未装等运行期失败由 computeEmbedding 内部吞错返回 null，上层走 FTS5 兜底。
 export function isEmbeddingConfigured() {
   try {
     const cred = getEmbeddingCredentials()
-    return !!(cred && cred.apiKey && cred.model)
+    return !!(cred && cred.model)
   } catch {
     return false
   }
 }
 
-// 把 Float32Array 转成 Buffer（共享底层 ArrayBuffer，不复制）
-function f32ArrayToBuffer(arr) {
-  return Buffer.from(arr.buffer, arr.byteOffset, arr.byteLength)
+// 向量召回的有效超时（ms）。注入器拿它做硬超时预算。
+// 本地离线推理无网络方差但 CPU 慢，默认 1500ms；用户可在 config 的 embedding.timeoutMs 覆盖。
+export function getEmbeddingTimeoutMs() {
+  try {
+    const cred = getEmbeddingCredentials()
+    if (cred && Number.isFinite(cred.timeoutMs) && cred.timeoutMs > 0) return cred.timeoutMs
+  } catch {}
+  return 1500
 }
 
-// 主接口：算 embedding。
+// 主接口：本地算 embedding。
 // - text 太短 / 为空 → null
-// - 未配置 provider → null
-// - 网络 / API 错误 → null（静默）
+// - 模型未就绪 / 推理失败 → null（静默，上层走 FTS5 兜底）
 // - 成功 → Buffer (包裹 Float32Array 的字节，长度 = dim * 4)
-export async function computeEmbedding(text) {
+//
+// opts.isQuery：召回 query 传 true（bge 会套检索指令前缀做非对称检索）；入库 passage 传 false（默认）。
+//               query/passage 向量不同（前缀不同），cacheKey 带 isQuery 区分，避免互相覆盖。
+export async function computeEmbedding(text, { isQuery = false } = {}) {
   const input = typeof text === 'string' ? text : ''
   if (!input || input.length < MIN_TEXT_LENGTH) return null
 
@@ -84,38 +89,18 @@ export async function computeEmbedding(text) {
   } catch {
     return null
   }
-  if (!cred || !cred.apiKey || !cred.model) return null
+  if (!cred || !cred.model) return null
 
-  const key = cacheKey(input, cred.model)
+  const keyExtra = isQuery ? ':q' : ':p'
+  const key = cacheKey(input, cred.model + keyExtra)
   const cached = cacheGet(key)
   if (cached) return cached
 
   let buf = null
   try {
-    const { default: OpenAI } = await import('openai')
-    const client = new OpenAI({
-      apiKey: cred.apiKey,
-      baseURL: cred.baseURL || undefined,
-      timeout: 15000,
-    })
-
-    // dimensions 仅 OpenAI text-embedding-3-* 系列支持；
-    // 其他 provider 传过去通常被忽略或者直接报错，所以只在 provider === 'openai' 时附带
-    const params = { model: cred.model, input }
-    if (cred.provider === 'openai' && Number.isFinite(cred.dimensions) && cred.dimensions > 0) {
-      params.dimensions = cred.dimensions
-    }
-
-    const resp = await client.embeddings.create(params)
-    const vec = resp?.data?.[0]?.embedding
-    if (!Array.isArray(vec) || vec.length === 0) return null
-
-    const f32 = new Float32Array(vec.length)
-    for (let i = 0; i < vec.length; i++) f32[i] = Number(vec[i]) || 0
-    buf = f32ArrayToBuffer(f32)
+    const { computeLocalEmbedding } = await import('./embedding-local.js')
+    buf = await computeLocalEmbedding(input, { model: cred.model, isQuery })
   } catch {
-    // 任何错误：401 / 超时 / DNS / 序列化 / provider 不支持 embedding……
-    // 一律返回 null，让上层走 FTS5 兜底
     return null
   }
 

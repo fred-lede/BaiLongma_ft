@@ -30,6 +30,69 @@ const SET_TASK_STRIP = /\[SET_TASK:\s*[\s\S]+?\]/g
 const CLEAR_TASK_STRIP = /\[CLEAR_TASK\]/g
 const UPDATE_PERSONA_STRIP = /\[UPDATE_PERSONA:\s*[\s\S]+?\]/g
 
+const HIGH_CONFIDENCE_INTERNAL_LINE_RE = [
+  /^(?:用户|user).*?(?:刚从|切到|切回|话题|意图|可能|上下文|语音输入|问)/i,
+  /^(?:结合上下文|考虑到|最(?:可能|自然)的(?:意图|理解)|话题(?:切回|切到|切换)|当前(?:最可能|应该是在问))/,
+  /^the user\b.*\b(probably|likely|intent|context|topic|asked|switched)\b/i,
+  /^(?:given|considering)\b.*\b(context|conversation|history|user)\b/i,
+]
+
+const LOW_CONFIDENCE_INTERNAL_LINE_RE = [
+  /^让我(?:想想|查|看|确认|检查)/,
+  /^我(?:先|需要|来)(?:想想|查|看|确认|检查)/,
+  /^I\s+(?:need to|should|will|can)\s+(?:check|look|think|figure|inspect)\b/i,
+]
+
+const INTERNAL_PREFIX_RE = /^(?:用户|user|结合上下文|考虑到|最可能|最自然|话题|当前|让我|我先|我需要|我来|the user|given|considering|i need|i should|i will|i can)/i
+
+function classifyLooseInternalLine(line) {
+  const s = String(line || '').trim()
+  if (!s) return 'blank'
+  if (s.includes('<invoke') || s.includes('</invoke>')) return 'none'
+  if (s.length > 240) return 'none'
+  if (HIGH_CONFIDENCE_INTERNAL_LINE_RE.some(re => re.test(s))) return 'high'
+  if (LOW_CONFIDENCE_INTERNAL_LINE_RE.some(re => re.test(s))) return 'low'
+  return 'none'
+}
+
+function startsLikeLooseInternalPrelude(text) {
+  const s = String(text || '').trimStart()
+  return !!s && INTERNAL_PREFIX_RE.test(s)
+}
+
+export function stripLooseThinkingPrelude(text) {
+  const s = String(text || '').replace(/^\uFEFF/, '')
+  const lines = s.split(/\r?\n/)
+  let i = 0
+  let dropped = false
+  let sawHighConfidence = false
+
+  while (i < lines.length) {
+    const kind = classifyLooseInternalLine(lines[i])
+    if (kind === 'blank') {
+      if (dropped || i === 0) {
+        i++
+        continue
+      }
+      break
+    }
+    if (kind === 'high') {
+      dropped = true
+      sawHighConfidence = true
+      i++
+      continue
+    }
+    if (kind === 'low' && sawHighConfidence) {
+      dropped = true
+      i++
+      continue
+    }
+    break
+  }
+
+  return (dropped ? lines.slice(i).join('\n') : s).trim()
+}
+
 /**
  * 只解析、不做副作用。提取 4 种标记的捕获值。
  * @param {string} text 模型原始输出文本
@@ -67,4 +130,51 @@ export function stripMarkers(text, { stripThink = true } = {}) {
     .replace(CLEAR_TASK_STRIP, '')
     .replace(UPDATE_PERSONA_STRIP, '')
     .trim()
+}
+
+export function sanitizeAssistantReplyForDelivery(text) {
+  return stripLooseThinkingPrelude(stripMarkers(text))
+}
+
+export function createAssistantReplyStreamSanitizer() {
+  let buffer = ''
+  let passthrough = false
+
+  const drainBuffer = (force = false) => {
+    if (!buffer) return ''
+    if (passthrough) {
+      const out = buffer
+      buffer = ''
+      return out
+    }
+
+    const newlineMatch = buffer.match(/\r?\n/)
+    if (!newlineMatch && !force) {
+      if (startsLikeLooseInternalPrelude(buffer) && buffer.length < 800) return ''
+      passthrough = true
+      const out = buffer
+      buffer = ''
+      return out
+    }
+
+    const sanitized = sanitizeAssistantReplyForDelivery(buffer)
+    if (!force && !sanitized && startsLikeLooseInternalPrelude(buffer) && buffer.length < 1600) {
+      return ''
+    }
+
+    buffer = ''
+    passthrough = true
+    return sanitized
+  }
+
+  return {
+    push(text) {
+      if (!text) return ''
+      buffer += String(text)
+      return drainBuffer(false)
+    },
+    flush() {
+      return drainBuffer(true)
+    },
+  }
 }

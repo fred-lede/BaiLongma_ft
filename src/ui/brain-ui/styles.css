@@ -907,21 +907,75 @@ body {
   white-space: normal;
 }
 
+.msg:has(.msg-image) {
+  --msg-image-size: 55px;
+  max-width: min(85%, 300px);
+  padding: 10px;
+}
+
+.msg-body:has(.msg-image) {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.msg-user .msg-body:has(.msg-image),
+.msg-external .msg-body:has(.msg-image) {
+  align-items: flex-end;
+}
+
+.msg-body:has(.msg-image) > * + * {
+  margin-top: 0;
+}
+
+.msg-body:has(.msg-image) > p:not(.msg-media-block) {
+  max-width: 100%;
+  line-height: 1.45;
+  text-align: left;
+}
+
+.msg-user .msg-body:has(.msg-image) > p:not(.msg-media-block),
+.msg-external .msg-body:has(.msg-image) > p:not(.msg-media-block) {
+  text-align: right;
+}
+
 /* 聊天里的图片消息（内容寻址 /media/chat/*）：缩略展示，点击在新标签打开原图 */
+.msg-media-block {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  width: 100%;
+  line-height: 0;
+}
+
+.msg-user .msg-media-block,
+.msg-external .msg-media-block {
+  justify-content: flex-end;
+}
+
 .msg-image-link {
-  display: inline-block;
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: fit-content;
   max-width: 100%;
   line-height: 0;
 }
 
+.msg-user .msg-image-link,
+.msg-external .msg-image-link {
+  justify-content: flex-end;
+}
+
 .msg-image {
-  max-width: min(260px, 100%);
-  max-height: 320px;
-  width: auto;
-  height: auto;
-  border-radius: 10px;
+  width: var(--msg-image-size);
+  height: var(--msg-image-size);
+  max-width: var(--msg-image-size);
+  max-height: var(--msg-image-size);
+  display: block;
+  border-radius: 9px;
   border: 1px solid var(--line, rgba(255, 255, 255, 0.12));
-  object-fit: contain;
+  object-fit: cover;
   cursor: zoom-in;
 }
 
@@ -1026,6 +1080,59 @@ body {
   z-index: 80;
 }
 .slash-menu[hidden] { display: none; }
+
+.paste-attachments {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-height: 132px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 10px 22px 8px 50px;
+  border-top: 1px solid var(--line);
+}
+.paste-attachments[hidden] { display: none; }
+.paste-attachments:not([hidden]) + #input-row { border-top-color: transparent; }
+
+.paste-attachment {
+  position: relative;
+  width: 58px;
+  height: 58px;
+  flex: 0 0 auto;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  overflow: visible;
+  background: color-mix(in srgb, var(--panel-raised) 80%, transparent);
+}
+
+.paste-attachment img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  border-radius: 9px;
+  object-fit: cover;
+}
+
+.paste-attachment-remove {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: var(--bg-deep);
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 16px;
+  cursor: pointer;
+  box-shadow: var(--shadow-pop);
+}
+
+.paste-attachment-remove:hover {
+  background: color-mix(in srgb, var(--danger) 28%, var(--bg-deep));
+}
 
 .slash-item {
   display: flex;
@@ -4219,6 +4326,7 @@ body.worldcup-mode .console.wc-collapsed {
   overflow: hidden;
 }
 body.worldcup-mode .console.wc-collapsed #chat-history,
+body.worldcup-mode .console.wc-collapsed #paste-attachments,
 body.worldcup-mode .console.wc-collapsed #input-row,
 body.worldcup-mode .console.wc-collapsed > #voice-panel .voice-transcript { display: none; }
 body.worldcup-mode .console.wc-collapsed > #voice-panel {

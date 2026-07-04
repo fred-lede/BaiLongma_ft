@@ -1,3 +1,4 @@
+import './network-proxy.js'
 import fs from 'fs'
 import path from 'path'
 import { paths } from './paths.js'
@@ -13,9 +14,9 @@ export const MIMO_PROVIDER = 'mimo'
 
 export const DEFAULT_DEEPSEEK_MODEL = 'deepseek-v4-pro'
 export const DEFAULT_MINIMAX_MODEL = 'MiniMax-M2.7'
-export const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini'
+export const DEFAULT_OPENAI_MODEL = 'gpt-5.5'
 export const DEFAULT_QWEN_MODEL = 'qwen-turbo'
-export const DEFAULT_MOONSHOT_MODEL = 'moonshot-v1-8k'
+export const DEFAULT_MOONSHOT_MODEL = 'kimi-k2.6'
 export const DEFAULT_ZHIPU_MODEL = 'glm-5.1'
 export const DEFAULT_MIMO_MODEL = 'mimo-v2.5-pro'
 
@@ -57,13 +58,113 @@ export const MINIMAX_MODELS = [
 
 export const OPENAI_MODELS = [
   {
-    id: 'gpt-4o-mini',
-    label: 'gpt-4o-mini',
+    id: 'gpt-5.5',
+    label: 'GPT-5.5',
+    deprecated: false,
+  },
+  {
+    id: 'gpt-5.5-2026-04-23',
+    label: 'GPT-5.5 (2026-04-23)',
+    deprecated: false,
+  },
+  {
+    id: 'gpt-5.4',
+    label: 'GPT-5.4',
+    deprecated: false,
+  },
+  {
+    id: 'gpt-5.4-2026-03-05',
+    label: 'GPT-5.4 (2026-03-05)',
+    deprecated: false,
+  },
+  {
+    id: 'gpt-5.4-mini',
+    label: 'GPT-5.4 mini',
+    deprecated: false,
+  },
+  {
+    id: 'gpt-5.4-nano',
+    label: 'GPT-5.4 nano',
+    deprecated: false,
+  },
+  {
+    id: 'gpt-5.3-chat-latest',
+    label: 'GPT-5.3 Chat latest',
+    deprecated: false,
+  },
+  {
+    id: 'gpt-5.2',
+    label: 'GPT-5.2',
+    deprecated: false,
+  },
+  {
+    id: 'gpt-5.2-chat-latest',
+    label: 'GPT-5.2 Chat latest',
+    deprecated: true,
+  },
+  {
+    id: 'gpt-5.1',
+    label: 'GPT-5.1',
+    deprecated: false,
+  },
+  {
+    id: 'gpt-5.1-chat-latest',
+    label: 'GPT-5.1 Chat latest',
+    deprecated: false,
+  },
+  {
+    id: 'gpt-5',
+    label: 'GPT-5',
+    deprecated: false,
+  },
+  {
+    id: 'gpt-5-chat-latest',
+    label: 'GPT-5 Chat latest',
+    deprecated: true,
+  },
+  {
+    id: 'gpt-5-mini',
+    label: 'GPT-5 mini',
+    deprecated: false,
+  },
+  {
+    id: 'gpt-5-nano',
+    label: 'GPT-5 nano',
+    deprecated: false,
+  },
+  {
+    id: 'gpt-4.1',
+    label: 'GPT-4.1',
+    deprecated: false,
+  },
+  {
+    id: 'gpt-4.1-mini',
+    label: 'GPT-4.1 mini',
+    deprecated: false,
+  },
+  {
+    id: 'gpt-4.1-nano',
+    label: 'GPT-4.1 nano',
     deprecated: false,
   },
   {
     id: 'gpt-4o',
-    label: 'gpt-4o',
+    label: 'GPT-4o',
+    deprecated: false,
+  },
+  {
+    id: 'gpt-4o-mini',
+    label: 'GPT-4o mini',
+    deprecated: false,
+  },
+  {
+    id: 'o3',
+    label: 'o3',
+    deprecated: false,
+  },
+  {
+    id: 'o4-mini',
+    label: 'o4-mini',
     deprecated: false,
   },
 ]
@@ -83,14 +184,59 @@ export const QWEN_MODELS = [
 
 export const MOONSHOT_MODELS = [
   {
-    id: 'moonshot-v1-8k',
-    label: 'moonshot-v1-8k',
+    id: 'kimi-k2.7-code',
+    label: 'kimi-k2.7-code',
+    deprecated: false,
+  },
+  {
+    id: 'kimi-k2.7-code-highspeed',
+    label: 'kimi-k2.7-code-highspeed',
+    deprecated: false,
+  },
+  {
+    id: 'kimi-k2.6',
+    label: 'kimi-k2.6',
+    deprecated: false,
+  },
+  {
+    id: 'kimi-k2.5',
+    label: 'kimi-k2.5',
     deprecated: false,
   },
   {
     id: 'moonshot-v1-32k',
     label: 'moonshot-v1-32k',
     deprecated: false,
+  },
+  {
+    id: 'moonshot-v1-128k',
+    label: 'moonshot-v1-128k',
+    deprecated: false,
+  },
+  {
+    id: 'moonshot-v1-8k',
+    label: 'moonshot-v1-8k',
+    deprecated: false,
+  },
+  {
+    id: 'moonshot-v1-8k-vision-preview',
+    label: 'moonshot-v1-8k-vision-preview',
+    deprecated: false,
+  },
+  {
+    id: 'moonshot-v1-32k-vision-preview',
+    label: 'moonshot-v1-32k-vision-preview',
+    deprecated: false,
+  },
+  {
+    id: 'moonshot-v1-128k-vision-preview',
+    label: 'moonshot-v1-128k-vision-preview',
+    deprecated: false,
+  },
+  {
+    id: 'kimi-k2-thinking',
+    label: 'kimi-k2-thinking (deprecated)',
+    deprecated: true,
   },
 ]
 
@@ -249,9 +395,49 @@ const PROBE_TIMEOUT_MS = 12000
 function normalizeModel(model, provider = DEEPSEEK_PROVIDER) {
   const pConfig = PROVIDER_CONFIG[provider] || PROVIDER_CONFIG[DEEPSEEK_PROVIDER]
   const value = String(model || '').trim()
-  const validIds = new Set(pConfig.models.map(m => m.id))
-  if (validIds.has(value)) return value
+  if (value) return value
   return pConfig.defaultModel
+}
+
+function withCurrentModel(models, model) {
+  const value = String(model || '').trim()
+  if (!value || models.some(m => m?.id === value)) return models
+  return [{ id: value, label: `${value} (custom)`, deprecated: false, custom: true }, ...models]
+}
+
+function isMoonshotKimiModel(model) {
+  return String(model || '').trim().toLowerCase().startsWith('kimi-')
+}
+
+function isMoonshotThinkingAlwaysOnModel(model) {
+  const value = String(model || '').trim().toLowerCase()
+  return value === 'kimi-k2.7-code' || value === 'kimi-k2.7-code-highspeed'
+}
+
+function isMoonshotThinkingToggleSupportedModel(model) {
+  const value = String(model || '').trim().toLowerCase()
+  return value === 'kimi-k2.6' || value === 'kimi-k2.5'
+}
+
+export function shouldOmitSamplingForProviderModel(provider, model) {
+  if (provider === OPENAI_PROVIDER && isOpenAIDefaultSamplingModel(model)) return true
+  return provider === MOONSHOT_PROVIDER && isMoonshotKimiModel(model)
+}
+
+function isOpenAIDefaultSamplingModel(model) {
+  const value = String(model || '').trim().toLowerCase()
+  return value.startsWith('gpt-5') || /^o\d/.test(value)
+}
+
+export function shouldUseMaxCompletionTokensForProviderModel(provider, model) {
+  if (provider !== OPENAI_PROVIDER) return false
+  return isOpenAIDefaultSamplingModel(model)
+}
+
+export function shouldSendThinkingDisabledForProviderModel(provider, model) {
+  if (provider === ZHIPU_PROVIDER) return true
+  if (provider !== MOONSHOT_PROVIDER) return false
+  return isMoonshotThinkingToggleSupportedModel(model) && !isMoonshotThinkingAlwaysOnModel(model)
 }
 
 export function getProviderModelFallbacks(provider, model) {
@@ -300,9 +486,15 @@ function buildPingParams(provider, model) {
   const pingParams = {
     model,
     messages: [{ role: 'user', content: 'Reply with exactly: hello' }],
-    max_tokens: 8,
-    temperature: 0,
     stream: false,
+  }
+  if (shouldUseMaxCompletionTokensForProviderModel(provider, model)) {
+    pingParams.max_completion_tokens = 32
+  } else {
+    pingParams.max_tokens = 8
+  }
+  if (!shouldOmitSamplingForProviderModel(provider, model)) {
+    pingParams.temperature = 0
   }
   if (provider === DEEPSEEK_PROVIDER) {
     pingParams.reasoning_effort = 'high'
@@ -762,7 +954,7 @@ export async function prepareActivation({ provider = AUTO_PROVIDER, apiKey, mode
       apiKey: normalizedKey,
       model: detected.model,
       baseURL: undefined,
-      models: detected.pConfig.models,
+      models: withCurrentModel(detected.pConfig.models, detected.model),
     }
   }
 
@@ -782,7 +974,7 @@ export async function prepareActivation({ provider = AUTO_PROVIDER, apiKey, mode
     apiKey: normalizedKey,
     model: detected.model,
     baseURL: undefined,
-    models: pConfig.models,
+    models: withCurrentModel(pConfig.models, detected.model),
   }
 }
 
@@ -835,7 +1027,7 @@ export function commitPreparedActivation(prepared) {
   return {
     provider: p,
     model: normalizedModel,
-    models: pConfig.models,
+    models: withCurrentModel(pConfig.models, normalizedModel),
   }
 }
 
@@ -852,7 +1044,7 @@ export function getActivationStatus() {
     provider: config.provider,
     model: config.model,
     baseURL: config.provider === 'custom' ? config.baseURL : undefined,
-    models: pConfig ? pConfig.models : customModels,
+    models: pConfig ? withCurrentModel(pConfig.models, config.model) : customModels,
     defaultModel: pConfig ? pConfig.defaultModel : (config.model || DEFAULT_DEEPSEEK_MODEL),
   }
 }
@@ -864,7 +1056,7 @@ export function getProviderSummaries() {
       const stored = resolveStoredLlmForProvider(name)
       return {
       label: pConfig.label || name,
-      models: pConfig.models,
+      models: withCurrentModel(pConfig.models, stored?.model),
       defaultModel: pConfig.defaultModel,
       configured: !!stored,
       apiKey: stored?.apiKey || '',
@@ -961,7 +1153,7 @@ export function switchProviderConfig({ provider, model } = {}) {
   return {
     provider: p,
     model: nextModel,
-    models: PROVIDER_CONFIG[p].models,
+    models: withCurrentModel(PROVIDER_CONFIG[p].models, nextModel),
   }
 }
 
@@ -1350,24 +1542,28 @@ export function setTTSConfig(updates) {
 }
 
 // ── Embedding config ──────────────────────────────────────────────────────────
-// Embedding 与 chat provider 完全独立。DeepSeek/Moonshot 没 embedding API，
-// 所以必须分开存。结构：config.json 的 "embedding" 块。
-//
-// 字段：
-//   provider:   'openai' | 'qwen' | 'zhipu' | 'minimax' | 'custom'
-//   model:      模型名（参考 EMBEDDING_PROVIDER_PRESETS）
-//   apiKey:     凭证（明文存储，与现有 chat apiKey 一样）
-//   baseURL:    custom 时必填；其他 provider 留空走预设
-//   dimensions: 可选，仅 OpenAI text-embedding-3-* 系列支持显式指定
+// 记忆向量召回只用本地离线模型（transformers.js + onnxruntime-node 跑 ONNX），不依赖任何云端 API。
+// 零配置开箱即用：config.json 的 "embedding" 块可不存在；存在时仅 model / timeoutMs 有意义。
+//   model:     本地 ONNX 模型 HF 仓库 id（缺省走 LOCAL_DEFAULT_MODEL）
+//   timeoutMs: 可选，覆盖向量召回硬超时（默认 1500ms）
+// 首次运行会下载 ~330MB 中文嵌入模型到 userData/data/models，之后离线可用。
 
-const EMBEDDING_CONFIG_KEYS = ['provider', 'model', 'apiKey', 'baseURL', 'dimensions']
+const EMBEDDING_CONFIG_KEYS = ['model', 'timeoutMs']
 
+// 本地默认模型：中文为主、量化后体积/速度均衡的小型 ONNX 模型。
+const LOCAL_DEFAULT_MODEL = 'Xenova/bge-large-zh-v1.5'
+const LOCAL_DEFAULT_DIMS = 1024
+
+// 解析有效本地模型名：只认 HF 仓库 id 形态（owner/name），过滤掉残留的云端模型名
+// （如 'text-embedding-3-small'），避免拿云端名当本地模型加载导致召回静默失效。
+function resolveLocalModel(stored) {
+  const m = typeof stored?.model === 'string' ? stored.model.trim() : ''
+  return /^[^/\s]+\/[^/\s]+$/.test(m) ? m : LOCAL_DEFAULT_MODEL
+}
+
+// 仅保留 local 预设（云端 provider 已移除）。供 api 的 /settings/embedding 视图使用。
 export const EMBEDDING_PROVIDER_PRESETS = {
-  openai:  { baseURL: 'https://api.openai.com/v1',                          defaultModel: 'text-embedding-3-small', defaultDims: 1536 },
-  qwen:    { baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',  defaultModel: 'text-embedding-v2',      defaultDims: 1536 },
-  zhipu:   { baseURL: 'https://open.bigmodel.cn/api/paas/v4',               defaultModel: 'embedding-3',            defaultDims: 2048 },
-  minimax: { baseURL: 'https://api.minimax.chat/v1',                        defaultModel: 'embo-01',                defaultDims: 1536 },
-  custom:  { baseURL: '',                                                   defaultModel: '',                       defaultDims: 1536 },
+  local: { baseURL: '', defaultModel: LOCAL_DEFAULT_MODEL, defaultDims: LOCAL_DEFAULT_DIMS, local: true },
 }
 
 let _embeddingBlockCache = null
@@ -1401,31 +1597,25 @@ function readEmbeddingBlock() {
   return block
 }
 
-// 前端可见视图：不暴露 apiKey 明文，只暴露 configured 布尔
+// 前端可见视图。provider 恒为 'local'，model 缺省走默认，永远 configured=true（零配置）。
 export function getEmbeddingConfig() {
   const stored = readEmbeddingBlock()
-  const provider = typeof stored.provider === 'string' ? stored.provider : ''
-  const model    = typeof stored.model === 'string'    ? stored.model    : ''
-  const baseURL  = typeof stored.baseURL === 'string'  ? stored.baseURL  : ''
-  const dimensions = Number.isFinite(stored.dimensions) ? stored.dimensions : null
-  const configured = !!(stored.apiKey && model)
-  return { provider, model, baseURL, dimensions, configured }
+  const model = resolveLocalModel(stored)
+  const timeoutMs = Number.isFinite(stored.timeoutMs) ? stored.timeoutMs : null
+  return { provider: 'local', model, dimensions: LOCAL_DEFAULT_DIMS, timeoutMs, configured: true }
 }
 
-// Backend-only：读明文 apiKey。供 src/embedding.js 内部用，不要给前端。
+// Backend-only：供 src/embedding.js 内部用。强制本地，忽略任何残留的云端字段。
 export function getEmbeddingCredentials() {
   const stored = readEmbeddingBlock()
-  const provider = typeof stored.provider === 'string' ? stored.provider : ''
-  let baseURL = typeof stored.baseURL === 'string' && stored.baseURL ? stored.baseURL : ''
-  if (!baseURL && provider && EMBEDDING_PROVIDER_PRESETS[provider]) {
-    baseURL = EMBEDDING_PROVIDER_PRESETS[provider].baseURL || ''
-  }
+  const model = resolveLocalModel(stored)
   return {
-    provider,
-    model:      typeof stored.model === 'string'  ? stored.model  : '',
-    apiKey:     typeof stored.apiKey === 'string' ? stored.apiKey : '',
-    baseURL,
-    dimensions: Number.isFinite(stored.dimensions) ? stored.dimensions : null,
+    provider: 'local',
+    model,
+    apiKey: '',
+    baseURL: '',
+    dimensions: LOCAL_DEFAULT_DIMS,
+    timeoutMs: Number.isFinite(stored.timeoutMs) ? stored.timeoutMs : null,
   }
 }
 
@@ -1435,10 +1625,10 @@ export function setEmbeddingConfig(updates) {
   const next = { ...current }
   for (const [key, val] of Object.entries(updates || {})) {
     if (!EMBEDDING_CONFIG_KEYS.includes(key)) continue
-    if (key === 'dimensions') {
+    if (key === 'dimensions' || key === 'timeoutMs') {
       const n = Number(val)
-      if (Number.isFinite(n) && n > 0) next.dimensions = n
-      else delete next.dimensions
+      if (Number.isFinite(n) && n > 0) next[key] = n
+      else delete next[key]
       continue
     }
     const trimmed = String(val || '').trim()
@@ -1540,5 +1730,8 @@ export const __internals = {
   getProviderModelFallbacks,
   normalizeModel,
   isThinkingEnabledForModel,
+  shouldOmitSamplingForProviderModel,
+  shouldSendThinkingDisabledForProviderModel,
+  shouldUseMaxCompletionTokensForProviderModel,
   buildPingParams,
 }

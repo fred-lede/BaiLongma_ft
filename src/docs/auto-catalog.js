@@ -31,7 +31,7 @@ const TOOL_CATEGORIES = [
   { label: '上网', schemas: webSchemas },
   { label: '媒体（语音 / 音乐 / 图像 / 视频）', schemas: mediaSchemas },
   { label: '记忆', schemas: memorySchemas },
-  { label: '界面 / ACUI', schemas: uiSchemas },
+  { label: '界面 / 面板', schemas: uiSchemas },
   { label: '任务与节奏', schemas: taskSchemas },
   { label: '成果审视', schemas: reviewSchemas },
   { label: '提醒与预取', schemas: remindersSchemas },

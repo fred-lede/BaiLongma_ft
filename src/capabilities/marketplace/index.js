@@ -22,12 +22,12 @@ const BUILTIN_NAMES = new Set([
   'fetch_url', 'browser_read', 'search_memory', 'probe_memory', 'upsert_memory', 'skip_recognition',
   'speak', 'generate_lyrics', 'generate_music', 'generate_image', 'set_tick_interval',
   'media_mode', 'hotspot_mode', 'worldcup_mode', 'open_doc_panel', 'person_card_mode', 'music',
-  'manage_reminder', 'schedule_reminder', 'manage_prefetch_task', 'ui_show', 'ui_update',
-  'manage_rule',
-  'ui_hide', 'ui_patch', 'manage_app', 'ui_register', 'focus_banner',
+  'manage_reminder', 'schedule_reminder', 'manage_prefetch_task', 'ui_set',
+  'manage_rule', 'focus_banner', 'voice_retire',
   'set_location', 'delegate_to_agent', 'grant_agent_delegation', 'recall_memory',
   'complete_startup_self_check', 'set_task', 'complete_task', 'update_task_step',
-  'install_tool', 'uninstall_tool', 'list_tools', 'manage_tool_factory', 'set_security', 'connect_wechat',
+  'install_tool', 'uninstall_tool', 'list_tools', 'manage_tool_factory', 'set_security', 'connect_wechat', 'connect_feishu',
+  'run_capability', 'run_api_capability', 'analyze_image', 'manage_api_capability',
 ])
 
 function ensureToolsDir() {

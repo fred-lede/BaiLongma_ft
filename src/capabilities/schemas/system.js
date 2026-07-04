@@ -104,6 +104,19 @@ export const systemSchemas = {
     }
   },
 
+  connect_feishu: {
+    type: 'function',
+    function: {
+      name: 'connect_feishu',
+      description: 'Show the Feishu (Lark) connection popup so the user can configure the Feishu bot via long-connection mode. The popup contains a step-by-step guide, App ID / App Secret inputs, and a button to open the Feishu open platform — no public callback URL is needed (desktop app). Call ONLY when the user explicitly asks to connect, bind, or set up Feishu/飞书. Do not call speculatively.',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: []
+      }
+    }
+  },
+
   find_tool: {
     type: 'function',
     function: {

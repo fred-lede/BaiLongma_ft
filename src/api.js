@@ -2211,6 +2211,7 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
           session = createCloudASRSession(
             { provider, lang: msg.lang || 'zh', ...rawCfg },
             (text, isFinal, seg, language) => {
+              console.error('[cloudWss] onTranscript isFinal=' + isFinal + ' text=' + (text||'').slice(0,20));
               try { ws.send(JSON.stringify({ type: 'transcript', text, is_final: isFinal, seg, language: language || '' })) } catch {}
             },
             (errMsg) => {

@@ -686,6 +686,7 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
       if (cloudWs !== ws) return; // 已被新连接取代，忽略旧连接的 close 事件
       cloudWs = null;
       const reason = ev?.reason ? ` reason='${ev.reason}'` : '';
+      console.error('[voice-core] ws.onclose called code=' + (ev?.code||'?') + reason + ' intentional=' + cloudWsIntentional);
       diag(`ws-closed intentional=${cloudWsIntentional} code=${ev?.code||'?'}${reason}`);
       if (!cloudWsIntentional && micActive) {
         // 非主动断开（超时/网络抖动）且用户仍在录音 → 自动重连，保留已识别文字。

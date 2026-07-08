@@ -321,7 +321,7 @@ async function callOpenAICompatibleVision(slot, { imageUrl, prompt, detail = 'au
 }
 
 async function callGemmaVision(imageUrl, prompt, context = {}) {
-  const baseURL = String(config.baseURL || 'http://192.168.1.200:8001').replace(/\/+$/, '')
+  const baseURL = String(config.baseURL || 'http://192.168.1.200:8001').replace(/\/+$/, '').replace(/\/v1$/, '')
   const apiKey = config.apiKey || ''
   const model = config.model || 'gemma4:31b-it-qat'
   const body = {

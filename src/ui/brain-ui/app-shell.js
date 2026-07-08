@@ -255,6 +255,10 @@ const createSettingsModal = () => `
               </div>
             </div>
             <div class="settings-row">
+              <label class="settings-label" for="settings-imagegen-model">文生圖模型</label>
+              <input class="settings-input" id="settings-imagegen-model" type="text" placeholder="如 x/z-image-turbo:bf16" autocomplete="off" spellcheck="false">
+            </div>
+            <div class="settings-row">
               <label class="settings-label" for="settings-llm-key">API Key</label>
               <div class="settings-secret-wrap">
                 <input class="settings-input" id="settings-llm-key" type="password" placeholder="已保存的 Key 会在这里显示" autocomplete="new-password">
@@ -262,10 +266,6 @@ const createSettingsModal = () => `
               </div>
             </div>
             <div class="settings-row-action">
-            <div class="settings-row">
-              <label class="settings-label" for="settings-imagegen-model">文生圖模型</label>
-              <input class="settings-input" id="settings-imagegen-model" type="text" placeholder="如 x/z-image-turbo:bf16" autocomplete="off" spellcheck="false">
-            </div>
               <button class="settings-save-btn" id="settings-save-llm" type="button">保存</button>
               <span class="settings-feedback" id="settings-llm-feedback"></span>
             </div>

@@ -3156,8 +3156,8 @@ function initTTSSettings() {
       refreshConfigSummary({ llm, minimax });
       fetch(`${API}/settings/tts`).then(r => r.json()).then(ttsCfg => {
         const igInput = document.getElementById("settings-imagegen-model");
-        if (igInput && ttsCfg.aethermeshImageModel) {
-          igInput.value = ttsCfg.aethermeshImageModel;
+        if (igInput && ttsCfg.tts?.aethermeshImageModel) {
+          igInput.value = ttsCfg.tts.aethermeshImageModel;
         }
       }).catch(() => {});
       populateProviderSelect(providers, llm.provider || "auto");

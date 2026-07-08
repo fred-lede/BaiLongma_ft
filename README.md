@@ -290,6 +290,28 @@ require("fs").writeFileSync("output.png", buffer)
 
 AetherMesh 图像生成优先级高于 MiniMax。当 AetherMesh 配置存在时，`generate_image` 工具自动路由到 AetherMesh；若需回退到 MiniMax，移除 AetherMesh baseURL 即可。
 
+## 图像识别
+
+Bailongma 通过 `analyze_image` 工具让 LLM 理解图片内容。模型在对话中接收到图片时，可以自动调用分析工具获取图片描述，或由用户显式要求分析。
+
+### 支持的途径
+
+| 方式 | 说明 |
+| --- | --- |
+| **Gemma Vision（AetherMesh）** | 通过本地部署的 AetherMesh 调用 Gemma 3 Vision 等多模态模型，完全离线 |
+| **渠道内置 Vision** | Telegram 收到的图片可自动送入 vision 模型分析 |
+
+### 配置
+
+在 Brain UI 设置页 → AI 面板中，配置图像识别模型的 Base URL 和 Key（复用 AetherMesh 配置即可，需 vision 模型如 `gemma-3-12b-it-vision`）。
+
+### 在聊天中使用
+
+用户发送含图片的消息（通过 Brain UI 粘贴/拖拽，或 Telegram 发送图片）时，LLM 可自动调用 `analyze_image` 工具理解图片。也可直接要求分析：
+
+- 中文：`分析这张图片`、`图片里有什么`
+- 英文：`what's in this image`、`analyze this picture`
+
 ## 语音系统
 
 ### ASR（语音识别）

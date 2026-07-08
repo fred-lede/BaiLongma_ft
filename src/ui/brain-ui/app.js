@@ -3154,6 +3154,12 @@ function initTTSSettings() {
       cachedLlm = llm;
       if (agentNameInput) agentNameInput.value = data.agent_name || agentName || DEFAULT_AGENT_NAME;
       refreshConfigSummary({ llm, minimax });
+      fetch(`${API}/settings/tts`).then(r => r.json()).then(ttsCfg => {
+        const igInput = document.getElementById("settings-imagegen-model");
+        if (igInput && ttsCfg.aethermeshImageModel) {
+          igInput.value = ttsCfg.aethermeshImageModel;
+        }
+      }).catch(() => {});
       populateProviderSelect(providers, llm.provider || "auto");
       if (providerSelect && llm.provider) providerSelect.value = llm.provider;
       applyCustomProviderUI(llm);

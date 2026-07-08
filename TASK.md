@@ -47,3 +47,26 @@
 - 逐人語音偏好 execSpeak 整合（target_person → preferredVoice）
 - 語音克隆代理端對端驗證
 - Vision 端到端驗證：📷 截圖 → AetherMesh VLM → 回應
+
+## Settings UI updates (2026-07-08)
+- AI 設置 tab 新增文生圖模型輸入框（aethermeshImageModel）
+- VLM 當前狀態改為顯示文生圖模型而非 LLM 模型
+- 修復 loadSettings 讀取 tts.tts.aethermeshImageModel 路徑錯誤
+
+## Bug: Telegram image analysis lost on follow-up (FIXED)
+- `analyze_image` tool 只依賴當前 messageBody 中的 inline image pattern
+- 用戶送圖後追問"你沒幫我分析照片"，第二輪消息體不含 data:image → tool 不在列表
+- 修復：tool-router.js selectTools 同時掃描 conversationWindow 中各條 content
+
+## Bug: LLM stream timeout on image messages (FIXED)
+- 非視覺端點（雲端 LLM）收到包含 data:image 的消息時，base64 數據作為純文本塞入 context，導致 token 爆炸超時
+- 修復：formatConversationMessage / buildLLMMessages 對非視覺端點自動將 `![...](data:...)` 替換為 `[image: ...]`
+
+## Bug: callGemmaVision double /v1 in URL (FIXED)
+- 用戶 config.baseURL = http://192.168.1.200:8001/v1（Custom Endpoint）
+- 代碼硬拼 `${baseURL}/v1/chat/completions` → .../v1/v1/chat/completions → 404
+- 修復：先 `.replace(/\/v1$/, '')` 再補 `/v1/chat/completions`
+- 確認：圖片分析已恢復正常
+- 移除 image-gen tab 時遺留孤兒 HTML（save button + 3 orphaned `</div>`）在 AI tab 關閉之後
+- 導致 media/social/voice/web-search/security/update 的 DOM 嵌套全部被破壞，內容溢出設定視窗
+- 已刪除殘留標籤

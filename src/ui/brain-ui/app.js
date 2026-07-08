@@ -2991,6 +2991,8 @@ function initTTSSettings() {
   function refreshConfigSummary({ llm, minimax }) {
     const cfgLlm = document.getElementById("settings-cfg-llm");
     const cfgLlmDot = document.getElementById("settings-cfg-llm-dot");
+    const cfgVlm = document.getElementById("settings-cfg-vlm");
+    const cfgVlmDot = document.getElementById("settings-cfg-vlm-dot");
     const cfgMedia = document.getElementById("settings-cfg-media");
     const cfgMediaDot = document.getElementById("settings-cfg-media-dot");
     if (cfgLlm) cfgLlm.textContent = `${llm.provider || "—"} · ${llm.model || "—"}`;
@@ -2998,6 +3000,12 @@ function initTTSSettings() {
       cfgLlmDot.textContent = "●";
       cfgLlmDot.className = `settings-config-dot ${llm.activated ? "active" : "inactive"}`;
       cfgLlmDot.title = llm.activated ? "Running" : "Inactive";
+    }
+    if (cfgVlm) cfgVlm.textContent = `via LLM · ${llm.model || "—"}`;
+    if (cfgVlmDot) {
+      cfgVlmDot.textContent = "●";
+      cfgVlmDot.className = `settings-config-dot ${llm.activated ? "active" : "inactive"}`;
+      cfgVlmDot.title = llm.activated ? "Vision ready" : "Not available";
     }
     if (cfgMedia) cfgMedia.textContent = `minimax · ${minimax.configured ? "configured" : "not configured"}`;
     if (cfgMediaDot) {

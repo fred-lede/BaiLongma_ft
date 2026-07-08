@@ -222,6 +222,11 @@ const createSettingsModal = () => `
               <span class="settings-config-info" id="settings-cfg-llm">—</span>
               <span class="settings-config-dot" id="settings-cfg-llm-dot"></span>
             </div>
+            <div class="settings-config-row">
+              <span class="settings-config-type">VLM</span>
+              <span class="settings-config-info" id="settings-cfg-vlm">—</span>
+              <span class="settings-config-dot" id="settings-cfg-vlm-dot"></span>
+            </div>
           </div>
           <div class="settings-section">
             <div class="settings-section-label">切换配置</div>

@@ -3753,10 +3753,12 @@ function initTTSSettings() {
          setCredentialIndicator("voice-xunfei-apikey",   cfg.xunfeiApiKey?.configured)
          setCredentialIndicator("voice-volc-apikey",     cfg.volcAsrApiKey?.configured)
          setCredentialIndicator("voice-volc-appkey",     cfg.volcAsrAppKey?.configured)
-         setCredentialIndicator("voice-volc-accesskey",  cfg.volcAsrAccessKey?.configured)
-         setCredentialIndicator("voice-volc-resourceid", cfg.volcAsrResourceId?.configured)
-       }
-       updateAethermeshLsStatus();
+          setCredentialIndicator("voice-volc-accesskey",  cfg.volcAsrAccessKey?.configured)
+          setCredentialIndicator("voice-volc-resourceid", cfg.volcAsrResourceId?.configured)
+          setCredentialIndicator("voice-aethermesh-key",  !!cfg.aethermeshKey && typeof cfg.aethermeshKey === 'string')
+          setCredentialIndicator("voice-aethermesh-baseurl", !!cfg.aethermeshBaseURL && typeof cfg.aethermeshBaseURL === 'string')
+        }
+        updateAethermeshLsStatus();
      } catch {}
      if (voiceProviderSelect) voiceProviderSelect.value = savedProvider;
      applyVoiceProviderUI(savedProvider);

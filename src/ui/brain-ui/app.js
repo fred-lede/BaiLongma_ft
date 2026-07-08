@@ -2978,7 +2978,6 @@ function initTTSSettings() {
       if (tab === "security") loadSecuritySettings();
       if (tab === "web-search") loadWebSearchSettings();
       if (tab === "update") loadUpdateSettings();
-      if (tab === "image-gen") loadImageGenSettings();
     });
   });
 
@@ -3928,6 +3927,14 @@ function initTTSSettings() {
       if (data.ok) {
         showFeedback(llmFeedback, "已保存");
         loadSettings();
+        const igModel = document.getElementById("settings-imagegen-model")?.value?.trim();
+        if (igModel) {
+          await fetch(`${API}/settings/tts`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ aethermeshImageModel: igModel })
+          });
+        }
       } else {
         showFeedback(llmFeedback, data.error || "保存失败", true);
       }

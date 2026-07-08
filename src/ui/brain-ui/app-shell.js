@@ -302,12 +302,6 @@ const createSettingsModal = () => `
           </div>
         </div>
 
-              <button class="settings-save-btn" id="settings-save-imagegen" type="button">儲存</button>
-              <span class="settings-feedback" id="settings-imagegen-feedback"></span>
-            </div>
-          </div>
-        </div>
-
         <!-- ── 媒体能力 tab ── -->
         <div class="settings-tab" data-tab="media">
           <div class="settings-section">

@@ -316,6 +316,7 @@ export function selectTools(ctx = {}) {
     startupSelfCheckActive = false,
     localVisualTurn = true,
     fastUserPath = false,
+    conversationWindow = [],
   } = ctx
 
   const body = (messageBody || '').toLowerCase()
@@ -381,7 +382,12 @@ export function selectTools(ctx = {}) {
   // software-install=isSoftwareInstallRequest），保留与旧分支等价的解耦语义。
   const capCtx = { text: body, rawText: messageBody, isTick, mmCaps, hasTask }
   for (const t of capabilityToolsFor(capCtx)) out.add(t)
-  if (INLINE_IMAGE_RE.test(messageBody)) out.add('analyze_image')
+  if (INLINE_IMAGE_RE.test(messageBody)
+    || (Array.isArray(conversationWindow) && conversationWindow.some(m =>
+      typeof m.content === 'string' && INLINE_IMAGE_RE.test(m.content)
+    ))) {
+    out.add('analyze_image')
+  }
 
   if (hitsPersonCardIntent(messageBody)) {
     for (const t of PERSON_CARD_TOOLS) out.add(t)

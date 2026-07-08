@@ -233,6 +233,7 @@ export async function runInjector({ message, state, hint = '', currentChannel = 
     installedToolNames: installedNames,
     startupSelfCheckActive: !!state?.startupSelfCheck?.active,
     localVisualTurn: !currentChannel || !isExternalChannel(currentChannel),
+    conversationWindow,
     // fastUserPath 留作未来扩展——目前从 state 上拿不到，selectTools 接受未传即 false
   })
 

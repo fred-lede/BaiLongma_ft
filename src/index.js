@@ -270,6 +270,7 @@ function registerAetherMeshImageIfAvailable() {
     registerProvider(new AetherMeshImageProvider({
       baseURL,
       apiKey: creds.aethermeshKey,
+      model: creds.aethermeshImageModel,
     }))
   }
 }

@@ -2978,6 +2978,7 @@ function initTTSSettings() {
       if (tab === "security") loadSecuritySettings();
       if (tab === "web-search") loadWebSearchSettings();
       if (tab === "update") loadUpdateSettings();
+      if (tab === "image-gen") loadImageGenSettings();
     });
   });
 

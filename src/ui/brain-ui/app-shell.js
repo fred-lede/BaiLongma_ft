@@ -174,6 +174,7 @@ const createSettingsModal = () => `
       <nav class="settings-nav">
         <button class="settings-nav-item active" data-tab="appearance" type="button">外观</button>
         <button class="settings-nav-item" data-tab="llm" type="button">LLM 模型</button>
+        <button class="settings-nav-item" data-tab="image-gen" type="button">文生圖</button>
         <button class="settings-nav-item" data-tab="media" type="button">媒体能力</button>
         <button class="settings-nav-item" data-tab="social" type="button">社交媒体</button>
         <button class="settings-nav-item" data-tab="voice" type="button">语音对话</button>
@@ -289,6 +290,40 @@ const createSettingsModal = () => `
                 <span class="settings-toggle-track"></span>
               </label>
               <span class="settings-feedback" id="settings-thinking-feedback"></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── 文生圖 tab ── -->
+        <div class="settings-tab" data-tab="image-gen">
+          <div class="settings-section">
+            <div class="settings-section-label">當前狀態</div>
+            <div class="settings-config-row">
+              <span class="settings-config-type">文生圖</span>
+              <span class="settings-config-info" id="settings-cfg-imagegen">—</span>
+              <span class="settings-config-dot" id="settings-cfg-imagegen-dot"></span>
+            </div>
+          </div>
+          <div class="settings-section">
+            <div class="settings-section-label">模型設定</div>
+            <div class="settings-row">
+              <label class="settings-label" for="settings-imagegen-model">模型名稱</label>
+              <input class="settings-input" id="settings-imagegen-model" type="text" placeholder="如 x/z-image-turbo:bf16" autocomplete="off" spellcheck="false">
+            </div>
+            <p class="settings-hint">AetherMesh 文生圖模型名稱，如 x/z-image-turbo:bf16、zephyr-image 等。</p>
+            <div class="settings-row">
+              <label class="settings-label" for="settings-imagegen-baseurl">Base URL</label>
+              <input class="settings-input" id="settings-imagegen-baseurl" type="text" placeholder="http://192.168.1.200:8001" autocomplete="off" spellcheck="false">
+            </div>
+            <div class="settings-row">
+              <label class="settings-label" for="settings-imagegen-key">API Key（留空則用 TTS 的 Key）</label>
+              <div class="settings-secret-wrap">
+                <input class="settings-input" id="settings-imagegen-key" type="password" placeholder="留空使用 TTS 配置" autocomplete="new-password">
+              </div>
+            </div>
+            <div class="settings-row-action">
+              <button class="settings-save-btn" id="settings-save-imagegen" type="button">儲存</button>
+              <span class="settings-feedback" id="settings-imagegen-feedback"></span>
             </div>
           </div>
         </div>

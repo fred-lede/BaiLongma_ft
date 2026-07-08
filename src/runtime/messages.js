@@ -31,6 +31,14 @@ function convertMarkdownImagesToBlocks(content) {
   return parts
 }
 
+// Strip base64 data URLs from markdown images for non-vision LLM endpoints
+function stripImageDataUrls(content) {
+  return content.replace(MD_IMAGE_RE, (_m, alt, url) => {
+    if (!url?.startsWith('data:')) return _m
+    return alt ? `[image: ${alt}]` : '[image]'
+  })
+}
+
 function xmlAttr(value) {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -132,7 +140,7 @@ export function formatConversationMessage(row, currentMsg = null, prevChannel = 
   }
   return {
     role: 'user',
-    content: rawContent,
+    content: hasMarkdownImages(rawContent) ? stripImageDataUrls(rawContent) : rawContent,
   }
 }
 
@@ -292,7 +300,7 @@ export function buildLLMMessages({ systemPrompt, contextBlock = '', conversation
     // 禁止回放历史问题，与下面 system signal 的 marker 待遇对齐。
     const fallbackContent = isTick
       ? `[heartbeat tick · no new user message]\n${input}\n(This is an internal heartbeat, NOT a user message. Do NOT treat it as the user re-asking a prior question or responding to your previous open question. Decide whether to act proactively per the directions above, or stay silent — both are valid.)`
-      : (msg?.content || input)
+      : stripImageDataUrls(msg?.content || input)
     messages.push({
       role: 'user',
       content: fallbackContent,

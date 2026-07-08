@@ -1476,7 +1476,10 @@ const TTS_CONFIG_KEYS = [
 
 export function getTTSConfig() {
   let stored = {}
+  let voiceStored = {}
   try { stored = JSON.parse(fs.readFileSync(paths.configFile, 'utf-8'))?.tts || {} } catch {}
+  try { voiceStored = JSON.parse(fs.readFileSync(paths.configFile, 'utf-8'))?.voice || {} } catch {}
+  const fallbackBaseURL = voiceStored.aethermeshBaseURL || 'http://192.168.1.200:8001'
   return {
     ttsProvider:     stored.ttsProvider  || 'doubao',
     ttsVoiceId:      stored.ttsVoiceId   || 'zh_female_xiaohe_uranus_bigtts',
@@ -1495,8 +1498,8 @@ export function getTTSConfig() {
     customTtsKey:    { configured: !!(stored.customTtsKey) },
     customTtsBaseURL: stored.customTtsBaseURL || '',
     customTtsModel:   stored.customTtsModel || '',
-    aethermeshKey:   { configured: !!(stored.aethermeshKey) },
-    aethermeshBaseURL: stored.aethermeshBaseURL || 'http://localhost:8001',
+    aethermeshKey:   { configured: !!(stored.aethermeshKey || voiceStored.aethermeshKey) },
+    aethermeshBaseURL: stored.aethermeshBaseURL || voiceStored.aethermeshBaseURL || 'http://192.168.1.200:8001',
     aethermeshLanguage: stored.aethermeshLanguage || 'zh-cn',
   }
 }
@@ -1504,7 +1507,9 @@ export function getTTSConfig() {
 // Read plaintext TTS credentials (backend use only — not exposed to frontend)
 export function getTTSCredentials() {
   let stored = {}
+  let voiceStored = {}
   try { stored = JSON.parse(fs.readFileSync(paths.configFile, 'utf-8'))?.tts || {} } catch {}
+  try { voiceStored = JSON.parse(fs.readFileSync(paths.configFile, 'utf-8'))?.voice || {} } catch {}
   return {
     provider:       stored.ttsProvider  || 'doubao',
     voiceId:        stored.ttsVoiceId   || 'zh_female_xiaohe_uranus_bigtts',
@@ -1523,8 +1528,8 @@ export function getTTSCredentials() {
     customTtsKey:   stored.customTtsKey  || '',
     customTtsBaseURL: stored.customTtsBaseURL || '',
     customTtsModel: stored.customTtsModel || '',
-    aethermeshKey:   stored.aethermeshKey  || '',
-    aethermeshBaseURL: stored.aethermeshBaseURL || 'http://localhost:8001',
+    aethermeshKey:   stored.aethermeshKey || voiceStored.aethermeshKey || '',
+    aethermeshBaseURL: stored.aethermeshBaseURL || voiceStored.aethermeshBaseURL || 'http://192.168.1.200:8001',
     aethermeshLanguage: stored.aethermeshLanguage || 'zh-cn',
   }
 }

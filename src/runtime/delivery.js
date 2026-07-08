@@ -238,10 +238,15 @@ export async function deliverMessage({ target_id, content = '', channel = 'AUTO'
 
   const delivery = resolveDeliveryTarget(resolvedId, channel, context)
   if (delivery.error) return `错误：${delivery.error}`
-  if (media && (delivery.isLocal || !delivery.externalTargetId || !/^wechat:clawbot:/i.test(delivery.externalTargetId))) {
-    const resolvedTarget = delivery.externalTargetId || (delivery.isLocal ? 'TUI' : 'unknown')
-    return `错误：媒体消息当前仅支持微信 ClawBot（wechat:clawbot:*），当前解析目标为 ${resolvedTarget}`
+  if (media && delivery.isLocal) {
+    const resolvedTarget = delivery.isLocal ? 'TUI' : 'unknown'
+    return `错误：媒体消息当前仅支持微信 ClawBot（wechat:clawbot:*）和 Telegram，当前解析目标为 ${resolvedTarget}`
   }
+  if (media && !delivery.externalTargetId) {
+    return `错误：媒体消息当前仅支持微信 ClawBot（wechat:clawbot:*）和 Telegram，但未找到外部目标 ID`
+  }
+  // 媒体发送支持：Telegram 已在 sendTelegramMessage 中通过 markdown 图片 URL 提取处理（见 telegram.js sendTelegramMessage 实现）
+  // WeChat ClawBot 也已支持。无需额外 externalTargetId 平台检查。
 
   // 防重发：对同一 target 发过一字不差、且对方此后没回过话的内容 → 拒绝（不论隔多久）。
   //   常见诱因：启动期 directions（delegation ask 等）在用户回应前每 tick 都注入相同指令，

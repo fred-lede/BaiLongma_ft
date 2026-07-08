@@ -146,7 +146,7 @@ export async function dispatchSocialMessage(targetId, payload) {
     case 'wechat-clawbot':
       return sendClawbot(target, message)
     case 'telegram':
-      return rejectUnsupportedMedia('telegram', message) || await sendTelegramMessage(target.chatId, message.text)
+      return await sendTelegramMessage(target.chatId, message.text)
     default:
       return null
   }

@@ -16,7 +16,7 @@ import { streamWriteFileArgumentPreview, streamXmlFileWriteArgumentPreview } fro
 // 每收到一个 chunk 就重置，所以正常的长流式生成不受影响，只掐真正的停摆。
 // 必须显著小于 index.js 的 RUN_TURN_WATCHDOG_MS(180s)，且留够 streamOnceWithRetry 重试的余量
 // （最坏 3 次 × 该值 + 退避 仍要 < 180s）。
-const STREAM_IDLE_TIMEOUT_MS = 45_000
+const STREAM_IDLE_TIMEOUT_MS = 120_000  // 2 min timeout for vision models processing large images
 
 // find_tool 命中后，把它返回的 loaded 工具 schema 原地追加进本轮 toolSchemas。
 // 已在列表里的跳过；schema 取不到的跳过。数组原地 mutate —— 调用方传的是 callLLM 的 toolSchemas

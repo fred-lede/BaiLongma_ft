@@ -3,6 +3,7 @@ import path from 'path'
 import { spawn } from 'child_process'
 import { fileURLToPath } from 'url'
 import { paths } from '../../paths.js'
+import { config } from '../../config.js'
 import {
   apiCapabilityNeedsCredential,
   buildApiSlotContext,
@@ -319,40 +320,93 @@ async function callOpenAICompatibleVision(slot, { imageUrl, prompt, detail = 'au
   return String(content)
 }
 
+async function callGemmaVision(imageUrl, prompt, context = {}) {
+  const baseURL = String(config.baseURL || 'http://192.168.1.200:8001').replace(/\/+$/, '')
+  const apiKey = config.apiKey || ''
+  const model = config.model || 'gemma4:31b-it-qat'
+  const body = {
+    model,
+    messages: [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: prompt },
+          { type: 'image_url', image_url: { url: imageUrl, detail: 'auto' } },
+        ],
+      },
+    ],
+    max_tokens: 4096,
+    stream: false,
+  }
+  const res = await fetch(`${baseURL}/v1/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify(body),
+    signal: context.signal || AbortSignal.timeout(120_000),
+  })
+  const text = await res.text()
+  let data = null
+  try { data = text ? JSON.parse(text) : null } catch {}
+  if (!res.ok) {
+    const message = data?.error?.message || data?.message || text || `HTTP ${res.status}`
+    throw new Error(message.slice(0, 1000))
+  }
+  const content = data?.choices?.[0]?.message?.content
+  if (!content) throw new Error('vision API returned no choices[0].message.content')
+  return String(content)
+}
+
 export async function execAnalyzeImage(args = {}, context = {}) {
   const slot = findConfiguredApiSlotByKind('vision', args.slot_id || args.slotId)
-  if (!slot) {
-    return toolJson({
-      ok: false,
-      tool: 'analyze_image',
-      error: 'not_configured',
-      guide: '还没有可用的视觉识图能力槽。请根据用户意图收集 provider/kind、API 文档链接或正文，以及用户申请的 API key，然后调用 manage_api_capability(action="configure") 显式配置。',
-    })
+  const imageRef = findImageReference(args, context)
+  const imageUrl = resolveImageUrl(imageRef)
+  const prompt = String(args.prompt || args.question || '').trim()
+    || '请用中文准确描述这张图片；如果有文字，请做 OCR；如果用户问题指向具体细节，请优先回答问题。'
+
+  // If vision slot is configured, use it; otherwise fall back to gemma4 (current LLM)
+  if (slot) {
+    const slotApiKey = getApiCapabilityCredential(slot)
+    try {
+      const detail = ['low', 'high', 'auto'].includes(args.detail) ? args.detail : 'auto'
+      const result = await callOpenAICompatibleVision(slot, { imageUrl, prompt, detail }, context)
+      return toolJson({
+        ok: true,
+        tool: 'analyze_image',
+        slot_id: slot.id,
+        provider: slot.provider,
+        model: slot.api.model,
+        result: redactSlotSecrets(result, slot, slotApiKey),
+      })
+    } catch (err) {
+      return toolJson({
+        ok: false,
+        tool: 'analyze_image',
+        slot_id: slot.id,
+        error: redactSlotSecrets(err.message, slot, slotApiKey),
+        docs_hint: buildApiSlotContext(slot).slice(0, 1200),
+      })
+    }
   }
 
-  const slotApiKey = getApiCapabilityCredential(slot)
+  // No vision slot configured — use gemma4 (current LLM) for vision analysis
   try {
-    const imageRef = findImageReference(args, context)
-    const imageUrl = resolveImageUrl(imageRef)
-    const prompt = String(args.prompt || args.question || '').trim()
-      || '请用中文准确描述这张图片；如果有文字，请做 OCR；如果用户问题指向具体细节，请优先回答问题。'
-    const detail = ['low', 'high', 'auto'].includes(args.detail) ? args.detail : 'auto'
-    const result = await callOpenAICompatibleVision(slot, { imageUrl, prompt, detail }, context)
+    const result = await callGemmaVision(imageUrl, prompt, context)
     return toolJson({
       ok: true,
       tool: 'analyze_image',
-      slot_id: slot.id,
-      provider: slot.provider,
-      model: slot.api.model,
-      result: redactSlotSecrets(result, slot, slotApiKey),
+      provider: 'llm',
+      model: config.model || 'gemma4:31b-it-qat',
+      result,
     })
   } catch (err) {
     return toolJson({
       ok: false,
       tool: 'analyze_image',
-      slot_id: slot.id,
-      error: redactSlotSecrets(err.message, slot, slotApiKey),
-      docs_hint: buildApiSlotContext(slot).slice(0, 1200),
+      error: err.message,
+      guide: 'Vision analysis via LLM failed. Make sure the LLM model supports vision.',
     })
   }
 }

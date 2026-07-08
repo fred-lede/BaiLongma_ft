@@ -506,8 +506,8 @@ export async function streamTTS({ text, provider, voiceId, keys = {}, language }
     case 'custom-openai':
       return streamCustomOpenAI({ text, voiceId, apiKey: keys.customTtsKey, baseURL: keys.customTtsBaseURL, model: keys.customTtsModel })
     case 'aethermesh': {
-      const amResult = await streamAetherMesh({ text, voiceId, baseURL: keys.aethermeshBaseURL, apiKey: keys.aethermeshKey, language: language || keys.aethermeshLanguage })
-      return amResult
+      const { stream } = await streamAetherMesh({ text, voiceId, baseURL: keys.aethermeshBaseURL, apiKey: keys.aethermeshKey, language: language || keys.aethermeshLanguage })
+      return stream
     }
     default:
       throw new Error(`未知 TTS 服务商: ${provider}，请在设置中选择一个 TTS 服务商`)

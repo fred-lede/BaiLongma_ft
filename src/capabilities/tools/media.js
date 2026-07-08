@@ -279,7 +279,7 @@ export async function execGenerateImage({ prompt, aspect_ratio = '1:1', n = 1 })
 
   emitEvent('image_created', { urls: result.urls, prompt: prompt.slice(0, 60) })
   console.log(`[image] 已生成 ${result.urls.length} 张图片`)
-  return `图片已生成（${result.urls.length} 张）：\n${result.urls.join('\n')}`
+  return `图片已生成（${result.urls.length} 张）：\n${result.urls.map(u => `![generated image](${u})`).join('\n')}`
 }
 
 export function execMediaMode(args = {}) {

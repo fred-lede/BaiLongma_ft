@@ -4394,3 +4394,29 @@ body.worldcup-mode .console > #voice-panel .voice-transcript {
   z-index: 2;
 }
 .wc-exit-btn:hover { color: #eaf2ff; background: rgba(30, 50, 120, 0.8); }
+
+/* Screenshot toast notification */
+.screenshot-toast {
+  position: fixed;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  background: rgba(180, 60, 60, 0.92);
+  color: #fff;
+  padding: 12px 24px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 500;
+  z-index: 9999;
+  opacity: 0;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+  pointer-events: none;
+  white-space: nowrap;
+  max-width: 90vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.screenshot-toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}

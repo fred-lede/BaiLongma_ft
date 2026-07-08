@@ -540,6 +540,62 @@ export function initChat({
       openChat();
     }
   });
+
+  const screenshotBtn = document.getElementById("screenshot-btn");
+  if (screenshotBtn) {
+    const origBtnText = screenshotBtn.textContent
+    screenshotBtn.addEventListener("click", async () => {
+      screenshotBtn.textContent = "⏳"
+      try {
+        if (!navigator.mediaDevices?.getDisplayMedia) {
+          throw new Error("navigator.mediaDevices.getDisplayMedia 不可用（非安全上下文/Electron 限制）")
+        }
+        const stream = await navigator.mediaDevices.getDisplayMedia({
+          video: { displaySurface: "monitor" },
+          audio: false,
+        });
+        const video = document.createElement("video");
+        video.srcObject = stream;
+        video.muted = true;
+        await video.play();
+        const canvas = document.createElement("canvas");
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(video, 0, 0);
+        stream.getTracks().forEach((t) => t.stop());
+        canvas.toBlob(
+          (blob) => {
+            if (!blob) return;
+            const file = new File([blob], `screenshot-${Date.now()}.png`, { type: "image/png" });
+            addPastedImageFiles([file]);
+            openChat();
+          },
+          "image/png",
+          0.92
+        );
+      } catch (err) {
+        if (err.name === "NotAllowedError") {
+          screenshotToast("⚠️ 屏幕录制权限被拒 — 请在 系统设置 > 隐私与安全性 > 屏幕录制 中允许 Bailongma")
+        } else if (err.name === "AbortError") {
+          // user cancelled the picker — no feedback needed
+        } else {
+          console.warn("[screenshot] capture failed:", err.message)
+          screenshotToast("⚠️ 截屏失败: " + err.message)
+        }
+      } finally {
+        screenshotBtn.textContent = origBtnText
+      }
+    });
+    function screenshotToast(msg) {
+      const el = document.createElement("div")
+      el.className = "screenshot-toast"
+      el.textContent = msg
+      document.body.appendChild(el)
+      requestAnimationFrame(() => el.classList.add("show"))
+      setTimeout(() => { el.classList.remove("show"); setTimeout(() => el.remove(), 300) }, 4000)
+    }
+  }
   msgInput.addEventListener("keydown", event => {
     if (handleSlashKeydown(event)) return;
     if (event.key === "Enter" && !event.shiftKey) {

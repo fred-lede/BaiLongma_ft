@@ -52,6 +52,8 @@ let currentUiZoom = DEFAULT_UI_ZOOM;
 let chat = null;
 // 由 initSettings() 内部赋值，供 chat.js 的斜杠命令打开设置面板
 let openSettingsRef = null;
+// 在 message 事件到來之前暫存生成的圖片，等 message 定稿時一併注入
+let pendingGenImages = null
 
 function addMsg(...args) { return chat?.addMsg(...args); }
 function openChat(...args) { return chat?.openChat(...args); }
@@ -1438,10 +1440,20 @@ function handle({ type, data = {} }) {
       break;
     case "message":
       if (data.from === "consciousness") {
-        lastJarvisContent = data.content;
+        let displayContent = data.content;
+        // 若後端注入未生效（pendingGenImages 有值但 content 中沒有對應圖片），前端補上
+        if (pendingGenImages && pendingGenImages.length > 0) {
+          const alreadyHas = pendingGenImages.some(u => displayContent.includes(u))
+          if (!alreadyHas) {
+            displayContent += '\n\n' + pendingGenImages.map(u => `![generated image](${u})`).join('\n')
+          }
+          pendingGenImages = null
+        }
+        lastJarvisContent = displayContent;
         const shouldSpeakMessage = data.speak === true;
         const viaLabel = friendlyChannelLabel(data.channel);
-        const content = viaLabel ? `_→ ${viaLabel}_  \n${data.content}` : data.content;
+        const labelPrefix = viaLabel ? `_→ ${viaLabel}_  \n` : ''
+        const content = labelPrefix + displayContent;
         const messageId = data.conversation_id || data.conversationId || "";
         // 若本轮正文已流式进了实时气泡：用权威全文定稿同一个气泡，避免新建重复气泡
         if (chat.hasLiveJarvisMsg()) {
@@ -1473,6 +1485,12 @@ function handle({ type, data = {} }) {
         const label = friendlyChannelLabel(data.channel) || data.from_id || "External";
         addMsg("external", data.content, { label, alert: false, messageId: data.conversation_id || data.conversationId || "" });
         openChat(true);
+      }
+      break;
+    }
+    case "image_created": {
+      if (Array.isArray(data.urls) && data.urls.length > 0) {
+        pendingGenImages = data.urls
       }
       break;
     }

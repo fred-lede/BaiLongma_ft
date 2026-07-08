@@ -40,11 +40,15 @@ function renderInlineMarkdown(text) {
 
   html = escapeHtml(html);
   // 图片 ![alt](src) 必须在链接规则之前处理，否则链接规则会先吃掉 [alt](src) 而漏掉前导的 "!"。
-  // 渲染成可点开原图的缩略图（外层 <a> 在新标签打开，src 不安全时退化为 alt 文本）。
+  // data:image base64 URL（如同 Telegram 上傳的圖片）不包 <a> 連結，避免瀏覽器阻擋。
+  // 普通 URL 照常包連結，可在 新分頁打開。
   html = html.replace(/!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g, (_, alt, src) => {
     const safeUrl = safeImageSrc(src);
     if (!safeUrl) return alt;
     const altAttr = escapeAttr(alt);
+    if (/^data:image\//i.test(safeUrl)) {
+      return `<img src="${escapeAttr(safeUrl)}" alt="${altAttr}" title="${altAttr}" class="msg-image" loading="lazy">`;
+    }
     return `<a href="${escapeAttr(safeUrl)}" target="_blank" rel="noopener noreferrer" class="msg-image-link">` +
       `<img src="${escapeAttr(safeUrl)}" alt="${altAttr}" title="${altAttr}" class="msg-image" loading="lazy"></a>`;
   });
@@ -182,4 +186,33 @@ export function createMarkdownBody(text) {
   body.innerHTML = renderMarkdown(text);
   return body;
 }
+
+// 圖片點擊放大（lightbox）- 避免連結跳轉
+document.addEventListener('click', (e) => {
+  const img = e.target.closest('.msg-image');
+  if (!img) return;
+  const src = img.src;
+  if (!src || src === 'data:,' || src === 'about:blank') return;
+  e.preventDefault();
+  e.stopPropagation();
+
+  // 移除舊的 lightbox
+  const existing = document.getElementById('img-lightbox');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'img-lightbox';
+  overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.88);z-index:99999;display:flex;align-items:center;justify-content:center;cursor:pointer;overflow:auto;';
+
+  const imgFull = document.createElement('img');
+  imgFull.src = src;
+  imgFull.style.cssText = 'max-width:95vw;max-height:95vh;object-fit:contain;border-radius:6px;box-shadow:0 4px 32px rgba(0,0,0,0.5);';
+  overlay.appendChild(imgFull);
+
+  overlay.addEventListener('click', () => overlay.remove());
+  overlay.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') overlay.remove(); });
+
+  document.body.appendChild(overlay);
+  overlay.focus();
+});
 

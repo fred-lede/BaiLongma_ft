@@ -1,5 +1,36 @@
 import { normalizeChannel, isSystemSignalRow } from './channel.js'
 
+function isVisionCapableEndpoint() {
+  const envURL = (process.env.AETHERMESH_BASE_URL || '').replace(/\/+$/, '')
+  if (envURL && /^https?:\/\/192\.168\.\d+\.\d+:\d+/.test(envURL)) return true
+  const baseURL = (process.env.LLM_BASE_URL || '').replace(/\/+$/, '')
+  return /^https?:\/\/192\.168\.\d+\.\d+:\d+/.test(baseURL)
+}
+
+const MD_IMAGE_RE = /!\[([^\]]*)\]\((data:[^)]+)\)/g
+
+function hasMarkdownImages(content) {
+  MD_IMAGE_RE.lastIndex = 0
+  return MD_IMAGE_RE.test(content)
+}
+
+function convertMarkdownImagesToBlocks(content) {
+  MD_IMAGE_RE.lastIndex = 0
+  const parts = []
+  let lastIndex = 0
+  let match
+  while ((match = MD_IMAGE_RE.exec(content)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push({ type: 'text', text: content.slice(lastIndex, match.index) })
+    }
+    parts.push({ type: 'image_url', image_url: { url: match[2] } })
+    lastIndex = match.index + match[0].length
+  }
+  const remaining = content.slice(lastIndex).trim()
+  if (remaining) parts.push({ type: 'text', text: remaining })
+  return parts
+}
+
 function xmlAttr(value) {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -92,9 +123,16 @@ export function formatConversationMessage(row, currentMsg = null, prevChannel = 
     }
   }
 
+  const rawContent = row.content || ''
+  if (isVisionCapableEndpoint() && hasMarkdownImages(rawContent)) {
+    return {
+      role: 'user',
+      content: convertMarkdownImagesToBlocks(rawContent),
+    }
+  }
   return {
     role: 'user',
-    content: row.content || '',
+    content: rawContent,
   }
 }
 

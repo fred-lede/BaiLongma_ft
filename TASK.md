@@ -26,12 +26,24 @@
   - aethermeshFetch 取代全部 AetherMesh API 呼叫中的 fetch（api.js / tts-providers.js）
   - duplex proxy 路由緩衝 body 後轉發（register / clone-voice）
 
+## 編譯問題已修復
+- **Git merge conflict 全部清除**：executor.js 1 處 + api.js 3 處 conflict markers 已移除
+- **遺失的 import 補齊**：isSocialWebhookPath / handleSocialWebhook / getFeishuStatus / logoutClawbot / getDB / isRunning / getActivationStatus / config / path / isPathInside / readJsonBody / appendInboundChatMediaMarkdown / getAgentName
+- **try/catch 結構修正**：api.js 中 orphaned catch 重新對應到正確的 try block，重複的 `server.on('upgrade',...)` 移除
+- **npm start** ✅ 後端啟動無 error，`/status` 及 `/` 正常回應
+- **npm run build** ✅ x64 + arm64 DMG 成功產出
+
+## Vision Integration
+- 前端截圖按鈕（📷）：`app-shell.js` getDisplayMedia() → PNG → pending images in `chat.js`
+- 後端視覺路由：`messages.js` — `isVisionCapableEndpoint()`, `hasMarkdownImages()`, `convertMarkdownImagesToBlocks()`, `formatConversationMessage()` 將 markdown image 轉為 `image_url` block
+- AetherMesh VLM routing：`/v1/chat/completions` with `image_url` block, 本地 VLM (qwen2.5-vl:7b) 或雲端備援
+
 ## Pending
 - AetherMesh ASR WebSocket（ws://192.168.1.200:8001）在編譯 app 中仍 EHOSTUNREACH（ws 庫走 libuv TCP，與 fetch 不同協議層）
-- 解決方案：前端 voice-core.js 直接以 Chromium WebSocket 連 AetherMesh ASR，繞過 main process TCP 限制
+  - 解決方案：前端 voice-core.js 直接以 Chromium WebSocket 連 AetherMesh ASR，繞過 main process TCP 限制
   - 已實作：connectAethermeshAsr / createAethermeshAsrWs — 避免後端 ws 庫
-  - 已實作：PCM 路由至前端 WS 而非後端 WS
   - 需驗證：完整語音循環（ASR → LLM → TTS）在編譯 app 中
 - 人物卡片聲音試聽按鈕測試
 - 逐人語音偏好 execSpeak 整合（target_person → preferredVoice）
 - 語音克隆代理端對端驗證
+- Vision 端到端驗證：📷 截圖 → AetherMesh VLM → 回應

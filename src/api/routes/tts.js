@@ -39,6 +39,9 @@ export async function handleTTSRoutes(req, res, url) {
           elevenLabsKey: creds.elevenLabsKey,
           volcanoAppId: creds.volcanoAppId,
           volcanoToken: creds.volcanoToken,
+          aethermeshKey: creds.aethermeshKey,
+          aethermeshBaseURL: creds.aethermeshBaseURL,
+          aethermeshLanguage: creds.aethermeshLanguage,
         },
       })
       let headersWritten = false

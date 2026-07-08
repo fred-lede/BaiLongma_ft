@@ -1,5 +1,5 @@
 import './network-proxy.js'
-import { config, getMinimaxKey as _getMinimaxKey, getSecurity } from './config.js'
+import { config, getMinimaxKey as _getMinimaxKey, getTTSCredentials, getSecurity } from './config.js'
 import { callLLM } from './llm.js'
 import { buildSystemPrompt, buildContextBlock, combinePromptForPreview } from './prompt.js'
 import { enqueueTurnForRecognition, configureRecognizerScheduler } from './memory/recognizer-scheduler.js'
@@ -29,6 +29,7 @@ import { formatTick, nowTimestamp, describeExistence } from './time.js'
 import { getAdaptiveTickInterval, getQuotaStatus, setRateLimited, isRateLimited, getTickInterval } from './quota.js'
 import { registerProvider } from './providers/registry.js'
 import { MinimaxProvider } from './providers/minimax.js'
+import { AetherMeshImageProvider } from './providers/aethermesh-image.js'
 import { isRunning, setScheduler } from './control.js'
 import { getCustomIntervalMs, consumeTick as consumeTickerTick, getStatus as getTickerStatus } from './ticker.js'
 import { seedSandboxOnce, seedMusicOnce, rescueDataFromInstallDir } from './paths.js'
@@ -262,6 +263,17 @@ function registerMinimaxIfAvailable() {
   const key = envKey || configKey || storedKey
   if (key) registerProvider(new MinimaxProvider({ apiKey: key }))
 }
+function registerAetherMeshImageIfAvailable() {
+  const creds = getTTSCredentials()
+  const baseURL = creds.aethermeshBaseURL
+  if (baseURL) {
+    registerProvider(new AetherMeshImageProvider({
+      baseURL,
+      apiKey: creds.aethermeshKey,
+    }))
+  }
+}
+registerAetherMeshImageIfAvailable()
 registerMinimaxIfAvailable()
 
 if (config.needsActivation) {
@@ -1113,6 +1125,11 @@ async function runTurn(input, label, msg = null) {
 
     if (keyConfigFailDir) directions.unshift(keyConfigFailDir)
 
+    // Telegram channel: image generation must go through generate_image tool first
+    if (msg?.channel === 'TELEGRAM') {
+      directions.push('IMPORTANT — Telegram users cannot see local images. If the user asks you to generate an image, you MUST call the generate_image tool first and wait for the result. Do NOT send placeholder text like "在畫了". After the image is generated, call send_message with the markdown image URL in the content field so the Telegram bot can upload and send the photo to the user.')
+    }
+
     const memoriesText = formatMemoriesForPrompt(injection.memories, injection.recallMemories)
     const activePoliciesText = formatActivePoliciesForPrompt(injection.activePolicies)
     const directionsText = directions.join('\n')
@@ -1424,6 +1441,9 @@ async function runTurn(input, label, msg = null) {
     // 后端不再整段补一次 autoSpeakForVoiceReply，避免重复念。
     let curStreamMode = null
     let sawTextStream = false
+    // DEBUG: log tools and input being sent to LLM
+    console.log(`[DEBUG] LLM call → tools count=${turnTools.length}, tools=${JSON.stringify(turnTools)}, input="${String(input).slice(0, 100)}"`)
+    emitEvent('llm_call_debug', { tools: turnTools, input: String(input).slice(0, 200), label })
     llmResult = await callLLM({
       systemPrompt,
       message: input,

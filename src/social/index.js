@@ -1,5 +1,6 @@
 import { startDiscordConnector } from './discord.js'
 import { startClawbotConnector } from './wechat-clawbot.js'
+import { startTelegramConnector } from './telegram.js'
 import { startFeishuConnector } from './feishu-ws.js'
 
 const running = new Map() // platform → connector
@@ -39,6 +40,7 @@ export async function restartConnector(platform, { pushMessage, emitEvent } = {}
   const starters = {
     discord: () => startDiscordConnector({ pushMessage, emitEvent }),
     'wechat-clawbot': () => startClawbotConnector({ pushMessage, emitEvent }),
+    telegram: () => startTelegramConnector({ pushMessage, emitEvent }),
     feishu: () => startFeishuConnector({ pushMessage, emitEvent }),
   }
 

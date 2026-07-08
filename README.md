@@ -142,6 +142,154 @@ http://127.0.0.1:3721
 
 部分接口还用于 Brain UI 内部面板，例如热点、文档、人物卡片、媒体历史、AI 视频面板、ACUI 和云端语音识别。
 
+## 图像生成
+
+Bailongma 通过 AetherMesh 连接 Ollama 上的 `x/z-image-turbo:bf16` 模型实现本地文生图，也支援 OpenAI 格式的任何图像生成服務。
+
+### 架构
+
+```text
+用户输入 "画一张..." → LLM 调用 generate_image 工具
+  → Provider 注册表路由到 AetherMeshImageProvider
+  → POST {aethermeshBaseURL}/v1/images/generations（OpenAI 兼容格式）
+  → 收到 b64_json → 持久化到本地 → 回传 URL → 前端显示
+```
+
+### 配置
+
+无需额外设定。图像生成共用 AetherMesh 的 baseURL 和 key（来自 TTS/Voice 配置）：
+
+```json
+{
+  "voice": {
+    "aethermeshBaseURL": "http://192.168.1.200:8001",
+    "aethermeshKey": "your-api-key"
+  }
+}
+```
+
+配置可在 Brain UI 的设置面板中完成（TTS 或 ASR 页签），或直接编辑 `config.json`。
+
+### 在聊天中使用
+
+在 Brain UI 聊天输入框输入以下触发词，AI 会自动调用图像生成：
+
+- 中文：`画一张...`、`画个...`、`帮我画...`、`生成图片...`、`配图...`
+- 英文：`draw...`、`paint...`、`generate image of...`、`picture of...`
+
+支援的尺寸比例：`1:1`、`16:9`、`4:3`、`3:4`、`9:16`，每次最多 4 张。
+
+### API 调用（程式开发）
+
+#### 通过聊天接口（AI 自动路由）
+
+```bash
+curl -X POST http://127.0.0.1:3721/message \
+  -H "Content-Type: application/json" \
+  -d '{"content": "画一张山水画，16:9", "from_id": "external"}'
+```
+
+AI 收到后会解析意图，自动调用 `generate_image` 工具，结果会通过 SSE 事件 `image_created` 推送：
+
+```json
+{
+  "type": "image_created",
+  "data": {
+    "urls": ["/media/chat/abc123.png"],
+    "prompt": "山水画",
+    "aspect_ratio": "16:9",
+    "n": 1
+  }
+}
+```
+
+#### 直接调用 AetherMesh（不经过 LLM）
+
+AetherMesh 提供 OpenAI 兼容的 `/v1/images/generations` 端点，任何语言的 OpenAI SDK 均可使用：
+
+```bash
+curl -X POST http://192.168.1.200:8001/v1/images/generations \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-api-key" \
+  -d '{
+    "model": "x/z-image-turbo:bf16",
+    "prompt": "a cute cat, digital art",
+    "n": 1,
+    "size": "1024x1024",
+    "response_format": "b64_json"
+  }'
+```
+
+响应：
+
+```json
+{
+  "created": 1710000000,
+  "data": [
+    { "b64_json": "<base64-encoded-image-data>" }
+  ]
+}
+```
+
+Python 示例：
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://192.168.1.200:8001/v1",
+    api_key="your-api-key"
+)
+
+response = client.images.generate(
+    model="x/z-image-turbo:bf16",
+    prompt="a cute cat, digital art",
+    n=1,
+    size="1024x1024",
+    response_format="b64_json"
+)
+
+# b64_json → 存檔
+import base64
+for item in response.data:
+    img_data = base64.b64decode(item.b64_json)
+    with open("output.png", "wb") as f:
+        f.write(img_data)
+```
+
+JavaScript 示例：
+
+```javascript
+const response = await fetch("http://192.168.1.200:8001/v1/images/generations", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    model: "x/z-image-turbo:bf16",
+    prompt: "a cute cat, digital art",
+    n: 1,
+    size: "1024x1024",
+    response_format: "b64_json",
+  }),
+})
+const { data } = await response.json()
+const buffer = Buffer.from(data[0].b64_json, "base64")
+require("fs").writeFileSync("output.png", buffer)
+```
+
+支援的尺寸参数：
+
+| aspect_ratio | size |
+|---|---|
+| `1:1` | `1024x1024` |
+| `16:9` | `1344x768` |
+| `4:3` | `1152x864` |
+| `3:4` | `864x1152` |
+| `9:16` | `768x1344` |
+
+### Provider 优先级
+
+AetherMesh 图像生成优先级高于 MiniMax。当 AetherMesh 配置存在时，`generate_image` 工具自动路由到 AetherMesh；若需回退到 MiniMax，移除 AetherMesh baseURL 即可。
+
 ## 语音系统
 
 ### ASR（语音识别）

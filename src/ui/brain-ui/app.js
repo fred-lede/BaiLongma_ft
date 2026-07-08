@@ -3007,6 +3007,33 @@ function initTTSSettings() {
     }
   }
 
+  async function loadImageGenSettings() {
+    try {
+      const res = await fetch("/settings/tts");
+      if (!res.ok) return;
+      const cfg = await res.json();
+      const modelEl = document.getElementById("settings-imagegen-model");
+      const baseurlEl = document.getElementById("settings-imagegen-baseurl");
+      const keyEl = document.getElementById("settings-imagegen-key");
+      const statusEl = document.getElementById("settings-cfg-imagegen");
+      const dotEl = document.getElementById("settings-cfg-imagegen-dot");
+      if (modelEl) modelEl.value = cfg.aethermeshImageModel || "";
+      if (baseurlEl) baseurlEl.value = cfg.aethermeshImageBaseURL || "";
+      if (keyEl) keyEl.value = cfg.aethermeshImageKey || "";
+      if (statusEl) {
+        const model = cfg.aethermeshImageModel;
+        statusEl.textContent = model ? `${model}` : "未設定";
+      }
+      if (dotEl) {
+        dotEl.textContent = "●";
+        dotEl.className = `settings-config-dot ${cfg.aethermeshImageModel ? "active" : "inactive"}`;
+        dotEl.title = cfg.aethermeshImageModel ? "Configured" : "Not configured";
+      }
+    } catch (e) {
+      console.error("loadImageGenSettings:", e);
+    }
+  }
+
   function escapeHtml(text) {
     return String(text ?? "")
       .replace(/&/g, "&amp;")

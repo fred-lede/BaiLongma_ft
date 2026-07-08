@@ -16,7 +16,6 @@ import {
   normalizeApiCapabilityKind,
   setApiCapabilitySlotEnabled,
 } from '../api-slots.js'
-import { getTTSCredentials } from '../../config.js'
 
 const IMAGE_EXT_MIME = {
   '.png': 'image/png',
@@ -322,9 +321,8 @@ async function callOpenAICompatibleVision(slot, { imageUrl, prompt, detail = 'au
 }
 
 async function callGemmaVision(imageUrl, prompt, context = {}) {
-  const ttsCreds = getTTSCredentials()
-  const baseURL = String(ttsCreds.aethermeshBaseURL || config.baseURL || 'http://192.168.1.200:8001').replace(/\/+$/, '')
-  const apiKey = ttsCreds.aethermeshKey || config.apiKey || ''
+  const baseURL = String(config.baseURL || 'http://192.168.1.200:8001').replace(/\/+$/, '')
+  const apiKey = config.apiKey || ''
   const model = config.model || 'gemma4:31b-it-qat'
   const body = {
     model,

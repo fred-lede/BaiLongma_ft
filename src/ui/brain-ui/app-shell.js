@@ -173,7 +173,7 @@ const createSettingsModal = () => `
       <!-- 侧栏导航 -->
       <nav class="settings-nav">
         <button class="settings-nav-item active" data-tab="appearance" type="button">外观</button>
-        <button class="settings-nav-item" data-tab="llm" type="button">LLM 模型</button>
+        <button class="settings-nav-item" data-tab="llm" type="button">AI 模型</button>
         <button class="settings-nav-item" data-tab="media" type="button">媒体能力</button>
         <button class="settings-nav-item" data-tab="social" type="button">社交媒体</button>
         <button class="settings-nav-item" data-tab="voice" type="button">语音对话</button>
@@ -213,7 +213,7 @@ const createSettingsModal = () => `
           </div>
         </div>
 
-        <!-- ── LLM 模型 tab ── -->
+        <!-- ── AI 模型 tab ── -->
         <div class="settings-tab" data-tab="llm">
           <div class="settings-section">
             <div class="settings-section-label">当前状态</div>

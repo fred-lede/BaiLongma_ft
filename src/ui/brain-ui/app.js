@@ -3160,6 +3160,30 @@ function initTTSSettings() {
         if (igInput && tts.aethermeshImageModel) {
           igInput.value = tts.aethermeshImageModel;
         }
+        // Show configured status for TTS credential fields
+        setCredentialIndicator("tts-minimax-key",    tts.minimaxKey?.configured)
+        setCredentialIndicator("tts-doubao-key",     tts.doubaoKey?.configured)
+        setCredentialIndicator("tts-doubao-appid",   tts.doubaoAppId?.configured)
+        setCredentialIndicator("tts-doubao-access-key", tts.doubaoAccessKey?.configured)
+        setCredentialIndicator("tts-openai-key",     tts.openaiTtsKey?.configured)
+        setCredentialIndicator("tts-elevenlabs-key", tts.elevenLabsKey?.configured)
+        setCredentialIndicator("tts-volcano-appid",  tts.volcanoAppId?.configured)
+        setCredentialIndicator("tts-volcano-token",  tts.volcanoToken?.configured)
+        setCredentialIndicator("tts-custom-key",     tts.customTtsKey?.configured)
+        setCredentialIndicator("tts-aethermesh-key", tts.aethermeshKey?.configured)
+        // Fill non-secret TTS fields (actual values returned by backend)
+        const ttsFill = (id, val) => { const el = document.getElementById(id); if (el && val) el.value = val }
+        ttsFill("tts-openai-baseurl",   tts.openaiTtsBaseURL)
+        ttsFill("tts-custom-baseurl",   tts.customTtsBaseURL)
+        ttsFill("tts-custom-model",     tts.customTtsModel)
+        ttsFill("tts-doubao-resource",  tts.doubaoResourceId)
+        ttsFill("tts-doubao-style",     tts.doubaoStyle)
+        if (tts.doubaoSpeechRate) {
+          const rateEl = document.getElementById("tts-doubao-rate")
+          if (rateEl) rateEl.value = String(tts.doubaoSpeechRate)
+          const rateVal = document.getElementById("tts-doubao-rate-val")
+          if (rateVal) rateVal.textContent = String(tts.doubaoSpeechRate)
+        }
         refreshConfigSummary({ llm, minimax, tts });
       }).catch(() => {
         refreshConfigSummary({ llm, minimax });
@@ -3680,39 +3704,63 @@ function initTTSSettings() {
     if (!overlay.hidden) { loadMicrophoneDevices(); loadOutputDevices(); }
   });
 
-  async function loadVoiceSettings() {
-    const langSelect = document.getElementById("voice-lang-select");
-    const autoSend   = document.getElementById("voice-auto-send");
-    if (langSelect) langSelect.value = localStorage.getItem(VOICE_LANG_KEY) || "zh-CN";
-    if (autoSend) autoSend.checked = localStorage.getItem(VOICE_AUTO_SEND_KEY) !== "false";
-    const autoMic = document.getElementById("voice-auto-mic");
-    if (autoMic) autoMic.checked = localStorage.getItem(VOICE_AUTO_MIC_KEY) === "true";
-    const savedThresh = parseFloat(localStorage.getItem(VOICE_THRESHOLD_KEY) || "0.008");
-    if (voiceThreshSlider) voiceThreshSlider.value = String(savedThresh);
-    if (voiceThreshVal)    voiceThreshVal.textContent = savedThresh.toFixed(3);
-    await loadMicrophoneDevices();
-    await loadOutputDevices();
+   function setCredentialIndicator(fieldId, configured) {
+     const el = document.getElementById(fieldId);
+     if (!el) return;
+     if (configured) {
+       el.dataset.origPlaceholder = el.dataset.origPlaceholder || el.placeholder;
+       el.placeholder = "已配置，留空则不修改";
+       el.style.borderColor = "var(--ok, #4caf50)";
+     } else {
+       if (el.dataset.origPlaceholder) el.placeholder = el.dataset.origPlaceholder;
+       el.style.borderColor = "";
+     }
+   }
 
-    let savedProvider = localStorage.getItem(VOICE_PROVIDER_KEY) || "aliyun";
-    try {
-      const resp = await fetch("http://127.0.0.1:3721/settings/voice");
-      const data = await resp.json().catch(() => ({}));
-      if (resp.ok && data?.voice?.voiceProvider) {
-        savedProvider = data.voice.voiceProvider;
-        localStorage.setItem(VOICE_PROVIDER_KEY, savedProvider);
-      }
-      // Sync AetherMesh ASR settings from backend to localStorage for frontend direct WS
-      if (resp.ok && data?.voice) {
-        const am = data.voice
-        if (am.aethermeshKey && typeof am.aethermeshKey === 'string') localStorage.setItem('aethermeshKey', am.aethermeshKey)
-        if (am.aethermeshBaseURL && typeof am.aethermeshBaseURL === 'string') localStorage.setItem('aethermeshBaseURL', am.aethermeshBaseURL)
-        if (am.aethermeshAsrModel && typeof am.aethermeshAsrModel === 'string') localStorage.setItem('aethermeshAsrModel', am.aethermeshAsrModel)
-      }
-      updateAethermeshLsStatus();
-    } catch {}
-    if (voiceProviderSelect) voiceProviderSelect.value = savedProvider;
-    applyVoiceProviderUI(savedProvider);
-  }
+   async function loadVoiceSettings() {
+     const langSelect = document.getElementById("voice-lang-select");
+     const autoSend   = document.getElementById("voice-auto-send");
+     if (langSelect) langSelect.value = localStorage.getItem(VOICE_LANG_KEY) || "zh-CN";
+     if (autoSend) autoSend.checked = localStorage.getItem(VOICE_AUTO_SEND_KEY) !== "false";
+     const autoMic = document.getElementById("voice-auto-mic");
+     if (autoMic) autoMic.checked = localStorage.getItem(VOICE_AUTO_MIC_KEY) === "true";
+     const savedThresh = parseFloat(localStorage.getItem(VOICE_THRESHOLD_KEY) || "0.008");
+     if (voiceThreshSlider) voiceThreshSlider.value = String(savedThresh);
+     if (voiceThreshVal)    voiceThreshVal.textContent = savedThresh.toFixed(3);
+     await loadMicrophoneDevices();
+     await loadOutputDevices();
+
+     let savedProvider = localStorage.getItem(VOICE_PROVIDER_KEY) || "aliyun";
+     try {
+       const resp = await fetch("http://127.0.0.1:3721/settings/voice");
+       const data = await resp.json().catch(() => ({}));
+       if (resp.ok && data?.voice?.voiceProvider) {
+         savedProvider = data.voice.voiceProvider;
+         localStorage.setItem(VOICE_PROVIDER_KEY, savedProvider);
+       }
+       // Sync AetherMesh ASR settings from backend to localStorage for frontend direct WS
+       if (resp.ok && data?.voice) {
+         const cfg = data.voice
+         if (cfg.aethermeshKey && typeof cfg.aethermeshKey === 'string') localStorage.setItem('aethermeshKey', cfg.aethermeshKey)
+         if (cfg.aethermeshBaseURL && typeof cfg.aethermeshBaseURL === 'string') localStorage.setItem('aethermeshBaseURL', cfg.aethermeshBaseURL)
+         if (cfg.aethermeshAsrModel && typeof cfg.aethermeshAsrModel === 'string') localStorage.setItem('aethermeshAsrModel', cfg.aethermeshAsrModel)
+         // Show configured status for ASR credential fields
+         setCredentialIndicator("voice-aliyun-key",     cfg.aliyunApiKey?.configured)
+         setCredentialIndicator("voice-tencent-sid",     cfg.tencentSecretId?.configured)
+         setCredentialIndicator("voice-tencent-skey",    cfg.tencentSecretKey?.configured)
+         setCredentialIndicator("voice-tencent-appid",   cfg.tencentAppId?.configured)
+         setCredentialIndicator("voice-xunfei-appid",    cfg.xunfeiAppId?.configured)
+         setCredentialIndicator("voice-xunfei-apikey",   cfg.xunfeiApiKey?.configured)
+         setCredentialIndicator("voice-volc-apikey",     cfg.volcAsrApiKey?.configured)
+         setCredentialIndicator("voice-volc-appkey",     cfg.volcAsrAppKey?.configured)
+         setCredentialIndicator("voice-volc-accesskey",  cfg.volcAsrAccessKey?.configured)
+         setCredentialIndicator("voice-volc-resourceid", cfg.volcAsrResourceId?.configured)
+       }
+       updateAethermeshLsStatus();
+     } catch {}
+     if (voiceProviderSelect) voiceProviderSelect.value = savedProvider;
+     applyVoiceProviderUI(savedProvider);
+   }
 
   if (voiceThreshSlider && voiceThreshVal) {
     voiceThreshSlider.addEventListener("input", () => {

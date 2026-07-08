@@ -85,6 +85,8 @@ assert(messages[1].content.includes('Recent assistant actions'), 'runtime contex
 assert(messages[1].content.includes('Recent tool/action log'), 'runtime context includes action log')
 assert(messages[1].content.includes('Previous tool result'), 'runtime context includes last tool result')
 assert(messages[1].content.includes('<conversation_metadata>'), 'runtime context includes conversation metadata')
+assert(messages[1].content.includes('<context>CTX</context>'), 'runtime context includes round-local context block')
+assert(messages[1].content.includes('Current-turn intent check'), 'runtime context includes current-turn intent check')
 assert(messages[1].content.includes('role="assistant"'), 'conversation metadata includes assistant role')
 assert(messages[1].content.includes('salience="last_assistant_reply"'), 'conversation metadata marks the last assistant reply')
 assert(messages[1].content.includes('channel_switched_from="TUI"'), 'conversation metadata marks channel switch')
@@ -92,11 +94,13 @@ assert(messages[1].content.includes('channel_switched_from="TUI"'), 'conversatio
 const historicalUser = messages.find(m => m.content.includes('先在本地看一下'))
 assert(historicalUser && !historicalUser.content.includes('<context>CTX</context>'), 'historical user message is not prefixed with current context')
 
-const currentUser = messages.find(m => m.content.startsWith('<context>CTX</context>'))
+const currentUser = messages.find(m => m.role === 'user' && m.content === currentMsg.content)
 assert(currentUser, 'current user message is identified')
-assert(currentUser.content.startsWith('<context>CTX</context>'), 'context is prefixed to current user message')
+assertEqual(currentUser.content, currentMsg.content, 'current user message stays exactly the user text')
+assertEqual(messages[messages.length - 1].content, currentMsg.content, 'final message is the clean current user message')
 assert(!currentUser.content.includes('[current user message'), 'current user message keeps metadata out of visible content')
 assert(!currentUser.content.includes('channel switch:'), 'current user message does not inline channel switch metadata')
+assert(!currentUser.content.includes('intent check'), 'current user message does not inline intent check')
 
 const assistant = messages.find(m => m.role === 'assistant')
 // The assistant line immediately preceding the current user message is the "last reply";
@@ -112,10 +116,11 @@ const fallbackMessages = buildLLMMessages({
   conversationWindow: [],
   input: 'TICK 2026-05-25-10:03:00',
 })
-assertEqual(fallbackMessages.length, 2, 'fallback path has system + one user message')
-assert(fallbackMessages[1].content.startsWith('<context>TICK</context>'), 'fallback user message gets context prefix')
-assert(fallbackMessages[1].content.includes('TICK 2026-05-25-10:03:00'), 'fallback user message keeps input')
-assert(!fallbackMessages[1].content.includes('[heartbeat tick'), 'fallback without isTick stays unmarked (non-tick callers unaffected)')
+assertEqual(fallbackMessages.length, 3, 'fallback path has system + runtime context + one user message')
+assert(fallbackMessages[1].content.startsWith('[runtime context]'), 'fallback runtime context is injected before user message')
+assert(fallbackMessages[1].content.includes('<context>TICK</context>'), 'fallback runtime context gets context block')
+assertEqual(fallbackMessages[2].content, 'TICK 2026-05-25-10:03:00', 'fallback user message keeps input clean')
+assert(!fallbackMessages[2].content.includes('[heartbeat tick'), 'fallback without isTick stays unmarked (non-tick callers unaffected)')
 
 const tickMessages = buildLLMMessages({
   systemPrompt: 'SYS',
@@ -124,12 +129,13 @@ const tickMessages = buildLLMMessages({
   input: 'TICK 2026-05-25-10:03:00',
   isTick: true,
 })
-assertEqual(tickMessages.length, 2, 'tick path has system + one user message')
-assertEqual(tickMessages[1].role, 'user', 'tick fallback uses user role')
-assert(tickMessages[1].content.startsWith('<context>TICK</context>'), 'tick fallback gets context prefix')
-assert(tickMessages[1].content.includes('[heartbeat tick · no new user message]'), 'tick fallback carries heartbeat marker')
-assert(tickMessages[1].content.includes('NOT a user message'), 'tick fallback tells the model this is not a user message')
-assert(tickMessages[1].content.includes('TICK 2026-05-25-10:03:00'), 'tick fallback preserves the tick payload')
+assertEqual(tickMessages.length, 3, 'tick path has system + runtime context + one user message')
+assert(tickMessages[1].content.startsWith('[runtime context]'), 'tick runtime context is injected before user message')
+assert(tickMessages[1].content.includes('<context>TICK</context>'), 'tick runtime context gets context block')
+assertEqual(tickMessages[2].role, 'user', 'tick fallback uses user role')
+assert(tickMessages[2].content.includes('[heartbeat tick · no new user message]'), 'tick fallback carries heartbeat marker')
+assert(tickMessages[2].content.includes('NOT a user message'), 'tick fallback tells the model this is not a user message')
+assert(tickMessages[2].content.includes('TICK 2026-05-25-10:03:00'), 'tick fallback preserves the tick payload')
 
 const systemSignal = formatConversationMessage({
   role: 'user',

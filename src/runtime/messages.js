@@ -111,11 +111,23 @@ export function formatTaskSteps(taskSteps = []) {
   return `Task step progress (${done}/${total}):\n${lines.join('\n')}`
 }
 
-export function buildRuntimeContextMessages({ recentActions = [], actionLog = [], lastToolResult = null, taskSteps = [], batteryBlock = '', conversationMetadata = '' } = {}) {
+function buildIntentCheckContext() {
+  return 'In <think>: (1) resolve every pronoun/ellipsis in the current user message ("继续/那个/这个呢/再来一个/换一个") against your last reply and the exchange just above, before reaching for older context; (2) list EVERY distinct request this one message carries — finish all of them this turn, not just the first; (3) name the WANT under the words — the outcome that ends their need — and answer that, not the literal grammar (a question is usually "do it"; a complaint is "fix it"; terse/urgent typing means lead with the result, no preamble).'
+}
+
+function hasPriorAssistantReply(rows, currentRowIndex) {
+  if (currentRowIndex < 0) return false
+  for (let i = currentRowIndex - 1; i >= 0; i--) {
+    if (rows[i]?.role === 'jarvis') return true
+  }
+  return false
+}
+
+export function buildRuntimeContextMessages({ contextBlock = '', recentActions = [], actionLog = [], lastToolResult = null, taskSteps = [], batteryBlock = '', conversationMetadata = '', intentCheck = '' } = {}) {
   const parts = []
 
-  if (conversationMetadata) {
-    parts.push(conversationMetadata)
+  if (contextBlock) {
+    parts.push(contextBlock)
   }
 
   if (batteryBlock) {
@@ -146,6 +158,14 @@ export function buildRuntimeContextMessages({ recentActions = [], actionLog = []
       .join(', ')
     const resultPreview = String(lastToolResult.result || '').slice(0, 500)
     parts.push(`Previous tool result:\n${lastToolResult.name}(${argsSummary}) ->\n${resultPreview}\nAbsorb this result before deciding the next step.`)
+  }
+
+  if (conversationMetadata) {
+    parts.push(conversationMetadata)
+  }
+
+  if (intentCheck) {
+    parts.push(`Current-turn intent check:\n${intentCheck}`)
   }
 
   if (parts.length === 0) return []
@@ -196,12 +216,24 @@ export function buildLLMMessages({ systemPrompt, contextBlock = '', conversation
   // P0-2：先扫一遍找出所有"过期未答悬念"
   const expiredSet = computeExpiredFollowupSet(rows, currentTopic)
   const conversationMetadata = formatConversationMetadata({ conversationWindow: rows, msg, expiredSet })
-  messages.push(...buildRuntimeContextMessages({ recentActions, actionLog, lastToolResult, taskSteps, batteryBlock, conversationMetadata }))
+  const currentRowIndex = rows.findIndex(row => isCurrentMessageRow(row, msg))
+  const intentCheck = (!isTick && hasPriorAssistantReply(rows, currentRowIndex))
+    ? buildIntentCheckContext()
+    : ''
+  messages.push(...buildRuntimeContextMessages({
+    contextBlock,
+    recentActions,
+    actionLog,
+    lastToolResult,
+    taskSteps,
+    batteryBlock,
+    conversationMetadata,
+    intentCheck,
+  }))
 
-  // Track which message in the array should receive this round's <context> block:
-  // it's the last user-role message representing the "current" turn — either the
-  // matched row from conversationWindow (when msg is already persisted to db) or
-  // the appended fallback message below (TICK / unmatched cases).
+  // Track the last user-role message representing the current turn. The message
+  // content stays clean: round-local context lives in the [runtime context]
+  // message above, before conversation history.
   let currentMessageIndex = -1
 
   for (const row of rows) {
@@ -215,18 +247,6 @@ export function buildLLMMessages({ systemPrompt, contextBlock = '', conversation
 
   const hasCurrentMessage = currentMessageIndex >= 0
 
-  // 显著度锚点：找出"紧挨着当前用户消息之前的那条 jarvis 回复"。
-  //   接追问 / 指代消解的核心信号——历史窗口里这条本就在，但和更早的若干条混在一起没有
-  //   区分度。用户当前这句（"继续 / 那个 / 再来一个 / 这个呢"）绝大多数是在回应/承接「这一条」，
-  //   而不是窗口里更早的某句。具体提示放在 <conversation_metadata>，不再写进 assistant 正文。
-  //   只在确实存在上一条回复（= 进行中的对话）时才标，首条消息无可锚定。
-  let priorReplyIndex = -1
-  if (hasCurrentMessage) {
-    for (let i = currentMessageIndex - 1; i >= 0; i--) {
-      if (messages[i].role === 'assistant') { priorReplyIndex = i; break }
-    }
-  }
-
   if (!hasCurrentMessage) {
     // TICK 心跳路径：fallback 消息会以 role:'user' 注入，结构上跟真用户消息没区别。
     // 不加 marker 时模型会把 "TICK 2026-..." 当成用户在重新发问，于是反复回答自己上一轮
@@ -234,29 +254,12 @@ export function buildLLMMessages({ systemPrompt, contextBlock = '', conversation
     // 禁止回放历史问题，与下面 system signal 的 marker 待遇对齐。
     const fallbackContent = isTick
       ? `[heartbeat tick · no new user message]\n${input}\n(This is an internal heartbeat, NOT a user message. Do NOT treat it as the user re-asking a prior question or responding to your previous open question. Decide whether to act proactively per the directions above, or stay silent — both are valid.)`
-      : input
+      : (msg?.content || input)
     messages.push({
       role: 'user',
       content: fallbackContent,
     })
     currentMessageIndex = messages.length - 1
-  }
-
-  // 复合意图 + 指代的即时提醒：贴在当前用户消息「原话之后」，靠 recency 把模型的注意力
-  //   从前面那一大块 <context> 背景拉回到这一句真正的诉求上。只在进行中的对话里加（有上一条
-  //   回复时），首条消息交给系统提示里的常驻规则即可，避免每轮无谓加料。非 TICK。
-  if (priorReplyIndex >= 0 && !isTick && currentMessageIndex >= 0) {
-    messages[currentMessageIndex].content +=
-      `\n[intent check · in <think>: (1) resolve every pronoun/ellipsis here ("继续/那个/这个呢/再来一个/换一个") against your last reply and the exchange just above, before reaching for older context; (2) list EVERY distinct request this one message carries — finish all of them this turn, not just the first; (3) name the WANT under the words — the outcome that ends their need — and answer that, not the literal grammar (a question is usually "do it"; a complaint is "fix it"; terse/urgent typing means lead with the result, no preamble).]`
-  }
-
-  // Prepend this round's <context>...</context> to the current user message.
-  // The block is NOT persisted to db — conversations are written from the raw
-  // user content (see queue.pushMessage) and assistant outputs are stored
-  // verbatim, so the next round's conversationWindow stays clean.
-  if (contextBlock && currentMessageIndex >= 0) {
-    const target = messages[currentMessageIndex]
-    target.content = `${contextBlock}\n\n${target.content || ''}`
   }
 
   return messages

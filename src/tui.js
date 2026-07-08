@@ -1,5 +1,5 @@
 import readline from 'readline'
-import { pushMessage } from './queue.js'
+import { pushMessage } from './inbound-message.js'
 
 export function startTUI(userId = 'ID:000001') {
   // 非交互式终端（如后台运行、管道）时跳过 TUI

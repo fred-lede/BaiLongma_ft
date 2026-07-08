@@ -12,7 +12,7 @@ import {
   deleteMusicTrack as dbDeleteMusicTrack,
 } from '../../db.js'
 import { emitEvent } from '../../events.js'
-import { pushMessage } from '../../queue.js'
+import { pushMessage } from '../../inbound-message.js'
 import { callCapability } from '../../providers/registry.js'
 import { isDailyLimitReached } from '../../quota.js'
 import { getTTSCredentials, getSeedanceConfig, config as llmConfig } from '../../config.js'

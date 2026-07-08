@@ -2988,7 +2988,7 @@ function initTTSSettings() {
     setTimeout(() => { el.textContent = ""; el.className = "settings-feedback"; }, 3000);
   }
 
-  function refreshConfigSummary({ llm, minimax }) {
+  function refreshConfigSummary({ llm, minimax, tts }) {
     const cfgLlm = document.getElementById("settings-cfg-llm");
     const cfgLlmDot = document.getElementById("settings-cfg-llm-dot");
     const cfgVlm = document.getElementById("settings-cfg-vlm");
@@ -3001,11 +3001,12 @@ function initTTSSettings() {
       cfgLlmDot.className = `settings-config-dot ${llm.activated ? "active" : "inactive"}`;
       cfgLlmDot.title = llm.activated ? "Running" : "Inactive";
     }
-    if (cfgVlm) cfgVlm.textContent = `via LLM · ${llm.model || "—"}`;
+    const vlmModel = tts?.aethermeshImageModel || "";
+    if (cfgVlm) cfgVlm.textContent = vlmModel || "not configured";
     if (cfgVlmDot) {
       cfgVlmDot.textContent = "●";
-      cfgVlmDot.className = `settings-config-dot ${llm.activated ? "active" : "inactive"}`;
-      cfgVlmDot.title = llm.activated ? "Vision ready" : "Not available";
+      cfgVlmDot.className = `settings-config-dot ${vlmModel ? "active" : "inactive"}`;
+      cfgVlmDot.title = vlmModel ? `Model: ${vlmModel}` : "Not configured";
     }
     if (cfgMedia) cfgMedia.textContent = `minimax · ${minimax.configured ? "configured" : "not configured"}`;
     if (cfgMediaDot) {
@@ -3153,13 +3154,16 @@ function initTTSSettings() {
       if (providers) cachedProviders = providers;
       cachedLlm = llm;
       if (agentNameInput) agentNameInput.value = data.agent_name || agentName || DEFAULT_AGENT_NAME;
-      refreshConfigSummary({ llm, minimax });
       fetch(`${API}/settings/tts`).then(r => r.json()).then(ttsCfg => {
+        const tts = ttsCfg.tts || {};
         const igInput = document.getElementById("settings-imagegen-model");
-        if (igInput && ttsCfg.tts?.aethermeshImageModel) {
-          igInput.value = ttsCfg.tts.aethermeshImageModel;
+        if (igInput && tts.aethermeshImageModel) {
+          igInput.value = tts.aethermeshImageModel;
         }
-      }).catch(() => {});
+        refreshConfigSummary({ llm, minimax, tts });
+      }).catch(() => {
+        refreshConfigSummary({ llm, minimax });
+      });
       populateProviderSelect(providers, llm.provider || "auto");
       if (providerSelect && llm.provider) providerSelect.value = llm.provider;
       applyCustomProviderUI(llm);

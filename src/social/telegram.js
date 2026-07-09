@@ -109,6 +109,9 @@ export async function startTelegramConnector({ pushMessage, emitEvent } = {}) {
         let content = msg.text || msg.caption || ''
         const mediaMarkdowns = []
 
+        // User sent a text message → clear voice reply flag (next reply will be text)
+        if (content && !msg.voice) voiceReplyChats.delete(chatId)
+
         // Download photos (largest available size)
         if (msg.photo?.length > 0) {
           try {
@@ -407,10 +410,10 @@ export async function sendTelegramMessage(chatId, content) {
   }
 
   // Decide whether to reply with voice based on per-chat mode
+  // Flag persists until user sends a text message (cleared in poll loop)
   const mode = voiceModes.get(String(chatId)) || 'auto'
   const shouldVoice = mode === 'on' || (mode === 'auto' && voiceReplyChats.has(String(chatId)))
   if (shouldVoice) {
-    voiceReplyChats.delete(String(chatId))
     const sent = await sendTelegramVoice(chatId, content)
     if (sent) return { ok: true, platform: 'telegram' }
   }

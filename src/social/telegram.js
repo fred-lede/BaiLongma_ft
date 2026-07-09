@@ -16,6 +16,9 @@ const RECONNECT_MAX_MS = 60000
 // Track chat IDs whose last incoming message was voice → reply with voice
 const voiceReplyChats = new Set()
 
+// Per-chat voice reply mode: 'auto' (follow input) | 'on' (always voice) | 'off' (always text)
+const voiceModes = new Map()
+
 export async function startTelegramConnector({ pushMessage, emitEvent } = {}) {
   const token = env('TELEGRAM_BOT_TOKEN')
   if (!token) return null
@@ -153,6 +156,28 @@ export async function startTelegramConnector({ pushMessage, emitEvent } = {}) {
             console.warn('[Telegram] voice download/transcribe failed:', err.message)
             content = `[语音消息 ${msg.voice.duration || '?'}s]`
           }
+        }
+
+        // Handle /voice command: set per-chat voice reply mode
+        if (/^\/voice\b/.test(content)) {
+          const mode = content.trim().split(/\s+/)[1] || ''
+          const validModes = { auto: 'auto', on: 'on', off: 'off' }
+          if (validModes[mode]) {
+            voiceModes.set(chatId, validModes[mode])
+            const reply = mode === 'on' ? '✅ 語音回覆：開啟（一律語音）'
+              : mode === 'off' ? '✅ 語音回覆：關閉（一律文字）'
+              : '✅ 語音回覆：自動（跟隨輸入模式）'
+            const token = env('TELEGRAM_BOT_TOKEN')
+            requestJson(`https://api.telegram.org/bot${token}/sendMessage`, {
+              method: 'POST', body: { chat_id: Number(chatId), text: reply },
+            }).catch(() => {})
+          } else {
+            const token = env('TELEGRAM_BOT_TOKEN')
+            requestJson(`https://api.telegram.org/bot${token}/sendMessage`, {
+              method: 'POST', body: { chat_id: Number(chatId), text: '用法：\n/voice auto — 跟隨輸入模式\n/voice on — 強制語音回覆\n/voice off — 強制文字回覆' },
+            }).catch(() => {})
+          }
+          continue // don't forward to LLM
         }
 
         if (!content && mediaMarkdowns.length === 0) continue
@@ -365,8 +390,10 @@ export async function sendTelegramMessage(chatId, content) {
     }
   }
 
-  // When the last incoming message was voice, reply with synthesized speech
-  if (voiceReplyChats.has(String(chatId))) {
+  // Decide whether to reply with voice based on per-chat mode
+  const mode = voiceModes.get(String(chatId)) || 'auto'
+  const shouldVoice = mode === 'on' || (mode === 'auto' && voiceReplyChats.has(String(chatId)))
+  if (shouldVoice) {
     voiceReplyChats.delete(String(chatId))
     const sent = await sendTelegramVoice(chatId, content)
     if (sent) return { ok: true, platform: 'telegram' }

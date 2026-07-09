@@ -547,71 +547,99 @@ export function initChat({
     screenshotBtn.addEventListener("click", async () => {
       screenshotBtn.textContent = "⏳"
       try {
-      let lastError = ''
-      // Electron path: desktopCapturer via IPC (includes clipboard fallback on macOS)
-      if (window.bailongma?.screenshotCapture) {
-        const result = await window.bailongma.screenshotCapture()
-        if (result.ok) {
-          const blob = await (await fetch(result.dataUrl)).blob()
-          const file = new File([blob], `screenshot-${Date.now()}.png`, { type: "image/png" });
-          addPastedImageFiles([file]);
-          openChat();
-          return
+        // Try 1: getDisplayMedia in renderer (triggers native macOS permission prompt)
+        if (navigator.mediaDevices?.getDisplayMedia) {
+          try {
+            const stream = await navigator.mediaDevices.getDisplayMedia({
+              video: { displaySurface: "monitor" },
+              audio: false,
+            });
+            const video = document.createElement("video");
+            video.srcObject = stream;
+            video.muted = true;
+            await video.play();
+            const canvas = document.createElement("canvas");
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            const ctx = canvas.getContext("2d");
+            ctx.drawImage(video, 0, 0);
+            stream.getTracks().forEach((t) => t.stop());
+            canvas.toBlob(
+              (blob) => {
+                if (!blob) return;
+                const file = new File([blob], `screenshot-${Date.now()}.png`, { type: "image/png" });
+                addPastedImageFiles([file]);
+                openChat();
+              },
+              "image/png",
+              0.92
+            );
+            return
+          } catch (gmErr) {
+            if (gmErr.name === "NotAllowedError") {
+              // still try Electron IPC fallback before giving up
+            } else if (gmErr.name === "AbortError") {
+              screenshotBtn.textContent = origBtnText
+              return // user cancelled picker, silent
+            } else {
+              console.warn("[screenshot] getDisplayMedia:", gmErr.message)
+            }
+          }
         }
-        lastError = result.error || 'capture_failed'
-      }
-      // Clipboard fallback (macOS Cmd+Shift+4 already in clipboard, non-Electron path)
-      if (window.bailongma?.getLatestSystemScreenshot) {
-        const result = await window.bailongma.getLatestSystemScreenshot({ preferClipboard: true })
-        if (result?.ok) {
-          const blob = await (await fetch(result.dataUrl)).blob()
-          const file = new File([blob], result.filename || `screenshot-${Date.now()}.png`, { type: result.mime || "image/png" });
-          addPastedImageFiles([file]);
-          openChat();
-          return
-        }
-      }
-      // Browser fallback: getDisplayMedia
-      if (!navigator.mediaDevices?.getDisplayMedia) {
-        throw new Error(lastError || "navigator.mediaDevices.getDisplayMedia 不可用（非安全上下文/浏览器限制）")
-      }
-        const stream = await navigator.mediaDevices.getDisplayMedia({
-          video: { displaySurface: "monitor" },
-          audio: false,
-        });
-        const video = document.createElement("video");
-        video.srcObject = stream;
-        video.muted = true;
-        await video.play();
-        const canvas = document.createElement("canvas");
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        const ctx = canvas.getContext("2d");
-        ctx.drawImage(video, 0, 0);
-        stream.getTracks().forEach((t) => t.stop());
-        canvas.toBlob(
-          (blob) => {
-            if (!blob) return;
+        // Try 2: Electron IPC (desktopCapturer + clipboard)
+        if (window.bailongma?.screenshotCapture) {
+          const result = await window.bailongma.screenshotCapture()
+          if (result.ok) {
+            const blob = await (await fetch(result.dataUrl)).blob()
             const file = new File([blob], `screenshot-${Date.now()}.png`, { type: "image/png" });
             addPastedImageFiles([file]);
             openChat();
-          },
-          "image/png",
-          0.92
-        );
-      } catch (err) {
-        if (err.name === "NotAllowedError") {
-          screenshotToast("⚠️ 屏幕录制权限被拒 — 请在 系统设置 > 隐私与安全性 > 屏幕录制 中允许 Bailongma")
-        } else if (err.name === "AbortError") {
-          // user cancelled the picker — no feedback needed
-        } else {
-          console.warn("[screenshot] capture failed:", err.message)
-          screenshotToast("⚠️ 截屏失败:" + err.message)
+            return
+          }
+          if (result.error === 'NEED_PERMISSION') {
+            showPermissionError()
+            return
+          }
         }
+        // Try 3: clipboard (non-Electron path)
+        if (window.bailongma?.getLatestSystemScreenshot) {
+          const result = await window.bailongma.getLatestSystemScreenshot({ preferClipboard: true })
+          if (result?.ok) {
+            const blob = await (await fetch(result.dataUrl)).blob()
+            const file = new File([blob], result.filename || `screenshot-${Date.now()}.png`, { type: result.mime || "image/png" });
+            addPastedImageFiles([file]);
+            openChat();
+            return
+          }
+        }
+        showPermissionError()
+      } catch (err) {
+        console.warn("[screenshot] unexpected error:", err.message)
+        screenshotToast("⚠️ 截屏失败:" + err.message)
       } finally {
         screenshotBtn.textContent = origBtnText
       }
     });
+    function showPermissionError() {
+      const el = document.createElement("div")
+      el.className = "screenshot-toast"
+      el.innerHTML = "⚠️ 需要螢幕錄製權限<br><small>系統設定 > 隱私與安全性 > 螢幕錄製<br>加入 Bailongma 後重試</small>"
+      const btn = document.createElement("button")
+      btn.textContent = "開啟設定"
+      btn.className = "screenshot-settings-btn"
+      btn.onclick = () => {
+        window.bailongma?.openScreenRecordingSettings?.()
+        el.remove()
+      }
+      el.appendChild(btn)
+      document.body.appendChild(el)
+      requestAnimationFrame(() => el.classList.add("show"))
+      el.querySelector("button")?.addEventListener("click", () => {
+        window.bailongma?.openScreenRecordingSettings?.()
+        el.remove()
+      })
+      setTimeout(() => { el.classList.remove("show"); setTimeout(() => el.remove(), 300) }, 10000)
+    }
     function screenshotToast(msg) {
       const el = document.createElement("div")
       el.className = "screenshot-toast"

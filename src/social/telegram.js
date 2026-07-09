@@ -323,7 +323,9 @@ async function sendTelegramVoice(chatId, text) {
       language: creds.aethermeshLanguage || 'zh-cn',
     })
     buffer = await collectStreamBuffer(stream)
-    console.log(`[Telegram] ▼ TTS synthesized: ${(buffer.length / 1024).toFixed(1)}KB`)
+    const inputChars = text.length
+    const kb = (buffer.length / 1024).toFixed(1)
+    console.log(`[Telegram] ▼ TTS synthesized: ${kb}KB for ${inputChars} chars (${(buffer.length / inputChars).toFixed(0)} B/char)`)
     if (!buffer || buffer.length < 100) {
       console.warn(`[Telegram] ▼ TTS buffer too small, fallback to text`)
       return false

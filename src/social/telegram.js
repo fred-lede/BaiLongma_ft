@@ -6,6 +6,7 @@ import sharp from 'sharp'
 import { requestJson } from './http.js'
 import { env } from './utils.js'
 import { paths } from '../paths.js'
+import { getVoiceConfig } from '../config.js'
 
 const POLL_INTERVAL_MS = 2000
 const RECONNECT_BASE_MS = 2000
@@ -37,6 +38,43 @@ export async function startTelegramConnector({ pushMessage, emitEvent } = {}) {
     const resp = await fetch(fileUrl)
     if (!resp.ok) throw new Error(`Telegram file download failed HTTP ${resp.status}`)
     return Buffer.from(await resp.arrayBuffer())
+  }
+
+  async function transcribeAudio(audioBuffer, ext) {
+    try {
+      const cfg = getVoiceConfig()
+      const baseURL = (cfg.aethermeshBaseURL || '').replace(/\/+$/, '')
+      if (!baseURL) return null
+      const apiKey = cfg.aethermeshKey || ''
+      const model = cfg.aethermeshAsrModel || 'whisper-large-v3'
+
+      const fd = new FormData()
+      fd.append('file', audioBuffer, { filename: `voice${ext}`, contentType: 'audio/ogg' })
+      fd.append('model', model)
+      fd.append('response_format', 'json')
+
+      const url = `${baseURL}/v1/audio/transcriptions`
+      const headers = fd.getHeaders()
+      if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`
+
+      const resp = await fetch(url, {
+        method: 'POST',
+        body: fd,
+        headers,
+        signal: AbortSignal.timeout(60000),
+      })
+      if (!resp.ok) {
+        const err = await resp.text().catch(() => '')
+        console.warn(`[Telegram] transcription failed (${resp.status}): ${err.slice(0, 100)}`)
+        return null
+      }
+      const json = await resp.json()
+      const text = (json.text || '').trim()
+      return text || null
+    } catch (err) {
+      console.warn('[Telegram] transcription error:', err.message)
+      return null
+    }
   }
 
   async function getMe() {
@@ -91,6 +129,23 @@ export async function startTelegramConnector({ pushMessage, emitEvent } = {}) {
             mediaMarkdowns.push(`![${msg.document.file_name || 'telegram image'}](data:${mime};base64,${base64})`)
           } catch (err) {
             console.warn('[Telegram] image document download failed:', err.message)
+          }
+        }
+
+        // Download and transcribe voice messages via AetherMesh Whisper
+        if (msg.voice) {
+          try {
+            const buffer = await downloadTelegramFileBuffer(msg.voice.file_id)
+            const transcribed = await transcribeAudio(buffer, '.ogg')
+            if (transcribed) {
+              content = transcribed
+              console.log(`[Telegram] voice transcribed: "${transcribed.slice(0, 60)}"`)
+            } else {
+              content = `[语音消息 ${msg.voice.duration || '?'}s]`
+            }
+          } catch (err) {
+            console.warn('[Telegram] voice download/transcribe failed:', err.message)
+            content = `[语音消息 ${msg.voice.duration || '?'}s]`
           }
         }
 

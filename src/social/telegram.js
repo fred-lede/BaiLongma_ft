@@ -160,6 +160,7 @@ export async function startTelegramConnector({ pushMessage, emitEvent } = {}) {
 
         // Handle /voice command: set per-chat voice reply mode
         if (/^\/voice\b/.test(content)) {
+          console.log(`[Telegram] /voice command received: "${content}" from chat ${chatId}`)
           const mode = content.trim().split(/\s+/)[1] || ''
           const validModes = { auto: 'auto', on: 'on', off: 'off' }
           if (validModes[mode]) {

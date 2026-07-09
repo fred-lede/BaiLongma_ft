@@ -20,6 +20,8 @@ const path = require('path')
 const fs = require('fs')
 const net = require('net')
 const http = require('http')
+const { execFile } = require('child_process')
+const os = require('os')
 const { EventEmitter } = require('events')
 const { pathToFileURL } = require('url')
 const { autoUpdater } = require('electron-updater')
@@ -1212,7 +1214,7 @@ ipcMain.handle('app:get-version', () => app.getVersion())
 ipcMain.handle('startup:get-progress', () => cloneStartupProgressState())
 
 ipcMain.handle('screenshot:capture', async () => {
-  // Try desktopCapturer first (fastest, full-screen, no picker)
+  // Try 1: desktopCapturer (requires macOS Screen Recording permission)
   try {
     const sources = await desktopCapturer.getSources({ types: ['screen'] })
     if (sources.length) {
@@ -1224,7 +1226,7 @@ ipcMain.handle('screenshot:capture', async () => {
   } catch (err) {
     console.warn('[screenshot] desktopCapturer failed:', err?.message || err)
   }
-  // Fallback: clipboard (macOS Cmd+Shift+4)
+  // Try 2: clipboard (macOS Cmd+Shift+4 or Cmd+Ctrl+Shift+4)
   try {
     const image = clipboard.readImage()
     if (image && !image.isEmpty()) {
@@ -1236,7 +1238,26 @@ ipcMain.handle('screenshot:capture', async () => {
   } catch (err) {
     console.warn('[screenshot] clipboard fallback failed:', err?.message || err)
   }
-  return { ok: false, error: 'No screen capture available. Try granting Screen Recording permission in System Settings > Privacy & Security.' }
+  // Try 3: screencapture CLI (macOS, works without Screen Recording permission)
+  if (os.platform() === 'darwin') {
+    try {
+      const tmp = path.join(os.tmpdir(), `bailongma-screenshot-${Date.now()}.png`)
+      await new Promise((resolve, reject) => {
+        execFile('/usr/sbin/screencapture', ['-x', '-t', 'png', tmp], { timeout: 10000 }, (err) => {
+          if (err) return reject(err)
+          resolve()
+        })
+      })
+      const buf = fs.readFileSync(tmp)
+      fs.unlink(tmp, () => {})
+      if (buf?.length) {
+        return { ok: true, dataUrl: `data:image/png;base64,${buf.toString('base64')}` }
+      }
+    } catch (err) {
+      console.warn('[screenshot] screencapture CLI failed:', err?.message || err)
+    }
+  }
+  return { ok: false, error: 'No screen capture available. Try granting Screen Recording permission in System Settings > Privacy & Security, or take a screenshot (Cmd+Shift+4) first.' }
 })
 
 ipcMain.handle('system-screenshot:get-latest', async (_event, options = {}) => {

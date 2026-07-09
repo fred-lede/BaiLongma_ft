@@ -3470,6 +3470,7 @@ function initTTSSettings() {
   const VOICE_LANG_KEY       = "bailongma-voice-lang";
   const VOICE_AUTO_SEND_KEY  = "bailongma-voice-auto-send";
   const VOICE_AUTO_MIC_KEY   = "bailongma-voice-auto-mic";
+  const VOICE_SILENCE_MS_KEY = "bailongma-voice-silence-ms";
   const VOICE_THRESHOLD_KEY  = "bailongma-voice-threshold";
   const VOICE_PROVIDER_KEY   = "bailongma-voice-provider";
   const VOICE_MIC_DEVICE_KEY = "bailongma-voice-mic-device-id";
@@ -3725,8 +3726,13 @@ function initTTSSettings() {
      const autoMic = document.getElementById("voice-auto-mic");
      if (autoMic) autoMic.checked = localStorage.getItem(VOICE_AUTO_MIC_KEY) === "true";
      const savedThresh = parseFloat(localStorage.getItem(VOICE_THRESHOLD_KEY) || "0.008");
-     if (voiceThreshSlider) voiceThreshSlider.value = String(savedThresh);
-     if (voiceThreshVal)    voiceThreshVal.textContent = savedThresh.toFixed(3);
+      if (voiceThreshSlider) voiceThreshSlider.value = String(savedThresh);
+      if (voiceThreshVal)    voiceThreshVal.textContent = savedThresh.toFixed(3);
+      const savedSilence = parseFloat(localStorage.getItem(VOICE_SILENCE_MS_KEY) || "3.0");
+      const silenceSlider = document.getElementById("voice-silence-ms");
+      const silenceVal = document.getElementById("voice-silence-ms-val");
+      if (silenceSlider) silenceSlider.value = String(savedSilence);
+      if (silenceVal) silenceVal.textContent = savedSilence.toFixed(1) + "s";
      await loadMicrophoneDevices();
      await loadOutputDevices();
 
@@ -3770,6 +3776,14 @@ function initTTSSettings() {
     });
   }
 
+  const voiceSilenceSlider = document.getElementById("voice-silence-ms");
+  const voiceSilenceVal = document.getElementById("voice-silence-ms-val");
+  if (voiceSilenceSlider && voiceSilenceVal) {
+    voiceSilenceSlider.addEventListener("input", () => {
+      voiceSilenceVal.textContent = parseFloat(voiceSilenceSlider.value).toFixed(1) + "s";
+    });
+  }
+
 
   if (saveVoiceBtn) {
     saveVoiceBtn.addEventListener("click", async () => {
@@ -3785,6 +3799,9 @@ function initTTSSettings() {
       localStorage.setItem(VOICE_AUTO_MIC_KEY,   String(autoMic));
       localStorage.setItem(VOICE_THRESHOLD_KEY,  String(threshold));
       localStorage.setItem(VOICE_PROVIDER_KEY,   provider);
+      const silenceSlider = document.getElementById("voice-silence-ms");
+      const silenceMs = parseFloat(silenceSlider?.value ?? "3.0");
+      localStorage.setItem(VOICE_SILENCE_MS_KEY, String(silenceMs));
       if (micDeviceId) localStorage.setItem(VOICE_MIC_DEVICE_KEY, micDeviceId);
       else localStorage.removeItem(VOICE_MIC_DEVICE_KEY);
 

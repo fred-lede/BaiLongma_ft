@@ -512,6 +512,14 @@ const createSettingsModal = () => `
               <input id="voice-auto-send" type="checkbox" checked style="width:auto;flex:none;">
             </div>
             <div class="settings-row">
+              <label class="settings-label" for="voice-silence-ms">静音延迟（秒）</label>
+              <div style="display:flex;align-items:center;gap:8px;flex:1;">
+                <input type="range" id="voice-silence-ms" min="1.0" max="6.0" step="0.5" value="3.0" style="flex:1;cursor:pointer;">
+                <span id="voice-silence-ms-val" style="min-width:3em;text-align:right;color:var(--ink2);font-size:13px;">3.0s</span>
+              </div>
+              <p class="settings-hint" style="margin:0;font-size:11px;color:var(--ink2);">说完一句话后等待多久自动发送。说话慢或长句子建议调大，默认 3s。</p>
+            </div>
+            <div class="settings-row">
               <label class="settings-label" for="voice-auto-mic">启动时自动开启麦克风</label>
               <input id="voice-auto-mic" type="checkbox" style="width:auto;flex:none;">
             </div>

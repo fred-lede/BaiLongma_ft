@@ -103,7 +103,7 @@ Music mode rules:
         type: 'object',
         properties: {
           prompt: { type: 'string', description: 'Image description. More detail is better.' },
-          aspect_ratio: { type: 'string', description: 'Aspect ratio, optional values: 1:1 default, 16:9, 4:3, 3:4, 9:16.' },
+          aspect_ratio: { type: 'string', description: 'Aspect ratio. IMPORTANT: You MUST extract ratio/orientation from the user\'s request and pass it here. Valid values: 1:1 (default), 16:9 (landscape/wide/横/横屏/横图), 4:3, 3:4, 9:16 (portrait/竖/竖屏/直/直式). When the user says "画一张 16:9 的..." or mentions any ratio or orientation, you MUST include this parameter.' },
           n: { type: 'number', description: 'Number of images to generate, 1-4, default 1.' },
         },
         required: ['prompt']

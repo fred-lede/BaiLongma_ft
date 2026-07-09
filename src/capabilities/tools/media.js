@@ -267,12 +267,27 @@ export async function execGenerateMusic({ prompt, lyrics, instrumental }) {
   return `音乐已生成：${relPath}（时长约 ${result.duration ?? '?'} 秒）`
 }
 
+// 从 prompt 文字中提取比例/方向关键词（LLM 未传 aspect_ratio 时的后备）
+function inferAspectRatio(prompt, fallback) {
+  const text = String(prompt || '')
+  if (/(?<!\d)16\s*[：:比]\s*9|16\s*比\s*9/.test(text)) return '16:9'
+  if (/(?<!\d)9\s*[：:比]\s*16|9\s*比\s*16/.test(text)) return '9:16'
+  if (/(?<!\d)4\s*[：:比]\s*3|4\s*比\s*3/.test(text)) return '4:3'
+  if (/(?<!\d)3\s*[：:比]\s*4|3\s*比\s*4/.test(text)) return '3:4'
+  if (/(?<!\d)1\s*[：:比]\s*1|1\s*比\s*1/.test(text)) return '1:1'
+  // 方向关键词
+  if (/(横屏|横图|横向|横版|横式|wide|landscape)/i.test(text)) return '16:9'
+  if (/(竖屏|竖图|竖向|竖版|竖式|直屏|直图|直向|直版|直式|portrait|vertical)/i.test(text)) return '9:16'
+  if (/(正方形|square)/i.test(text)) return '1:1'
+  return fallback
+}
+
 // generate_image：生成图片
-export async function execGenerateImage({ prompt, aspect_ratio = '1:1', n = 1 }) {
+export async function execGenerateImage({ prompt, aspect_ratio, n = 1 }) {
   if (!prompt) return '错误：未提供图片描述'
   if (isDailyLimitReached('image')) return '错误：今日图片生成配额已用完（50 次/天）'
   const validRatios = new Set(['1:1', '16:9', '4:3', '3:4', '9:16'])
-  const ratio = validRatios.has(aspect_ratio) ? aspect_ratio : '1:1'
+  const ratio = validRatios.has(aspect_ratio) ? aspect_ratio : inferAspectRatio(prompt, '1:1')
   const count = Math.min(Math.max(Math.floor(n) || 1, 1), 4)
 
   const result = await callCapability('image', { prompt, aspect_ratio: ratio, n: count })

@@ -301,49 +301,82 @@ function collectStreamBuffer(stream) {
 }
 
 /**
- * Synthesize text to speech and send as Telegram voice message.
- * Returns true if voice was sent, false to fall back to text.
+ * Chunk text at sentence boundaries, each chunk ≤ maxLen chars.
+ */
+function chunkTextForTTS(text, maxLen = 100) {
+  if (text.length <= maxLen) return [text]
+  // Split by sentence-ending punctuation or newlines
+  const segments = text.split(/(?<=[。！？\n])/g)
+  const chunks = []
+  let cur = ''
+  for (const seg of segments) {
+    const next = cur + seg
+    if (next.length > maxLen && cur) {
+      chunks.push(cur)
+      cur = seg
+    } else {
+      cur = next
+    }
+  }
+  if (cur) chunks.push(cur)
+  return chunks.length ? chunks : [text.slice(0, maxLen)]
+}
+
+/**
+ * Synthesize text to speech and send as Telegram voice message(s).
+ * Long text is chunked to avoid AetherMesh TTS truncation (≤100 chars per call),
+ * audio buffers are concatenated into one voice message.
  */
 async function sendTelegramVoice(chatId, text) {
   const token = env('TELEGRAM_BOT_TOKEN')
   if (!token) return false
   if (!text || !text.trim()) return false
-  console.log(`[Telegram] ▼ voice reply: chatId=${chatId} text="${text.slice(0, 80)}"`)
+  console.log(`[Telegram] ▼ voice reply: ${text.length} chars to chat ${chatId}`)
 
-  // Synthesize speech
   const creds = getTTSCredentials()
   console.log(`[Telegram] ▼ TTS config: provider=${creds.provider} voiceId=${creds.voiceId}`)
-  let buffer
-  try {
-    const stream = await streamTTS({
-      text: text.slice(0, 2000),
-      provider: creds.provider,
-      voiceId: creds.voiceId,
-      keys: creds,
-      language: creds.aethermeshLanguage || 'zh-cn',
-    })
-    buffer = await collectStreamBuffer(stream)
-    const inputChars = text.length
-    const kb = (buffer.length / 1024).toFixed(1)
-    console.log(`[Telegram] ▼ TTS synthesized: ${kb}KB for ${inputChars} chars (${(buffer.length / inputChars).toFixed(0)} B/char)`)
-    if (!buffer || buffer.length < 100) {
-      console.warn(`[Telegram] ▼ TTS buffer too small, fallback to text`)
-      return false
+
+  // Chunk and synthesize each part
+  const parts = chunkTextForTTS(text)
+  console.log(`[Telegram] ▼ TTS chunks: ${parts.length} (${parts.map(p => p.length).join('+')} chars)`)
+
+  const buffers = []
+  for (const part of parts) {
+    try {
+      const stream = await streamTTS({
+        text: part,
+        provider: creds.provider,
+        voiceId: creds.voiceId,
+        keys: creds,
+        language: creds.aethermeshLanguage || 'zh-cn',
+      })
+      const buf = await collectStreamBuffer(stream)
+      if (buf && buf.length >= 100) buffers.push(buf)
+      else console.warn(`[Telegram] ▼ TTS chunk too small (${buf?.length || 0}B), skipped`)
+    } catch (err) {
+      console.warn(`[Telegram] ▼ TTS chunk failed:`, err.message)
     }
-  } catch (err) {
-    console.warn(`[Telegram] ▼ TTS failed:`, err.message)
+  }
+
+  if (!buffers.length) {
+    console.warn(`[Telegram] ▼ all TTS chunks failed, fallback to text`)
     return false
   }
+
+  // Concatenate all audio buffers into one
+  const totalBytes = buffers.reduce((s, b) => s + b.length, 0)
+  const fullAudio = Buffer.concat(buffers)
+  console.log(`[Telegram] ▼ TTS total: ${(fullAudio.length / 1024).toFixed(1)}KB (${parts.length} chunks merged)`)
 
   // Upload and send as voice message
   try {
     const fd = new FormData()
     fd.append('chat_id', String(chatId))
-    fd.append('voice', buffer, { filename: 'reply.ogg', contentType: 'audio/ogg' })
+    fd.append('voice', fullAudio, { filename: 'reply.ogg', contentType: 'audio/ogg' })
     if (text.length > 100) {
       fd.append('caption', text.slice(0, 200))
     }
-    console.log(`[Telegram] ▼ uploading sendVoice... (${(buffer.length / 1024).toFixed(1)}KB)`)
+    console.log(`[Telegram] ▼ uploading sendVoice... (${(fullAudio.length / 1024).toFixed(1)}KB)`)
     const res = await multipartRequest(`https://api.telegram.org/bot${token}/sendVoice`, fd, 60000)
     console.log(`[Telegram] ▼ sendVoice result: ok=${res.ok} status=${res.status}`)
     return !!res.ok

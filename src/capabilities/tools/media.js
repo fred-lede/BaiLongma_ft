@@ -287,7 +287,10 @@ export async function execGenerateImage({ prompt, aspect_ratio, n = 1 }) {
   if (!prompt) return '错误：未提供图片描述'
   if (isDailyLimitReached('image')) return '错误：今日图片生成配额已用完（50 次/天）'
   const validRatios = new Set(['1:1', '16:9', '4:3', '3:4', '9:16'])
-  const ratio = validRatios.has(aspect_ratio) ? aspect_ratio : inferAspectRatio(prompt, '1:1')
+  // 优先级：prompt 文字推断 > LLM 传入的参数（LLM 常填入 "1:1" 默认值）
+  const fromPrompt = inferAspectRatio(prompt)
+  const ratio = fromPrompt || (validRatios.has(aspect_ratio) ? aspect_ratio : '1:1')
+  console.log(`[image] aspect_ratio: LLM=${aspect_ratio} inferred=${fromPrompt} final=${ratio}`)
   const count = Math.min(Math.max(Math.floor(n) || 1, 1), 4)
 
   const result = await callCapability('image', { prompt, aspect_ratio: ratio, n: count })

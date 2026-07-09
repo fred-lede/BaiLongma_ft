@@ -373,13 +373,23 @@ async function sendTelegramVoice(chatId, text) {
     const fd = new FormData()
     fd.append('chat_id', String(chatId))
     fd.append('voice', fullAudio, { filename: 'reply.ogg', contentType: 'audio/ogg' })
-    if (text.length > 100) {
-      fd.append('caption', text.slice(0, 200))
+    // Telegram voice caption limit is 1024 chars; send full text if it fits
+    if (text.length <= 1024) {
+      fd.append('caption', text)
+    } else {
+      fd.append('caption', text.slice(0, 1024))
     }
     console.log(`[Telegram] ▼ uploading sendVoice... (${(fullAudio.length / 1024).toFixed(1)}KB)`)
     const res = await multipartRequest(`https://api.telegram.org/bot${token}/sendVoice`, fd, 60000)
     console.log(`[Telegram] ▼ sendVoice result: ok=${res.ok} status=${res.status}`)
-    return !!res.ok
+    if (!res.ok) return false
+    // If text exceeds caption limit, send the remainder as a follow-up text message
+    if (text.length > 1024) {
+      requestJson(`https://api.telegram.org/bot${token}/sendMessage`, {
+        method: 'POST', body: { chat_id: Number(chatId), text },
+      }).catch(() => {})
+    }
+    return true
   } catch (err) {
     console.warn(`[Telegram] ▼ sendVoice upload failed:`, err.message)
     return false

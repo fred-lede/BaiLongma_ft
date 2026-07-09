@@ -96,14 +96,16 @@ export function createContinuousPolicy(core, { getAutoSend }) {
 
   // 自动发送：攒成一条，只有转写文本 SILENCE_SEND_MS 内没有变化才整条发出。
   // 底噪不会产生新字，因此不会顺延；ASR 发来重复 interim/final 也不会刷新计时。
-  function scheduleAutoSend() {
+  // delayMs 可选：覆盖默认静音延迟（final 句子未结束时翻倍，避免 VAD 误断句截断）。
+  function scheduleAutoSend(delayMs) {
     if (core.pttHolding) return;       // PTT 按住期间禁用自动发送（由 pttEnd 统一发送）
     if (getAutoSend?.() === false) return; // 关了自动发送 → 纯手动（回车 / 松 PTT）
     noteTranscriptActivity();
     if (autoSendTimer) return; // 已有计时器在跑，靠 lastTranscriptActivityTs 自校正，无需重置
+    const sendDelay = delayMs || SILENCE_SEND_MS;
     const tick = () => {
       const idle = Date.now() - lastTranscriptActivityTs;
-      if (idle >= SILENCE_SEND_MS) {
+      if (idle >= sendDelay) {
         autoSendTimer = null;
         // 先 flush ASR，让服务端把缓冲的音频转写成最终结果，
         // 再等一小段让 final transcript 回传后再发送，避免拿到半句 interim。
@@ -116,10 +118,10 @@ export function createContinuousPolicy(core, { getAutoSend }) {
         }, 400);
       } else {
         // 期间又识别出新字了 → 顺延到「最后新字 + 延迟窗口」
-        autoSendTimer = setTimeout(tick, SILENCE_SEND_MS - idle);
+        autoSendTimer = setTimeout(tick, sendDelay - idle);
       }
     };
-    autoSendTimer = setTimeout(tick, SILENCE_SEND_MS);
+    autoSendTimer = setTimeout(tick, sendDelay);
   }
 
   function cancelAutoSend() {
@@ -203,7 +205,8 @@ export function createContinuousPolicy(core, { getAutoSend }) {
   }
 
   // ─── core 钩子：收到一条 transcript 后的策略 ───
-  function onTranscript() {
+  let lastTranscriptEndsWithTerminator = false;
+  function onTranscript(msg, isFinal) {
     // 收到真实语音 → 取消所有误触发恢复机制（正常流程下这些本就处于关闭态，清理为 no-op）
     bargeinFastCheckActive = false;
     bargeinFastSilentFrames = 0;
@@ -211,7 +214,15 @@ export function createContinuousPolicy(core, { getAutoSend }) {
     const currentText = (core.getText?.() || '').trim();
     if (!currentText || currentText === lastObservedTranscriptText) return;
     lastObservedTranscriptText = currentText;
-    scheduleAutoSend();
+    const endsSentence = /[。！？\n]$/.test(currentText);
+    if (isFinal && !endsSentence) {
+      // final 结果但句子没结束（如 AetherMesh VAD 误判断句）→ silence 窗口翻倍，避免截断
+      lastTranscriptEndsWithTerminator = false;
+      scheduleAutoSend(SILENCE_SEND_MS * 2);
+    } else {
+      lastTranscriptEndsWithTerminator = endsSentence;
+      scheduleAutoSend();
+    }
   }
 
   // ─── core 钩子：会话停止时清理本策略的计时器/检测状态 ───

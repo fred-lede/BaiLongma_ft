@@ -51,7 +51,10 @@ export async function startTelegramConnector({ pushMessage, emitEvent } = {}) {
     try {
       const cfg = getVoiceConfig()
       const baseURL = (cfg.aethermeshBaseURL || '').replace(/\/+$/, '')
-      if (!baseURL) return null
+      if (!baseURL) {
+        console.log(`[Telegram] ▼ ASR skipped: aethermeshBaseURL not configured`)
+        return null
+      }
       const apiKey = cfg.aethermeshKey || ''
       const model = cfg.aethermeshAsrModel || 'whisper-large-v3'
 
@@ -63,6 +66,7 @@ export async function startTelegramConnector({ pushMessage, emitEvent } = {}) {
       const url = `${baseURL}/v1/audio/transcriptions`
       const headers = fd.getHeaders()
       if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`
+      console.log(`[Telegram] ▼ ASR request: POST ${url} model=${model} audio=${(audioBuffer.length / 1024).toFixed(1)}KB auth=${apiKey ? 'yes' : 'no'}`)
 
       const resp = await fetch(url, {
         method: 'POST',
@@ -71,15 +75,16 @@ export async function startTelegramConnector({ pushMessage, emitEvent } = {}) {
         signal: AbortSignal.timeout(60000),
       })
       if (!resp.ok) {
-        const err = await resp.text().catch(() => '')
-        console.warn(`[Telegram] transcription failed (${resp.status}): ${err.slice(0, 100)}`)
+        const errBody = await resp.text().catch(() => '')
+        console.warn(`[Telegram] ▼ ASR HTTP ${resp.status}: ${errBody.slice(0, 300)}`)
         return null
       }
       const json = await resp.json()
+      console.log(`[Telegram] ▼ ASR response:`, JSON.stringify(json))
       const text = (json.text || '').trim()
       return text || null
     } catch (err) {
-      console.warn('[Telegram] transcription error:', err.message)
+      console.warn(`[Telegram] ▼ ASR exception:`, err.message)
       return null
     }
   }
@@ -143,17 +148,20 @@ export async function startTelegramConnector({ pushMessage, emitEvent } = {}) {
         // Download and transcribe voice messages via AetherMesh Whisper
         if (msg.voice) {
           voiceReplyChats.add(chatId)
+          console.log(`[Telegram] ▼ voice received: file_id=${msg.voice.file_id}, duration=${msg.voice.duration}s, size=${msg.voice.file_size}`)
           try {
             const buffer = await downloadTelegramFileBuffer(msg.voice.file_id)
+            console.log(`[Telegram] ▼ audio downloaded: ${(buffer.length / 1024).toFixed(1)}KB`)
             const transcribed = await transcribeAudio(buffer, '.ogg')
             if (transcribed) {
               content = transcribed
-              console.log(`[Telegram] voice transcribed: "${transcribed.slice(0, 60)}"`)
+              console.log(`[Telegram] ▼ ASR result: "${transcribed}"`)
             } else {
+              console.log(`[Telegram] ▼ ASR returned null/empty, using placeholder`)
               content = `[语音消息 ${msg.voice.duration || '?'}s]`
             }
           } catch (err) {
-            console.warn('[Telegram] voice download/transcribe failed:', err.message)
+            console.warn(`[Telegram] ▼ voice exception:`, err.message)
             content = `[语音消息 ${msg.voice.duration || '?'}s]`
           }
         }
@@ -185,10 +193,10 @@ export async function startTelegramConnector({ pushMessage, emitEvent } = {}) {
 
         const fullContent = [...mediaMarkdowns, content].filter(Boolean).join('\n\n')
         const fromId = `telegram:${chatId}`
+        console.log(`[Telegram] ▼ push to LLM: content="${fullContent}" chatId=${chatId}`)
         pushMessage(fromId, fullContent, 'TELEGRAM', {
           social: { platform: 'telegram', chat_id: chatId, message_id: msg.message_id },
         })
-        console.log(`[DEBUG] Telegram message pushed: fromId=${fromId}, content="${fullContent.slice(0, 50)}", chatId=${chatId}`)
         emitEvent?.('message_in', {
           from_id: fromId,
           content: fullContent,
@@ -300,9 +308,11 @@ async function sendTelegramVoice(chatId, text) {
   const token = env('TELEGRAM_BOT_TOKEN')
   if (!token) return false
   if (!text || !text.trim()) return false
+  console.log(`[Telegram] ▼ voice reply: chatId=${chatId} text="${text.slice(0, 80)}"`)
 
   // Synthesize speech
   const creds = getTTSCredentials()
+  console.log(`[Telegram] ▼ TTS config: provider=${creds.provider} voiceId=${creds.voiceId}`)
   let buffer
   try {
     const stream = await streamTTS({
@@ -313,9 +323,13 @@ async function sendTelegramVoice(chatId, text) {
       language: creds.aethermeshLanguage || 'zh-cn',
     })
     buffer = await collectStreamBuffer(stream)
-    if (!buffer || buffer.length < 100) return false
+    console.log(`[Telegram] ▼ TTS synthesized: ${(buffer.length / 1024).toFixed(1)}KB`)
+    if (!buffer || buffer.length < 100) {
+      console.warn(`[Telegram] ▼ TTS buffer too small, fallback to text`)
+      return false
+    }
   } catch (err) {
-    console.warn('[Telegram] voice reply TTS failed:', err.message)
+    console.warn(`[Telegram] ▼ TTS failed:`, err.message)
     return false
   }
 
@@ -327,10 +341,12 @@ async function sendTelegramVoice(chatId, text) {
     if (text.length > 100) {
       fd.append('caption', text.slice(0, 200))
     }
+    console.log(`[Telegram] ▼ uploading sendVoice... (${(buffer.length / 1024).toFixed(1)}KB)`)
     const res = await multipartRequest(`https://api.telegram.org/bot${token}/sendVoice`, fd, 60000)
+    console.log(`[Telegram] ▼ sendVoice result: ok=${res.ok} status=${res.status}`)
     return !!res.ok
   } catch (err) {
-    console.warn('[Telegram] voice reply upload failed:', err.message)
+    console.warn(`[Telegram] ▼ sendVoice upload failed:`, err.message)
     return false
   }
 }

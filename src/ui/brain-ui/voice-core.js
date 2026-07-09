@@ -884,9 +884,12 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
     }
   }
 
-  // 向云端 ASR 请求立即给最终结果（PTT 松手 / 关闭时调用）
+  // 向云端 ASR 请求立即给最终结果（PTT 松手 / 自动发送 / 关闭时调用）
   function flushAsr() {
     try {
+      if (aethermeshAsrWs && aethermeshAsrWs.readyState === WebSocket.OPEN) {
+        aethermeshAsrWs.send(JSON.stringify({ type: 'flush' }));
+      }
       if (cloudWs && cloudWs.readyState === WebSocket.OPEN) {
         cloudWs.send(JSON.stringify({ type: 'flush' }));
       }

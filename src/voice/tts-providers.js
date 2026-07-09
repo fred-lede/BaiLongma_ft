@@ -433,7 +433,8 @@ async function streamAetherMesh({ text, voiceId, baseURL = 'http://localhost:800
   if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`
   const body = JSON.stringify({ model, input: text, voice: voiceId, language, response_format: 'mp3' })
   const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), 15000)
+  const ttsTimeout = Math.max(30000, text.length * 80) // ~80ms/char, min 30s
+  const timeoutId = setTimeout(() => controller.abort(), ttsTimeout)
   let resp
   try {
     resp = await aethermeshFetch(url, { method: 'POST', headers, body, signal: controller.signal })

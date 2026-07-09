@@ -6,11 +6,15 @@ import sharp from 'sharp'
 import { requestJson } from './http.js'
 import { env } from './utils.js'
 import { paths } from '../paths.js'
-import { getVoiceConfig } from '../config.js'
+import { getVoiceConfig, getTTSCredentials } from '../config.js'
+import { streamTTS } from '../voice/tts-providers.js'
 
 const POLL_INTERVAL_MS = 2000
 const RECONNECT_BASE_MS = 2000
 const RECONNECT_MAX_MS = 60000
+
+// Track chat IDs whose last incoming message was voice → reply with voice
+const voiceReplyChats = new Set()
 
 export async function startTelegramConnector({ pushMessage, emitEvent } = {}) {
   const token = env('TELEGRAM_BOT_TOKEN')
@@ -96,6 +100,7 @@ export async function startTelegramConnector({ pushMessage, emitEvent } = {}) {
         const msg = update.message
         if (!msg || msg.from?.is_bot) continue
 
+        const chatId = String(msg.chat.id)
         let content = msg.text || msg.caption || ''
         const mediaMarkdowns = []
 
@@ -134,6 +139,7 @@ export async function startTelegramConnector({ pushMessage, emitEvent } = {}) {
 
         // Download and transcribe voice messages via AetherMesh Whisper
         if (msg.voice) {
+          voiceReplyChats.add(chatId)
           try {
             const buffer = await downloadTelegramFileBuffer(msg.voice.file_id)
             const transcribed = await transcribeAudio(buffer, '.ogg')
@@ -152,7 +158,6 @@ export async function startTelegramConnector({ pushMessage, emitEvent } = {}) {
         if (!content && mediaMarkdowns.length === 0) continue
 
         const fullContent = [...mediaMarkdowns, content].filter(Boolean).join('\n\n')
-        const chatId = String(msg.chat.id)
         const fromId = `telegram:${chatId}`
         pushMessage(fromId, fullContent, 'TELEGRAM', {
           social: { platform: 'telegram', chat_id: chatId, message_id: msg.message_id },
@@ -252,6 +257,58 @@ export function startTelegramTyping(chatId) {
   }
 }
 
+function collectStreamBuffer(stream) {
+  return new Promise((resolve, reject) => {
+    const chunks = []
+    stream.on('data', c => chunks.push(c))
+    stream.on('end', () => resolve(Buffer.concat(chunks)))
+    stream.on('error', reject)
+  })
+}
+
+/**
+ * Synthesize text to speech and send as Telegram voice message.
+ * Returns true if voice was sent, false to fall back to text.
+ */
+async function sendTelegramVoice(chatId, text) {
+  const token = env('TELEGRAM_BOT_TOKEN')
+  if (!token) return false
+  if (!text || !text.trim()) return false
+
+  // Synthesize speech
+  const creds = getTTSCredentials()
+  let buffer
+  try {
+    const stream = await streamTTS({
+      text: text.slice(0, 2000),
+      provider: creds.provider,
+      voiceId: creds.voiceId,
+      keys: creds,
+      language: creds.aethermeshLanguage || 'zh-cn',
+    })
+    buffer = await collectStreamBuffer(stream)
+    if (!buffer || buffer.length < 100) return false
+  } catch (err) {
+    console.warn('[Telegram] voice reply TTS failed:', err.message)
+    return false
+  }
+
+  // Upload and send as voice message
+  try {
+    const fd = new FormData()
+    fd.append('chat_id', String(chatId))
+    fd.append('voice', buffer, { filename: 'reply.ogg', contentType: 'audio/ogg' })
+    if (text.length > 100) {
+      fd.append('caption', text.slice(0, 200))
+    }
+    const res = await multipartRequest(`https://api.telegram.org/bot${token}/sendVoice`, fd, 60000)
+    return !!res.ok
+  } catch (err) {
+    console.warn('[Telegram] voice reply upload failed:', err.message)
+    return false
+  }
+}
+
 function multipartRequest(url, fd, timeoutMs = 30000) {
   return new Promise((resolve, reject) => {
     const parsed = new URL(url)
@@ -306,6 +363,13 @@ export async function sendTelegramMessage(chatId, content) {
       }
       return { ok: true, platform: 'telegram', message_id: res.data?.result?.message_id || null }
     }
+  }
+
+  // When the last incoming message was voice, reply with synthesized speech
+  if (voiceReplyChats.has(String(chatId))) {
+    voiceReplyChats.delete(String(chatId))
+    const sent = await sendTelegramVoice(chatId, content)
+    if (sent) return { ok: true, platform: 'telegram' }
   }
 
   const res = await requestJson(`https://api.telegram.org/bot${token}/sendMessage`, {

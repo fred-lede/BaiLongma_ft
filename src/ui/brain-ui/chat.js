@@ -547,6 +547,7 @@ export function initChat({
     fileInput.type = "file"
     fileInput.accept = "image/*"
     fileInput.hidden = true
+    fileInput.multiple = true
     screenshotBtn.after(fileInput)
     screenshotBtn.title = "上傳圖片（AI 會以視覺分析）"
     screenshotBtn.addEventListener("click", () => fileInput.click());

@@ -68,10 +68,15 @@ export async function startTelegramConnector({ pushMessage, emitEvent } = {}) {
       if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`
       console.log(`[Telegram] ▼ ASR request: POST ${url} model=${model} audio=${(audioBuffer.length / 1024).toFixed(1)}KB auth=${apiKey ? 'yes' : 'no'}`)
 
+      const payload = fd.getBuffer()
+      const reqHeaders = fd.getHeaders()
+      reqHeaders['Content-Length'] = payload.length
+      if (apiKey) reqHeaders['Authorization'] = `Bearer ${apiKey}`
+
       const resp = await fetch(url, {
         method: 'POST',
-        body: fd,
-        headers,
+        body: payload,
+        headers: reqHeaders,
         signal: AbortSignal.timeout(60000),
       })
       if (!resp.ok) {

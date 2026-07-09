@@ -547,8 +547,30 @@ export function initChat({
     screenshotBtn.addEventListener("click", async () => {
       screenshotBtn.textContent = "⏳"
       try {
+        // Electron path: desktopCapturer via IPC (no macOS screen recording permission needed)
+        if (window.bailongma?.screenshotCapture) {
+          const result = await window.bailongma.screenshotCapture()
+          if (!result.ok) throw new Error(result.error || 'capture_failed')
+          const blob = await (await fetch(result.dataUrl)).blob()
+          const file = new File([blob], `screenshot-${Date.now()}.png`, { type: "image/png" });
+          addPastedImageFiles([file]);
+          openChat();
+          return
+        }
+        // Clipboard fallback (macOS Cmd+Shift+4 already in clipboard)
+        if (window.bailongma?.getLatestSystemScreenshot) {
+          const result = await window.bailongma.getLatestSystemScreenshot({ preferClipboard: true })
+          if (result?.ok) {
+            const blob = await (await fetch(result.dataUrl)).blob()
+            const file = new File([blob], result.filename || `screenshot-${Date.now()}.png`, { type: result.mime || "image/png" });
+            addPastedImageFiles([file]);
+            openChat();
+            return
+          }
+        }
+        // Browser fallback: getDisplayMedia
         if (!navigator.mediaDevices?.getDisplayMedia) {
-          throw new Error("navigator.mediaDevices.getDisplayMedia 不可用（非安全上下文/Electron 限制）")
+          throw new Error("navigator.mediaDevices.getDisplayMedia 不可用（非安全上下文/浏览器限制）")
         }
         const stream = await navigator.mediaDevices.getDisplayMedia({
           video: { displaySurface: "monitor" },
@@ -581,7 +603,7 @@ export function initChat({
           // user cancelled the picker — no feedback needed
         } else {
           console.warn("[screenshot] capture failed:", err.message)
-          screenshotToast("⚠️ 截屏失败: " + err.message)
+          screenshotToast("⚠️ 截屏失败:" + err.message)
         }
       } finally {
         screenshotBtn.textContent = origBtnText

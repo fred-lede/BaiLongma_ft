@@ -15,7 +15,7 @@ if (IS_WIN) {
   } catch (_) {}
 }
 
-const { app, BrowserWindow, shell, dialog, Menu, ipcMain, Tray, nativeImage, clipboard } = require('electron')
+const { app, BrowserWindow, shell, dialog, Menu, ipcMain, Tray, nativeImage, clipboard, desktopCapturer } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const net = require('net')
@@ -454,13 +454,13 @@ async function createWindow({ loadStartup = true } = {}) {
     },
   })
 
-  // 授予麦克风权限（语音输入需要）
+  // 授予麦克风、摄像头权限（语音输入 + 截屏需要）
   mainWindow.webContents.session.setPermissionRequestHandler((webContents, permission, callback) => {
-    if (permission === 'media') return callback(true)
+    if (permission === 'media' || permission === 'display-capture') return callback(true)
     callback(false)
   })
   mainWindow.webContents.session.setPermissionCheckHandler((webContents, permission) => {
-    if (permission === 'media') return true
+    if (permission === 'media' || permission === 'display-capture') return true
     return false
   })
 
@@ -1210,6 +1210,19 @@ function setupAutoUpdater() {
 
 ipcMain.handle('app:get-version', () => app.getVersion())
 ipcMain.handle('startup:get-progress', () => cloneStartupProgressState())
+
+ipcMain.handle('screenshot:capture', async () => {
+  try {
+    const sources = await desktopCapturer.getSources({ types: ['screen'] })
+    if (!sources.length) return { ok: false, error: 'no_screen_source' }
+    const png = sources[0].thumbnail.toPNG()
+    if (!png?.length) return { ok: false, error: 'empty_thumbnail' }
+    return { ok: true, dataUrl: `data:image/png;base64,${png.toString('base64')}` }
+  } catch (err) {
+    console.warn('[screenshot] desktopCapturer failed:', err?.message || err)
+    return { ok: false, error: err?.message || 'desktop_capturer_error' }
+  }
+})
 
 ipcMain.handle('system-screenshot:get-latest', async (_event, options = {}) => {
   const maxAgeMs = Number(options?.maxAgeMs || 15 * 60 * 1000)

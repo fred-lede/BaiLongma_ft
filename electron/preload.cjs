@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('bailongma', {
   startDownload: () => ipcRenderer.invoke('updater:start-download'),
   quitAndInstall: () => ipcRenderer.invoke('updater:quit-and-install'),
   getLatestSystemScreenshot: (options) => ipcRenderer.invoke('system-screenshot:get-latest', options || {}),
+  screenshotCapture: () => ipcRenderer.invoke('screenshot:capture'),
   getStartupProgress: () => ipcRenderer.invoke('startup:get-progress'),
   onStartupProgress: (handler) => {
     if (typeof handler !== 'function') return () => {}

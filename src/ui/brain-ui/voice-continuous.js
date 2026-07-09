@@ -105,9 +105,15 @@ export function createContinuousPolicy(core, { getAutoSend }) {
       const idle = Date.now() - lastTranscriptActivityTs;
       if (idle >= SILENCE_SEND_MS) {
         autoSendTimer = null;
-        lastObservedTranscriptText = '';
-        core.setStatus('processing');
-        core.sendRecognizedVoiceText();
+        // 先 flush ASR，让服务端把缓冲的音频转写成最终结果，
+        // 再等一小段让 final transcript 回传后再发送，避免拿到半句 interim。
+        core.flushAsr();
+        setTimeout(() => {
+          core.suppressIncomingTranscripts(2000); // 吞掉 flush 尾随的 final，避免二次发送
+          lastObservedTranscriptText = '';
+          core.setStatus('processing');
+          core.sendRecognizedVoiceText();
+        }, 400);
       } else {
         // 期间又识别出新字了 → 顺延到「最后新字 + 延迟窗口」
         autoSendTimer = setTimeout(tick, SILENCE_SEND_MS - idle);

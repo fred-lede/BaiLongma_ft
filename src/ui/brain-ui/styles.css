@@ -4420,18 +4420,3 @@ body.worldcup-mode .console > #voice-panel .voice-transcript {
   opacity: 1;
   transform: translateX(-50%) translateY(0);
 }
-.screenshot-toast .screenshot-settings-btn {
-  display: block;
-  margin: 8px auto 0;
-  padding: 6px 20px;
-  border: 1px solid rgba(255,255,255,0.5);
-  border-radius: 8px;
-  background: transparent;
-  color: #fff;
-  font-size: 13px;
-  cursor: pointer;
-  pointer-events: auto;
-}
-.screenshot-toast .screenshot-settings-btn:hover {
-  background: rgba(255,255,255,0.15);
-}

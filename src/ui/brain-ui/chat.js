@@ -543,111 +543,20 @@ export function initChat({
 
   const screenshotBtn = document.getElementById("screenshot-btn");
   if (screenshotBtn) {
-    const origBtnText = screenshotBtn.textContent
-    screenshotBtn.addEventListener("click", async () => {
-      screenshotBtn.textContent = "⏳"
-      try {
-        // Try 1: getDisplayMedia in renderer (triggers native macOS permission prompt)
-        if (navigator.mediaDevices?.getDisplayMedia) {
-          try {
-            const stream = await navigator.mediaDevices.getDisplayMedia({
-              video: true,
-              audio: false,
-            });
-            const video = document.createElement("video");
-            video.srcObject = stream;
-            video.muted = true;
-            await video.play();
-            const canvas = document.createElement("canvas");
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
-            const ctx = canvas.getContext("2d");
-            ctx.drawImage(video, 0, 0);
-            stream.getTracks().forEach((t) => t.stop());
-            canvas.toBlob(
-              (blob) => {
-                if (!blob) return;
-                const file = new File([blob], `screenshot-${Date.now()}.png`, { type: "image/png" });
-                addPastedImageFiles([file]);
-                openChat();
-              },
-              "image/png",
-              0.92
-            );
-            return
-          } catch (gmErr) {
-            if (gmErr.name === "NotAllowedError") {
-              // still try Electron IPC fallback before giving up
-            } else if (gmErr.name === "AbortError") {
-              screenshotBtn.textContent = origBtnText
-              return // user cancelled picker, silent
-            } else {
-              console.warn("[screenshot] getDisplayMedia:", gmErr.message)
-            }
-          }
-        }
-        // Try 2: Electron IPC (desktopCapturer + clipboard)
-        if (window.bailongma?.screenshotCapture) {
-          const result = await window.bailongma.screenshotCapture()
-          if (result.ok) {
-            const blob = await (await fetch(result.dataUrl)).blob()
-            const file = new File([blob], `screenshot-${Date.now()}.png`, { type: "image/png" });
-            addPastedImageFiles([file]);
-            openChat();
-            return
-          }
-          if (result.error === 'NEED_PERMISSION') {
-            showPermissionError()
-            return
-          }
-        }
-        // Try 3: clipboard (non-Electron path)
-        if (window.bailongma?.getLatestSystemScreenshot) {
-          const result = await window.bailongma.getLatestSystemScreenshot({ preferClipboard: true })
-          if (result?.ok) {
-            const blob = await (await fetch(result.dataUrl)).blob()
-            const file = new File([blob], result.filename || `screenshot-${Date.now()}.png`, { type: result.mime || "image/png" });
-            addPastedImageFiles([file]);
-            openChat();
-            return
-          }
-        }
-        showPermissionError()
-      } catch (err) {
-        console.warn("[screenshot] unexpected error:", err.message)
-        screenshotToast("⚠️ 截屏失败:" + err.message)
-      } finally {
-        screenshotBtn.textContent = origBtnText
-      }
+    const fileInput = document.createElement("input")
+    fileInput.type = "file"
+    fileInput.accept = "image/*"
+    fileInput.hidden = true
+    screenshotBtn.after(fileInput)
+    screenshotBtn.title = "上傳圖片（AI 會以視覺分析）"
+    screenshotBtn.addEventListener("click", () => fileInput.click());
+    fileInput.addEventListener("change", () => {
+      const files = Array.from(fileInput.files || [])
+      fileInput.value = ""
+      if (!files.length) return
+      addPastedImageFiles(files)
+      openChat()
     });
-    function showPermissionError() {
-      const el = document.createElement("div")
-      el.className = "screenshot-toast"
-      el.innerHTML = "⚠️ 需要螢幕錄製權限<br><small>系統設定 > 隱私與安全性 > 螢幕錄製<br>加入 Bailongma 後重試</small>"
-      const btn = document.createElement("button")
-      btn.textContent = "開啟設定"
-      btn.className = "screenshot-settings-btn"
-      btn.onclick = () => {
-        window.bailongma?.openScreenRecordingSettings?.()
-        el.remove()
-      }
-      el.appendChild(btn)
-      document.body.appendChild(el)
-      requestAnimationFrame(() => el.classList.add("show"))
-      el.querySelector("button")?.addEventListener("click", () => {
-        window.bailongma?.openScreenRecordingSettings?.()
-        el.remove()
-      })
-      setTimeout(() => { el.classList.remove("show"); setTimeout(() => el.remove(), 300) }, 10000)
-    }
-    function screenshotToast(msg) {
-      const el = document.createElement("div")
-      el.className = "screenshot-toast"
-      el.textContent = msg
-      document.body.appendChild(el)
-      requestAnimationFrame(() => el.classList.add("show"))
-      setTimeout(() => { el.classList.remove("show"); setTimeout(() => el.remove(), 300) }, 4000)
-    }
   }
   msgInput.addEventListener("keydown", event => {
     if (handleSlashKeydown(event)) return;

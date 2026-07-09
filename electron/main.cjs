@@ -15,13 +15,11 @@ if (IS_WIN) {
   } catch (_) {}
 }
 
-const { app, BrowserWindow, shell, dialog, Menu, ipcMain, Tray, nativeImage, clipboard, desktopCapturer } = require('electron')
+const { app, BrowserWindow, shell, dialog, Menu, ipcMain, Tray, nativeImage, clipboard } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const net = require('net')
 const http = require('http')
-const { execFile } = require('child_process')
-const os = require('os')
 const { EventEmitter } = require('events')
 const { pathToFileURL } = require('url')
 const { autoUpdater } = require('electron-updater')
@@ -456,13 +454,13 @@ async function createWindow({ loadStartup = true } = {}) {
     },
   })
 
-  // 授予麦克风、摄像头权限（语音输入 + 截屏需要）
+  // 授予麦克风权限（语音输入需要）
   mainWindow.webContents.session.setPermissionRequestHandler((webContents, permission, callback) => {
-    if (permission === 'media' || permission === 'display-capture') return callback(true)
+    if (permission === 'media') return callback(true)
     callback(false)
   })
   mainWindow.webContents.session.setPermissionCheckHandler((webContents, permission) => {
-    if (permission === 'media' || permission === 'display-capture') return true
+    if (permission === 'media') return true
     return false
   })
 
@@ -1212,40 +1210,6 @@ function setupAutoUpdater() {
 
 ipcMain.handle('app:get-version', () => app.getVersion())
 ipcMain.handle('startup:get-progress', () => cloneStartupProgressState())
-
-ipcMain.handle('screenshot:capture', async () => {
-  // Try 1: desktopCapturer
-  try {
-    const sources = await desktopCapturer.getSources({ types: ['screen'] })
-    if (sources.length) {
-      const png = sources[0].thumbnail.toPNG()
-      if (png?.length) {
-        return { ok: true, dataUrl: `data:image/png;base64,${png.toString('base64')}` }
-      }
-    }
-  } catch (err) {
-    console.warn('[screenshot] desktopCapturer:', err?.message || err)
-  }
-  // Try 2: clipboard (macOS Cmd+Shift+4)
-  try {
-    const image = clipboard.readImage()
-    if (image && !image.isEmpty()) {
-      const png = image.toPNG()
-      if (png?.length) {
-        return { ok: true, dataUrl: `data:image/png;base64,${png.toString('base64')}` }
-      }
-    }
-  } catch (err) {
-    console.warn('[screenshot] clipboard:', err?.message || err)
-  }
-  return { ok: false, error: 'NEED_PERMISSION' }
-})
-
-ipcMain.handle('screenshot:open-settings', () => {
-  if (os.platform() === 'darwin') {
-    shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture')
-  }
-})
 
 ipcMain.handle('system-screenshot:get-latest', async (_event, options = {}) => {
   const maxAgeMs = Number(options?.maxAgeMs || 15 * 60 * 1000)

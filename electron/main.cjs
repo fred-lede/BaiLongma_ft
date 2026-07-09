@@ -1212,16 +1212,31 @@ ipcMain.handle('app:get-version', () => app.getVersion())
 ipcMain.handle('startup:get-progress', () => cloneStartupProgressState())
 
 ipcMain.handle('screenshot:capture', async () => {
+  // Try desktopCapturer first (fastest, full-screen, no picker)
   try {
     const sources = await desktopCapturer.getSources({ types: ['screen'] })
-    if (!sources.length) return { ok: false, error: 'no_screen_source' }
-    const png = sources[0].thumbnail.toPNG()
-    if (!png?.length) return { ok: false, error: 'empty_thumbnail' }
-    return { ok: true, dataUrl: `data:image/png;base64,${png.toString('base64')}` }
+    if (sources.length) {
+      const png = sources[0].thumbnail.toPNG()
+      if (png?.length) {
+        return { ok: true, dataUrl: `data:image/png;base64,${png.toString('base64')}` }
+      }
+    }
   } catch (err) {
     console.warn('[screenshot] desktopCapturer failed:', err?.message || err)
-    return { ok: false, error: err?.message || 'desktop_capturer_error' }
   }
+  // Fallback: clipboard (macOS Cmd+Shift+4)
+  try {
+    const image = clipboard.readImage()
+    if (image && !image.isEmpty()) {
+      const png = image.toPNG()
+      if (png?.length) {
+        return { ok: true, dataUrl: `data:image/png;base64,${png.toString('base64')}` }
+      }
+    }
+  } catch (err) {
+    console.warn('[screenshot] clipboard fallback failed:', err?.message || err)
+  }
+  return { ok: false, error: 'No screen capture available. Try granting Screen Recording permission in System Settings > Privacy & Security.' }
 })
 
 ipcMain.handle('system-screenshot:get-latest', async (_event, options = {}) => {

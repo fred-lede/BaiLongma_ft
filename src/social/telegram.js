@@ -1,5 +1,6 @@
 import path from 'path'
 import fs from 'fs'
+import http from 'http'
 import https from 'https'
 import FormData from 'form-data'
 import sharp from 'sharp'
@@ -64,29 +65,20 @@ export async function startTelegramConnector({ pushMessage, emitEvent } = {}) {
       fd.append('response_format', 'json')
 
       const url = `${baseURL}/v1/audio/transcriptions`
-      const headers = fd.getHeaders()
-      if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`
       console.log(`[Telegram] ▼ ASR request: POST ${url} model=${model} audio=${(audioBuffer.length / 1024).toFixed(1)}KB auth=${apiKey ? 'yes' : 'no'}`)
 
-      const payload = fd.getBuffer()
-      const reqHeaders = fd.getHeaders()
-      reqHeaders['Content-Length'] = payload.length
-      if (apiKey) reqHeaders['Authorization'] = `Bearer ${apiKey}`
-
-      const resp = await fetch(url, {
-        method: 'POST',
-        body: payload,
-        headers: reqHeaders,
-        signal: AbortSignal.timeout(60000),
-      })
+      const extraHeaders = {}
+      if (apiKey) {
+        extraHeaders['Authorization'] = `Bearer ${apiKey}`
+        fd.append('api_key', apiKey) // also try as form field
+      }
+      const resp = await multipartRequest(url, fd, 60000, extraHeaders)
       if (!resp.ok) {
-        const errBody = await resp.text().catch(() => '')
-        console.warn(`[Telegram] ▼ ASR HTTP ${resp.status}: ${errBody.slice(0, 300)}`)
+        console.warn(`[Telegram] ▼ ASR HTTP ${resp.status}: body=${(resp.text || '').slice(0, 300)}`)
         return null
       }
-      const json = await resp.json()
-      console.log(`[Telegram] ▼ ASR response:`, JSON.stringify(json))
-      const text = (json.text || '').trim()
+      console.log(`[Telegram] ▼ ASR response:`, JSON.stringify(resp.data))
+      const text = (resp.data?.text || '').trim()
       return text || null
     } catch (err) {
       console.warn(`[Telegram] ▼ ASR exception:`, err.message)
@@ -356,20 +348,22 @@ async function sendTelegramVoice(chatId, text) {
   }
 }
 
-function multipartRequest(url, fd, timeoutMs = 30000) {
+function multipartRequest(url, fd, timeoutMs = 30000, extraHeaders = {}) {
   return new Promise((resolve, reject) => {
     const parsed = new URL(url)
     const payload = fd.getBuffer()
-    const headers = fd.getHeaders()
+    const headers = { ...fd.getHeaders(), ...extraHeaders }
     headers['Content-Length'] = payload.length
+    const isHttp = parsed.protocol === 'http:'
+    const mod = isHttp ? http : https
     const opts = {
       hostname: parsed.hostname,
-      port: parsed.port || 443,
+      port: parsed.port || (isHttp ? 80 : 443),
       path: parsed.pathname + parsed.search,
       method: 'POST',
       headers,
     }
-    const req = https.request(opts, res => {
+    const req = mod.request(opts, res => {
       const chunks = []
       res.on('data', c => chunks.push(c))
       res.on('end', () => {

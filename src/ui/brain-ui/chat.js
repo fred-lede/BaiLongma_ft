@@ -551,7 +551,7 @@ export function initChat({
         if (navigator.mediaDevices?.getDisplayMedia) {
           try {
             const stream = await navigator.mediaDevices.getDisplayMedia({
-              video: { displaySurface: "monitor" },
+              video: true,
               audio: false,
             });
             const video = document.createElement("video");

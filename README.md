@@ -361,6 +361,8 @@ Bailongma 通过 `analyze_image` 工具让 LLM 理解图片内容。模型在对
 
 > ⚠️ XTTS-v2 需要先通过 `POST /v1/voices` 注册/克隆声音，`ttsVoiceId` 应使用注册后返回的 UUID，而非模型名。
 
+AetherMesh 也提供语音识别（ASR）服务。Bailongma 使用其 OpenAI 兼容的 `/v1/audio/transcriptions`（文件上传）和 WebSocket `/v1/audio/transcriptions/stream`（实时流式）端点进行语音转文字，支持 Telegram 语音消息和 Brain UI 语音输入。
+
 ### 逐人语音偏好
 
 在人物卡片中可以为每个角色指定独立的 TTS 语言和音色。当 Agent 对该角色说话时，会自动使用其对应的语言和音色进行合成。如果角色配了非其语言的文本，系统会自动翻译后再合成语音。
@@ -398,6 +400,7 @@ TELEGRAM_BOT_TOKEN=<your-bot-token>
 - 自动重连（指数退避，2s → 60s）
 - 消息进入主循环统一处理，回复按渠道路由返回 Telegram
 - 支持 SSE 事件流推送社交状态变化
+- **语音消息收发**：语音消息自动转文字（AetherMesh Whisper），回复以 TTS 语音返回。可通过 `/voice auto|on|off` 命令控制模式。需先配置 AetherMesh 语音服务。
 
 ## 数据与持久化
 

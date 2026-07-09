@@ -12,5 +12,15 @@
 - **Voice tab credential fields show as empty**: Backend returns `{ configured: bool }` for credential fields but frontend never checked this. Added `setCredentialIndicator()` to show "已配置，留空则不修改" with green border on load.
 - **AetherMesh ASR fields also not showing indicator**: Added `setCredentialIndicator` for AetherMesh key/base URL.
 
-### Known
-- Model sometimes concatenates tool names (`send_messagegenerate_image`) — auto-ack mechanism handles progress notes for slow tools; prompt should not instruct the model to manually call `send_message`.
+## 2026-07-10
+
+### Added
+- **Telegram voice message support**: `msg.voice` handler downloads OGG audio, transcribes via AetherMesh Whisper (`POST /v1/audio/transcriptions`), uses transcribed text as message content. Falls back to `[语音消息 Ns]` placeholder if ASR fails.
+- **Telegram voice reply**: When incoming message is voice, bot replies with TTS-synthesized audio via `sendVoice` API. Long text is chunked (≤100 chars per TTS call) and MP3 buffers concatenated to avoid server truncation. Caption includes full text (up to 1024 chars).
+- **`/voice auto|on|off` command**: Per-chat voice reply mode control via Telegram. `auto` follows input type, `on` forces voice, `off` forces text.
+- **Persistent voice flag**: Voice reply flag persists across all bot replies until user sends a text message (not just first reply).
+
+### Fixed
+- **ASR multipart body parsing**: `form-data` stream incompatible with Node.js `fetch` — switched to `multipartRequest` (native `http`/`https.request`) with proper auth headers.
+- **AetherMesh TTS timeout**: Hardcoded 15s timeout in `streamAetherMesh` → dynamic `max(30000, text.length * 80)` ms.
+- **TUI voice input truncation**: `flushAsr()` now sends to both `aethermeshAsrWs` and `cloudWs`. Auto-send now flushes ASR + waits 400ms for final transcript. When final result doesn't end with sentence terminator (。！？\n), silence delay doubles to 6s to avoid VAD mid-sentence cutoff.

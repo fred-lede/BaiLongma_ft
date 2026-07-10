@@ -156,6 +156,7 @@ export async function handleSettingsRoutes(req, res, url, { requireLocalOrToken,
       setSocialConfig(updates)
       const PLATFORM_KEYS = {
         discord: ['DISCORD_BOT_TOKEN'],
+        telegram: ['TELEGRAM_BOT_TOKEN'],
       }
       for (const [platform, keys] of Object.entries(PLATFORM_KEYS)) {
         if (keys.some(k => updates[k])) {

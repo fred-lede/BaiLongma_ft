@@ -9,7 +9,7 @@ import { env } from './utils.js'
 import { paths } from '../paths.js'
 import { getVoiceConfig, getTTSCredentials } from '../config.js'
 import { streamTTS } from '../voice/tts-providers.js'
-import { extractVideoFrames, findFFmpeg } from '../media/video-frame.js'
+import { extractVideoFrames, findFFmpeg, ensureFFmpeg } from '../media/video-frame.js'
 
 const POLL_INTERVAL_MS = 2000
 const RECONNECT_BASE_MS = 2000
@@ -175,7 +175,10 @@ export async function startTelegramConnector({ pushMessage, emitEvent } = {}) {
           console.log(`[Telegram] 🎬 video received: file_id=${fileId}, duration=${dur}s`)
           sendTelegramChatAction(chatId, 'upload_video').catch(() => {})
           try {
-            const ffmpegOk = await findFFmpeg()
+            let ffmpegOk = await findFFmpeg()
+            if (!ffmpegOk) {
+              try { ffmpegOk = await ensureFFmpeg() } catch {}
+            }
             if (!ffmpegOk) {
               console.warn('[Telegram] 🎬 ffmpeg not available, skipping frame extraction')
               mediaMarkdowns.push(`[视频 ${dur || '?'}s — 无法提取画面，请安装 ffmpeg]`)

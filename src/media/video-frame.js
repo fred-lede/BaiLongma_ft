@@ -53,12 +53,24 @@ function commonBinaryDirs() {
   if (process.platform === 'win32') {
     const localAppData = process.env.LOCALAPPDATA || ''
     const userProfile = process.env.USERPROFILE || ''
-    return [
+    const winDir = process.env.WINDIR || 'C:\\Windows'
+    const systemDrive = process.env.SystemDrive || 'C:'
+    const programData = process.env.ProgramData || 'C:\\ProgramData'
+    const paths = [
       'C:\\Program Files\\ffmpeg\\bin',
+      'D:\\mytools\\ffmpeg\\bin',
       localAppData ? path.join(localAppData, 'ffmpeg', 'bin') : '',
       userProfile ? path.join(userProfile, 'scoop', 'apps', 'ffmpeg', 'current', 'bin') : '',
       userProfile ? path.join(userProfile, 'mytools', 'ffmpeg', 'bin') : '',
-    ].filter(Boolean)
+      path.join(winDir, 'System32'),
+    ]
+    // 加上各磁碟常見路徑
+    for (const drive of [systemDrive[0], 'D', 'E']) {
+      paths.push(`${drive}:\\ffmpeg\\bin`)
+      paths.push(`${drive}:\\tools\\ffmpeg\\bin`)
+      paths.push(`${drive}:\\mytools\\ffmpeg\\bin`)
+    }
+    return paths.filter(Boolean)
   }
   return []
 }

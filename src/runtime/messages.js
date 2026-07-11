@@ -28,7 +28,7 @@ function localMediaChatToDataUrl(url) {
     const mime = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg'
     return `data:${mime};base64,${buf.toString('base64')}`
   } catch {
-    return url
+    return null
   }
 }
 
@@ -47,7 +47,11 @@ function convertMarkdownImagesToBlocks(content) {
       parts.push({ type: 'text', text: content.slice(lastIndex, match.index) })
     }
     const imageUrl = localMediaChatToDataUrl(match[2])
-    parts.push({ type: 'image_url', image_url: { url: imageUrl } })
+    if (imageUrl) {
+      parts.push({ type: 'image_url', image_url: { url: imageUrl } })
+    } else {
+      parts.push({ type: 'text', text: match[1] ? `[image: ${match[1]}]` : '[image]' })
+    }
     lastIndex = match.index + match[0].length
   }
   const remaining = content.slice(lastIndex).trim()

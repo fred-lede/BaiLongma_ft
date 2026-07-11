@@ -103,14 +103,26 @@ export async function getVideoDuration(input) {
   const inputPath = tmp || input
   try {
     if (tmp) fs.writeFileSync(tmp, input)
-    const { stdout, stderr } = await execFile(bin, [
-      '-i', inputPath,
-      '-f', 'null',
-      '-',
-    ], { timeout: 15000 })
-    const match = (stdout + stderr).match(/Duration:\s*(\d+):(\d+):(\d+)\.(\d+)/)
-    if (!match) return 0
-    return parseInt(match[1]) * 3600 + parseInt(match[2]) * 60 + parseInt(match[3]) + parseInt(match[4]) / 100
+    const duration = await new Promise((resolve, reject) => {
+      const cp = spawn(bin, ['-i', inputPath], { timeout: 10000 })
+      let done = false
+      let buf = ''
+      cp.stderr.on('data', d => {
+        if (done) return
+        buf += d.toString()
+        const m = buf.match(/Duration:\s*(\d+):(\d+):(\d+)\.(\d+)/)
+        if (m) {
+          done = true
+          cp.kill()
+          resolve(parseInt(m[1]) * 3600 + parseInt(m[2]) * 60 + parseInt(m[3]) + parseInt(m[4]) / 100)
+        }
+      })
+      cp.on('error', reject)
+      cp.on('exit', () => {
+        if (!done) resolve(null)
+      })
+    })
+    return duration
   } finally {
     if (tmp) try { fs.unlinkSync(tmp) } catch {}
   }

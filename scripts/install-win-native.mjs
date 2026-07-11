@@ -17,5 +17,5 @@ if (winDeps.length === 0) {
 }
 
 console.log(`[install-win-native] installing ${winDeps.length} win32-x64 sharp deps...`)
-execSync(`npm install --no-save ${winDeps.join(' ')}`, { stdio: 'inherit', cwd: resolve(__dirname, '..') })
+execSync(`npm install --ignore-scripts --no-save ${winDeps.join(' ')}`, { stdio: 'inherit', cwd: resolve(__dirname, '..') })
 console.log('[install-win-native] done')

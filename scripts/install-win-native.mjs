@@ -40,10 +40,17 @@ async function installSharpWin32() {
 }
 
 async function installBetterSqlite3Win32() {
-  console.log('[install-win-native] installing better-sqlite3 win32-x64 for Electron 33...')
+  console.log('[install-win-native] installing better-sqlite3 win32-x64 for Electron...')
   const pkgDir = resolve(ROOT, 'node_modules', 'better-sqlite3')
   const { version } = JSON.parse(readFileSync(resolve(pkgDir, 'package.json'), 'utf-8'))
-  const abi = '132' // Electron 33 ABI
+  // Lookup Electron ABI from node-abi (same package @electron/rebuild uses)
+  const electronPkg = resolve(ROOT, 'node_modules', 'electron', 'package.json')
+  const electronVer = JSON.parse(readFileSync(electronPkg, 'utf-8')).version
+  const nodeAbiDir = resolve(ROOT, 'node_modules', '@electron', 'rebuild', 'node_modules', 'node-abi')
+  const abi = execSync(
+    `node -e "console.log(require('${nodeAbiDir}').getAbi('${electronVer}', 'electron'))"`,
+    { encoding: 'utf-8' }
+  ).trim()
   const filename = `better-sqlite3-v${version}-electron-v${abi}-win32-x64.tar.gz`
   const url = `https://github.com/WiseLibs/better-sqlite3/releases/download/v${version}/${filename}`
   const tgzPath = resolve(TMP, filename)

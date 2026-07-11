@@ -4,6 +4,7 @@
   "version": "2.1.485",
   "description": "A continuously running digital consciousness framework",
   "type": "module",
+  "allowScripts": ["sharp", "electron", "onnxruntime-node", "protobufjs"],
   "main": "electron/main.cjs",
   "author": {
     "name": "xiaoyuanda666-ship-it"

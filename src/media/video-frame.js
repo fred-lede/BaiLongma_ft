@@ -15,17 +15,30 @@ function cacheDir() {
 }
 
 async function findBinary(name) {
+  // Try which/where first (uses PATH)
   try {
     const cmd = process.platform === 'win32' ? 'where' : 'which'
     const { stdout } = await execFile(cmd, [name])
     const p = (stdout || '').trim().split('\n')[0]
     if (p && fs.existsSync(p)) return p
   } catch {}
+  // Check cached location
   const cached = path.join(cacheDir(), name)
   if (fs.existsSync(cached)) return cached
+  // Search common install directories
   for (const dir of commonBinaryDirs()) {
     const p = path.join(dir, name)
     if (fs.existsSync(p)) return p
+  }
+  // Windows: search PATH entries directly (Electron may not inherit user PATH)
+  if (process.platform === 'win32') {
+    const pathDirs = (process.env.PATH || '').split(';').filter(Boolean)
+    for (const dir of pathDirs) {
+      try {
+        const p = path.join(dir, name)
+        if (fs.existsSync(p)) return path.resolve(p)
+      } catch {}
+    }
   }
   return null
 }
@@ -36,6 +49,16 @@ function commonBinaryDirs() {
   }
   if (process.platform === 'linux') {
     return ['/usr/local/bin', '/usr/bin', '/snap/bin']
+  }
+  if (process.platform === 'win32') {
+    const localAppData = process.env.LOCALAPPDATA || ''
+    const userProfile = process.env.USERPROFILE || ''
+    return [
+      'C:\\Program Files\\ffmpeg\\bin',
+      localAppData ? path.join(localAppData, 'ffmpeg', 'bin') : '',
+      userProfile ? path.join(userProfile, 'scoop', 'apps', 'ffmpeg', 'current', 'bin') : '',
+      userProfile ? path.join(userProfile, 'mytools', 'ffmpeg', 'bin') : '',
+    ].filter(Boolean)
   }
   return []
 }

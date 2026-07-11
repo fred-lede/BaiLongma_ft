@@ -60,3 +60,8 @@
 
 ### Changed
 - **Video frame quality improved**: `scale=400:-2` → `scale=720:-2`, `-qscale:v 8` → `2`. Frames now saved to `paths.mediaDir` instead of embedded as data URLs (`saveDir` option in `extractVideoFrames`). Telegram uses file paths (`/media/chat/vf-*.jpg`) instead of inline base64, saving ~100KB per frame in conversation window.
+
+## 2026-07-11
+
+### Fixed
+- **ONNX embedding crash on Telegram photo**: `computeEmbedding()` received raw message containing `![telegram photo](data:image/jpeg;base64,...)` (57313 chars), which crashed onnxruntime's Add node with dimension mismatch (512 by 57313). Added `MD_DATA_URL_RE` regex to strip base64 data URLs before passing text to ONNX, covering all call paths (recognizer, embedding-backfill).

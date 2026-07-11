@@ -54,3 +54,7 @@
 - 移除 image-gen tab 時遺留孤兒 HTML（save button + 3 orphaned `</div>`）在 AI tab 關閉之後
 - 導致 media/social/voice/web-search/security/update 的 DOM 嵌套全部被破壞，內容溢出設定視窗
 - 已刪除殘留標籤
+
+## 2026-07-11: ONNX embedding crash when Telegram photo has data:image base64 URL (FIXED)
+- Telegram photo 消息含 `![telegram photo](data:image/jpeg;base64,...)`，57313 chars base64 送進 onnxruntime 後因維度不符崩潰
+- 修復：`computeEmbedding()` 在送進 ONNX 前 strip 掉 markdown data URL，所有路徑（recognizer、backfill）經由同一入口

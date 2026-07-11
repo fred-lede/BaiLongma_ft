@@ -135,7 +135,7 @@ function frameCountForDuration(durationSec) {
   return 6
 }
 
-async function pickKeyTimestamps(inputPath, durationSec, count, sceneThreshold = 0.3) {
+async function pickKeyTimestamps(inputPath, durationSec, count, sceneThreshold = 0.1) {
   const bin = await ensureFFmpeg()
   // Scene detection pass: ffmpeg with select=gt(scene) + showinfo
   // 回傳 scene change 的時間點，如果沒場景變化則回傳空陣列。

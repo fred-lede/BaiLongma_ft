@@ -68,7 +68,9 @@
 
 ### Fixed
 - **better-sqlite3 ABI mismatch in cross-compiled Windows app**: When `npm run build:win` runs on macOS, electron-builder may recompile better-sqlite3 using the host Node.js version (e.g., v24 → ABI 137), producing a binary incompatible with Electron's Node.js (v22 → ABI 130). Now `install-win-native.mjs` saves a backup of the correct Windows/Electron prebuilt to `scripts/.cache-bs3/`, and `postbuild-fix-win.mjs` (runs after electron-builder in the pipeline) verifies and restores the correct binary in the packaged output.
+- **Updated -- Windows native build ABI mismatch**: Error also occurs when building natively on Windows (Node.js v24 ABI 137 vs Electron 33 ABI 130). `install-win-native.mjs` no longer skips on Windows; instead it downloads the correct Electron prebuilt from GitHub Releases (or falls back to `electron-rebuild` if download fails), ensuring ABI 130 regardless of what `npm install`'s postinstall produced.
 
 ### Changed
 - **build:win pipeline**: Extended to `... && node scripts/postbuild-fix-win.mjs` as a final verification step.
 - **README.md**: Added cross-compile ABI mismatch explanation and new build step documentation.
+- **install-win-native.mjs**: Replaced Windows skip with Electron prebuilt download + optional electron-rebuild fallback. Backup always saved for `postbuild-fix-win.mjs`.

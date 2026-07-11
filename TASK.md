@@ -65,3 +65,5 @@
 - 修復：`install-win-native.mjs` 下載後存 backup 到 `scripts/.cache-bs3/`
 - 新增 `postbuild-fix-win.mjs`：electron-builder 打包後比對 binary，被蓋掉則自動還原
 - `build:win` pipeline 加入此步驟作為最後一道防線
+- **同問題也發生於 Windows 原生編譯**（Node.js v24 ABI 137 vs Electron 33 ABI 130）
+- `install-win-native.mjs` 不再跳過 Windows，改為下載正確的 Electron prebuilt binary（ABI 130），若 GitHub Releases 下載失敗則 fallback 到 `electron-rebuild`

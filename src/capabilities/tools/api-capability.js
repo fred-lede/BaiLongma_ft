@@ -61,9 +61,15 @@ function firstMarkdownImage(text = '') {
 }
 
 function findImageReference(args = {}, context = {}) {
-  return String(args.image_url || args.imageUrl || args.url || '').trim()
-    || String(args.image_path || args.imagePath || args.path || '').trim()
-    || firstMarkdownImage(args.markdown || args.content || args.text || '')
+  const imageUrl = String(args.image_url || args.imageUrl || args.url || '').trim()
+  if (imageUrl) return imageUrl
+  const imagePath = String(args.image_path || args.imagePath || args.path || '').trim()
+  if (imagePath) {
+    const resolved = resolveLocalImagePath(imagePath)
+    if (resolved && fs.existsSync(resolved)) return imagePath
+    // image_path doesn't exist on disk — fall through to markdown scan
+  }
+  return firstMarkdownImage(args.markdown || args.content || args.text || '')
     || firstMarkdownImage(context.currentUserMessage || '')
     || firstMarkdownImage(
       [...(context.conversationWindow || [])]
@@ -363,6 +369,11 @@ export async function execAnalyzeImage(args = {}, context = {}) {
   const slot = findConfiguredApiSlotByKind('vision', args.slot_id || args.slotId)
   const imageRef = findImageReference(args, context)
   const imageUrl = resolveImageUrl(imageRef)
+  // 清理一次性幀檔案：由 extractVideoFrames(saveDir) 產生的 vf-*.jpg，用完即刪
+  const localPath = resolveLocalImagePath(imageRef)
+  if (localPath && /\/vf-\d+-/.test(localPath)) {
+    try { fs.unlinkSync(localPath) } catch {}
+  }
   const prompt = String(args.prompt || args.question || '').trim()
     || '请用中文准确描述这张图片；如果有文字，请做 OCR；如果用户问题指向具体细节，请优先回答问题。'
 

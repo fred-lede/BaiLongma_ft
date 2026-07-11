@@ -324,6 +324,10 @@ export function selectTools(ctx = {}) {
   // 被显式抑制的工具名:ActionLog 保活 / installed 列表 / fallback 兜底都要跳过,
   // 最后一道 delete 兜底,确保不被任何路径加回来。用于跨 turn 抑制 set_tick_interval 等，以及挡住已移除的旧工具名。
   const suppressed = new Set(['generate_video'])
+  // 防止之前 bug 产生的串接工具名（analyze_imagexN）再次注入。等 action log 自然淘汰后移除。
+  suppressed.add('analyze_imageanalyze_image')
+  suppressed.add('analyze_imageanalyze_imageanalyze_image')
+  suppressed.add('analyze_imageanalyze_imageanalyze_imageanalyze_image')
 
   // 任务控制：有任务 → 全组；没任务 → 仅 set_task（用户能开任务）
   for (const t of (hasTask ? TASK_CTRL_FULL : TASK_CTRL_OPENER)) out.add(t)
@@ -430,17 +434,19 @@ export function selectTools(ctx = {}) {
   // 保活只覆盖白龙马的"已知工具"——installed 工具走单独的全注入路径。
   // 被抑制的工具(如 ticker 跨 turn 抑制下的 set_tick_interval)跳过 —— 否则模型刚调过又被
   // ActionLog 拉回来,抑制完全失效。
+  // 过滤无效名称（如之前 bug 產生的 analyze_imageanalyze_image... 串接名）
+  const VALID_TOOL_RE = /^[a-z][a-z0-9_]{1,49}$/
   if (Array.isArray(recentActionLog)) {
     for (const entry of recentActionLog) {
       const name = entry?.tool
-      if (typeof name === 'string' && name && !suppressed.has(name)) out.add(name)
+      if (typeof name === 'string' && name && VALID_TOOL_RE.test(name) && !suppressed.has(name)) out.add(name)
     }
   }
 
   // —— 用户安装的扩展工具：永远全注入（用户主动装的不能省） ——
   if (Array.isArray(installedToolNames)) {
     for (const name of installedToolNames) {
-      if (name && !suppressed.has(name)) out.add(name)
+      if (name && VALID_TOOL_RE.test(name) && !suppressed.has(name)) out.add(name)
     }
   }
 

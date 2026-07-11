@@ -163,6 +163,7 @@ async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens,
   let fullContent = ''
   let fullReasoningContent = ''
   let toolCallsMap = {}
+  let toolCallCounter = 0
   const writeFilePreviewStates = new Map()
   const writeFilePreviewSession = { cleared: false }
   const xmlWriteFilePreviewState = { session: writeFilePreviewSession }
@@ -210,14 +211,14 @@ async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens,
         streamStarted = false
       }
       for (const tc of delta.tool_calls) {
-        const idx = tc.index ?? 0
+        const idx = tc.index != null ? tc.index : toolCallCounter++
         if (!toolCallsMap[idx]) {
           toolCallsMap[idx] = { id: tc.id || '', name: '', arguments: '' }
         }
         if (tc.id) toolCallsMap[idx].id = tc.id
-        if (tc.function?.name) {
+        if (tc.function?.name && tc.function.name !== toolCallsMap[idx].name) {
           const wasEmpty = toolCallsMap[idx].name === ''
-          toolCallsMap[idx].name += tc.function.name
+          toolCallsMap[idx].name = tc.function.name
           // 第一次拿到完整 name 时通知上层 —— 此时流文本已 end，但工具尚未执行，
           // 没有这个信号 UI 会出现"思考动画停止 → 工具行出现"之间的死寂。
           if (wasEmpty && toolCallsMap[idx].name) {

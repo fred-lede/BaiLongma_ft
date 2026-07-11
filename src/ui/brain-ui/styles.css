@@ -745,6 +745,25 @@ body {
   to { transform: rotate(360deg); }
 }
 
+/* Jarvis thinking indicator in chat */
+#chat-history.jarvis-thinking::after {
+  content: '';
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent, #4fc3f7);
+  z-index: 10;
+  pointer-events: none;
+  animation: jarvis-think-pulse 1s ease-in-out infinite;
+}
+@keyframes jarvis-think-pulse {
+  0%, 100% { opacity: 0.2; transform: scale(0.8); box-shadow: none; }
+  50% { opacity: 1; transform: scale(1.2); box-shadow: 0 0 6px var(--accent, #4fc3f7); }
+}
+
 .line-thinking {
   font-size: 12px;
   color: var(--ink2);
@@ -813,6 +832,7 @@ body {
   min-height: 0;
   max-height: 0;
   overflow: hidden;
+  position: relative;
   transition: max-height 0.62s cubic-bezier(1, 0, 0.2, 1);
 }
 

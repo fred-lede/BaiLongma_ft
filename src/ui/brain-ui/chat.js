@@ -242,6 +242,12 @@ export function initChat({
     closeTimer = setTimeout(closeChat, ms);
   }
 
+  function setPendingJarvis(pending) {
+    hasPendingJarvisMessage = pending;
+    pendingMessageDismissed = !pending;
+    chatHistory.classList.toggle('jarvis-thinking', pending);
+  }
+
   function addMsg(role, text, options = {}) {
     const { alert = role === "jarvis", pending = true, label, messageId, source = "event", dedupe = true } = options;
     const defaultLabel = role === "user" ? "You" : role === "jarvis" ? getAgentName() : "Peer";
@@ -263,13 +269,11 @@ export function initChat({
     }
 
     if (role === "jarvis") {
-      hasPendingJarvisMessage = pending;
-      pendingMessageDismissed = !pending;
+      setPendingJarvis(pending)
       if (alert) playJarvisAlert();
       if (pending) openChat();
     } else if (role === "user") {
-      hasPendingJarvisMessage = false;
-      pendingMessageDismissed = false;
+      setPendingJarvis(false)
     }
 
     chatMessages.scrollTop = chatMessages.scrollHeight;
@@ -543,19 +547,54 @@ export function initChat({
 
   const screenshotBtn = document.getElementById("screenshot-btn");
   if (screenshotBtn) {
+    if (!screenshotBtn.dataset.origIcon) screenshotBtn.dataset.origIcon = screenshotBtn.textContent
     const fileInput = document.createElement("input")
     fileInput.type = "file"
-    fileInput.accept = "image/*"
+    fileInput.accept = "image/*,video/*"
     fileInput.hidden = true
     fileInput.multiple = true
     screenshotBtn.after(fileInput)
-    screenshotBtn.title = "上傳圖片（AI 會以視覺分析）"
+    screenshotBtn.title = "上傳圖片或影片（AI 會以視覺分析）"
     screenshotBtn.addEventListener("click", () => fileInput.click());
-    fileInput.addEventListener("change", () => {
+    fileInput.addEventListener("change", async () => {
       const files = Array.from(fileInput.files || [])
       fileInput.value = ""
       if (!files.length) return
-      addPastedImageFiles(files)
+      const images = []
+      const videos = []
+      for (const f of files) {
+        if (f.type.startsWith('video/')) videos.push(f)
+        else images.push(f)
+      }
+      if (images.length) addPastedImageFiles(images)
+      for (const v of videos) {
+        screenshotBtn.textContent = "⏳"
+        try {
+          const fd = new FormData()
+          fd.append('video', v)
+          const res = await fetch('/media/video/analyze', { method: 'POST', body: fd })
+          const data = await res.json()
+          if (data.ok && data.frames?.length) {
+            const frameFiles = await Promise.all(data.frames.map(async (f, i) => {
+              const blob = await (await fetch(f.dataUrl)).blob()
+              return new File([blob], `video-frame-${i}.jpg`, { type: 'image/jpeg' })
+            }))
+            // Insert video context text into input area
+            const ctx = `[影片 ${data.durationSec || ''}s — ${data.frames.length} 帧]`
+            const ta = document.getElementById("msg-input")
+            if (ta) {
+              ta.value = (ta.value ? ta.value + ' ' : '') + ctx
+              ta.dispatchEvent(new Event('input'))
+            }
+            addPastedImageFiles(frameFiles)
+          } else {
+            console.warn("[upload] video frame extraction failed:", data.error)
+          }
+        } catch (err) {
+          console.warn("[upload] video processing error:", err.message)
+        }
+      }
+      screenshotBtn.textContent = screenshotBtn.dataset.origIcon || "🖼️"
       openChat()
     });
   }
@@ -767,8 +806,7 @@ export function initChat({
       chatMessages.removeChild(chatMessages.firstChild);
     }
     liveEl = div;
-    hasPendingJarvisMessage = true;
-    pendingMessageDismissed = false;
+    setPendingJarvis(true)
     if (alert) playJarvisAlert();
     openChat();
     chatMessages.scrollTop = chatMessages.scrollHeight;

@@ -1,10 +1,12 @@
 import fs from 'fs'
 import path from 'path'
+import os from 'os'
 import { paths } from '../../paths.js'
 import { getMediaHistory, upsertMediaHistory } from '../../db.js'
 import { execGenerateVideo, getVideoHistory, saveGeneratedVideo } from '../../capabilities/tools/media.js'
 import { mimeFromChatMediaExt } from '../../chat-media.js'
 import { isPathInside, jsonResponse, readJsonBody } from '../utils.js'
+import { extractVideoFrames } from '../../media/video-frame.js'
 
 function streamFile(req, res, filePath, contentType, { cacheControl = 'no-cache', range = false } = {}) {
   try {
@@ -150,6 +152,39 @@ export async function handleMediaRoutes(req, res, url) {
     const mimeMap = { '.mp4': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime' }
     const contentType = mimeMap[path.extname(filename).toLowerCase()] || 'video/mp4'
     streamFile(req, res, filePath, contentType, { range: true })
+    return true
+  }
+
+  if (req.method === 'POST' && url.pathname === '/media/video/analyze') {
+    try {
+      const ct = req.headers['content-type'] || ''
+      const boundary = ct.match(/boundary=(.+)/)?.[1]
+      if (!boundary) { jsonResponse(res, 400, { ok: false, error: 'multipart boundary required' }); return true }
+      const body = await new Promise((resolve, reject) => {
+        const chunks = []
+        req.on('data', c => chunks.push(c))
+        req.on('end', () => resolve(Buffer.concat(chunks)))
+        req.on('error', reject)
+      })
+      const b = Buffer.from(`--${boundary}`)
+      const partStart = body.indexOf(b)
+      if (partStart === -1) { jsonResponse(res, 400, { ok: false, error: 'no multipart part found' }); return true }
+      const afterFirstBoundary = partStart + b.length
+      const headerEnd = body.indexOf(Buffer.from('\r\n\r\n'), afterFirstBoundary)
+      if (headerEnd === -1) { jsonResponse(res, 400, { ok: false, error: 'malformed multipart' }); return true }
+      const dataStart = headerEnd + 4
+      const nextBoundary = body.indexOf(b, dataStart)
+      const dataEnd = nextBoundary !== -1 ? nextBoundary - 2 : body.length - 2
+      const videoBuf = body.subarray(dataStart, dataEnd)
+      const { frames, durationSec } = await extractVideoFrames(videoBuf, {})
+      jsonResponse(res, 200, {
+        ok: true,
+        frames: frames.map(f => ({ dataUrl: f.dataUrl, timestamp: f.timestamp })),
+        durationSec,
+      })
+    } catch (err) {
+      jsonResponse(res, 500, { ok: false, error: err.message })
+    }
     return true
   }
 

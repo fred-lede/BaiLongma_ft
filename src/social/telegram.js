@@ -9,6 +9,7 @@ import { env } from './utils.js'
 import { paths } from '../paths.js'
 import { getVoiceConfig, getTTSCredentials } from '../config.js'
 import { streamTTS } from '../voice/tts-providers.js'
+import { extractVideoFrames, findFFmpeg } from '../media/video-frame.js'
 
 const POLL_INTERVAL_MS = 2000
 const RECONNECT_BASE_MS = 2000
@@ -166,6 +167,42 @@ export async function startTelegramConnector({ pushMessage, emitEvent } = {}) {
           }
         }
 
+        // Download and extract frames from video messages
+        const videoSrc = msg.video || msg.video_note || (msg.document?.mime_type?.startsWith('video/') ? msg.document : null)
+        if (videoSrc) {
+          const fileId = videoSrc.file_id
+          const dur = videoSrc.duration || 0
+          console.log(`[Telegram] 🎬 video received: file_id=${fileId}, duration=${dur}s`)
+          sendTelegramChatAction(chatId, 'upload_video').catch(() => {})
+          try {
+            const ffmpegOk = await findFFmpeg()
+            if (!ffmpegOk) {
+              console.warn('[Telegram] 🎬 ffmpeg not available, skipping frame extraction')
+              mediaMarkdowns.push(`[视频 ${dur || '?'}s — 无法提取画面，请安装 ffmpeg]`)
+            } else {
+              const buffer = await downloadTelegramFileBuffer(fileId)
+              console.log(`[Telegram] 🎬 video downloaded: ${(buffer.length / 1024 / 1024).toFixed(1)}MB`)
+              const { frames, durationSec } = await extractVideoFrames(buffer, {
+                durationSec: dur || undefined,
+                saveDir: paths.mediaDir,
+              })
+              if (frames.length > 0) {
+                console.log(`[Telegram] 🎬 extracted ${frames.length} frames from ${dur}s video`)
+                mediaMarkdowns.push(`[视频分析 — ${durationSec}s, 共 ${frames.length} 帧]`)
+                for (const f of frames) {
+                  mediaMarkdowns.push(`![video frame at ${f.timestamp}s](${f.path})`)
+                }
+                if (!content) content = '请分析这段视频，描述画面内容。'
+              } else {
+                mediaMarkdowns.push(`[视频 ${dur || '?'}s — 无法提取画面帧]`)
+              }
+            }
+          } catch (err) {
+            console.warn(`[Telegram] 🎬 video processing failed:`, err.message)
+            mediaMarkdowns.push(`[视频 ${dur || '?'}s — 处理失败: ${err.message}]`)
+          }
+        }
+
         // Handle /voice command: set per-chat voice reply mode
         if (/^\/voice\b/.test(content)) {
           console.log(`[Telegram] /voice command received: "${content}" from chat ${chatId}`)
@@ -194,6 +231,7 @@ export async function startTelegramConnector({ pushMessage, emitEvent } = {}) {
         const fullContent = [...mediaMarkdowns, content].filter(Boolean).join('\n\n')
         const fromId = `telegram:${chatId}`
         console.log(`[Telegram] ▼ push to LLM: content="${fullContent}" chatId=${chatId}`)
+        sendTelegramChatAction(chatId, 'typing').catch(() => {})
         pushMessage(fromId, fullContent, 'TELEGRAM', {
           social: { platform: 'telegram', chat_id: chatId, message_id: msg.message_id },
         })

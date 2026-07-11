@@ -135,6 +135,63 @@ function frameCountForDuration(durationSec) {
   return 6
 }
 
+async function pickKeyTimestamps(inputPath, durationSec, count, sceneThreshold = 0.3) {
+  const bin = await ensureFFmpeg()
+  // Scene detection pass: ffmpeg with select=gt(scene) + showinfo
+  // 回傳 scene change 的時間點，如果沒場景變化則回傳空陣列。
+  const out = await new Promise((resolve) => {
+    const cp = spawn(bin, [
+      '-i', inputPath,
+      '-vf', `select='gt(scene,${sceneThreshold})',showinfo`,
+      '-f', 'null',
+      '-',
+    ], { timeout: 120000 })
+    let buf = ''
+    cp.stderr.on('data', d => { buf += d.toString() })
+    cp.on('exit', () => resolve(buf))
+  })
+  const times = []
+  const re = /pts_time:([\d.]+)/g
+  let m
+  while ((m = re.exec(out))) times.push(parseFloat(m[1]))
+  // 沒有場景變化 → 回傳空 (caller 用均勻取樣)
+  if (times.length === 0) return []
+  // 從場景變化點中挑 N 個（均勻子取樣）
+  const picked = []
+  if (times.length >= count) {
+    const step = times.length / count
+    for (let i = 0; i < count; i++) picked.push(times[Math.floor(i * step)])
+  } else {
+    picked.push(...times)
+    // 不足的用均勻取樣補滿
+    const used = new Set(picked.map(t => Math.round(t * 10)))
+    const seg = durationSec / count
+    for (let i = 0; i < count && picked.length < count; i++) {
+      const t = seg * i + seg / 2
+      if (!used.has(Math.round(t * 10))) {
+        picked.push(t)
+        used.add(Math.round(t * 10))
+      }
+    }
+    picked.sort((a, b) => a - b)
+    while (picked.length > count) picked.pop()
+  }
+  return picked
+}
+
+function runFFmpeg(bin, args, timeout = 60000) {
+  return new Promise((resolve, reject) => {
+    const cp = spawn(bin, args, { timeout })
+    let stderr = ''
+    cp.stderr.on('data', d => { stderr += d.toString() })
+    cp.on('error', reject)
+    cp.on('exit', code => {
+      if (code !== 0) reject(new Error(`ffmpeg exit ${code}\n${stderr.slice(-2000)}`))
+      else resolve()
+    })
+  })
+}
+
 export async function extractVideoFrames(input, { durationSec, maxFrames, saveDir } = {}) {
   const bin = await ensureFFmpeg()
   if (!bin) throw new Error('ffmpeg not available')
@@ -145,39 +202,53 @@ export async function extractVideoFrames(input, { durationSec, maxFrames, saveDi
     if (tmp) fs.writeFileSync(tmp, input)
     if (!durationSec) durationSec = await getVideoDuration(inputPath) || 30
     const count = maxFrames || frameCountForDuration(durationSec)
-    const interval = Math.max(1, Math.floor(durationSec / count))
-    fs.mkdirSync(outDir, { recursive: true })
     const ts = Date.now()
-    const args = [
-      '-i', inputPath,
-      '-vf', `fps=1/${interval},scale=720:-2`,
-      '-qscale:v', '2',
-      '-frames:v', String(count),
-      path.join(outDir, `vf-${ts}-%03d.jpg`),
-    ]
-    let ffStderr = ''
-    await new Promise((resolve, reject) => {
-      const cp = spawn(bin, args, { timeout: 60000 })
-      cp.stderr.on('data', d => { ffStderr += d.toString() })
-      cp.on('error', reject)
-      cp.on('exit', code => {
-        if (code !== 0) reject(new Error(`ffmpeg exit ${code}\n${ffStderr.slice(-2000)}`))
-        else resolve()
-      })
-    })
+    fs.mkdirSync(outDir, { recursive: true })
+
+    // 場景偵測取幀：挑最高分的 N 個時間點；沒場景變化則用均勻取樣
+    const keyTimes = await pickKeyTimestamps(inputPath, durationSec, count)
+    const useScene = keyTimes.length > 0
+
+    if (useScene) {
+      // 逐幀用 -ss 快速 seek 取出（每個約 0.5-2s）
+      for (let i = 0; i < keyTimes.length; i++) {
+        const outFile = path.join(outDir, `vf-${ts}-${String(i + 1).padStart(3, '0')}.jpg`)
+        await runFFmpeg(bin, [
+          '-ss', String(keyTimes[i]),
+          '-i', inputPath,
+          '-frames:v', '1',
+          '-qscale:v', '2',
+          '-vf', 'scale=720:-2',
+          outFile,
+        ], 15000)
+      }
+    } else {
+      // 均勻取樣（原始做法）
+      const interval = Math.max(1, Math.floor(durationSec / count))
+      await runFFmpeg(bin, [
+        '-i', inputPath,
+        '-vf', `fps=1/${interval},scale=720:-2`,
+        '-qscale:v', '2',
+        '-frames:v', String(count),
+        path.join(outDir, `vf-${ts}-%03d.jpg`),
+      ], 60000)
+    }
+
     const files = fs.readdirSync(outDir).filter(f => f.startsWith(`vf-${ts}`) && f.endsWith('.jpg')).sort()
+    const timestamps = useScene
+      ? keyTimes
+      : files.map((_, i) => i * Math.max(1, Math.floor(durationSec / count)))
     if (saveDir) {
       const frames = files.map((f, i) => ({
         path: `/media/chat/${f}`,
-        timestamp: i * interval,
+        timestamp: timestamps[i] ?? 0,
       }))
       return { frames, durationSec }
     }
     const buffers = files.map(f => fs.readFileSync(path.join(outDir, f)))
-    const timestamps = buffers.map((_, i) => i * interval)
     return { frames: buffers.map((buf, i) => ({
       dataUrl: `data:image/jpeg;base64,${buf.toString('base64')}`,
-      timestamp: timestamps[i],
+      timestamp: timestamps[i] ?? 0,
     })), durationSec }
   } catch (err) {
     throw new Error(`frame extraction failed: ${err.message}`)

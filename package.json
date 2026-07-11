@@ -15,7 +15,7 @@
     "start:backend:lan": "powershell -ExecutionPolicy Bypass -File scripts/start-lan.ps1 backend",
     "dev": "node scripts/start-backend.mjs --watch",
     "build": "node scripts/prebuild-clean.mjs && node scripts/build-macos-speech.mjs && node ./node_modules/@electron/rebuild/lib/cli.js -f -w better-sqlite3 -v 33.4.11 && node ./node_modules/electron-builder/cli.js",
-    "build:win": "node scripts/prebuild-clean.mjs && node scripts/build-macos-speech.mjs && node ./node_modules/@electron/rebuild/lib/cli.js -f -w better-sqlite3 -v 33.4.11 && node ./node_modules/electron-builder/cli.js --win",
+    "build:win": "node scripts/prebuild-clean.mjs && node scripts/build-macos-speech.mjs && node scripts/install-win-native.mjs && node ./node_modules/@electron/rebuild/lib/cli.js -f -w better-sqlite3 -v 33.4.11 && node ./node_modules/electron-builder/cli.js --win",
     "build:mac": "node scripts/build-mac.mjs",
     "build:mac:x64": "node scripts/build-mac.mjs x64",
     "build:mac:arm64": "node scripts/build-mac.mjs arm64",

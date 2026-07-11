@@ -47,7 +47,7 @@ export function initChat({
   const RENDER_DEDUPE_TTL_MS = 2 * 60 * 1000;
 
   const PUSH_TO_TALK_PLACEHOLDER = "按住空格键开始说话";
-  const MAX_PASTED_IMAGES = 8;
+  const MAX_PASTED_IMAGES = 16;
   const MAX_PASTED_IMAGE_BYTES = 12 * 1024 * 1024;
 
   function normalizeMessageId(value) {

@@ -5,7 +5,7 @@ if (process.platform === 'win32') {
   console.log('[install-win-native] skip — native modules already installed for Windows')
   process.exit(0)
 }
-import { resolve, dirname, sep } from 'node:path'
+import { resolve, dirname, sep, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { execSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(__dirname, '..')
 const TMP_DIR = tmpdir()
+const BS3_BACKUP_DIR = resolve(__dirname, '.cache-bs3')
 
 function findNodeFiles(dir) {
   const results = []
@@ -92,6 +93,12 @@ async function installBetterSqlite3Win32() {
   const tgz = Buffer.from(await res.arrayBuffer())
   writeFileSync(tgzPath, tgz)
   execSync(`tar -xzf "${tgzPath}" -C "${pkgDir}"`, { stdio: 'pipe' })
+
+  // Save a backup BEFORE deleting tgz so postpack hook can restore
+  const backupDir = BS3_BACKUP_DIR
+  mkdirSync(backupDir, { recursive: true })
+  copyFileSync(tgzPath, resolve(backupDir, filename))
+
   try { unlinkSync(tgzPath) } catch {}
 
   // Find .node files and copy to build/Release/
@@ -104,7 +111,9 @@ async function installBetterSqlite3Win32() {
       copyFileSync(f, dest)
       console.log(`  copied ${f} -> ${dest}`)
     }
-    console.log(`  better-sqlite3@${version} win32-x64 binary installed`)
+    // Save the extracted .node for quick restore in postpack hook
+    copyFileSync(resolve(releaseDir, 'better_sqlite3.node'), resolve(backupDir, 'better_sqlite3.node'))
+    console.log(`  better-sqlite3@${version} win32-x64 binary installed (backup: ${backupDir})`)
   } else {
     console.log('  extracted but no .node files found')
   }

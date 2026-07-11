@@ -1,10 +1,15 @@
 import { normalizeChannel, isSystemSignalRow } from './channel.js'
+import { config } from '../config.js'
 
 function isVisionCapableEndpoint() {
+  const cfgURL = (config?.baseURL || '').replace(/\/+$/, '')
+  if (cfgURL && /^https?:\/\/192\.168\.\d+\.\d+:\d+/.test(cfgURL)) return true
   const envURL = (process.env.AETHERMESH_BASE_URL || '').replace(/\/+$/, '')
   if (envURL && /^https?:\/\/192\.168\.\d+\.\d+:\d+/.test(envURL)) return true
   const baseURL = (process.env.LLM_BASE_URL || '').replace(/\/+$/, '')
-  return /^https?:\/\/192\.168\.\d+\.\d+:\d+/.test(baseURL)
+  if (/^https?:\/\/192\.168\.\d+\.\d+:\d+/.test(baseURL)) return true
+  const model = String(config?.model || '').toLowerCase()
+  return model.includes('vision') || model.includes('gemma') || model.includes('llava') || model.includes('qwen2.5-vl')
 }
 
 const MD_IMAGE_RE = /!\[([^\]]*)\]\((data:[^)]+)\)/g

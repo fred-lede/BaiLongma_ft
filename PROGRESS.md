@@ -65,3 +65,10 @@
 
 ### Fixed
 - **ONNX embedding crash on Telegram photo**: `computeEmbedding()` received raw message containing `![telegram photo](data:image/jpeg;base64,...)` (57313 chars), which crashed onnxruntime's Add node with dimension mismatch (512 by 57313). Added `MD_DATA_URL_RE` regex to strip base64 data URLs before passing text to ONNX, covering all call paths (recognizer, embedding-backfill).
+
+### Fixed
+- **better-sqlite3 ABI mismatch in cross-compiled Windows app**: When `npm run build:win` runs on macOS, electron-builder may recompile better-sqlite3 using the host Node.js version (e.g., v24 → ABI 137), producing a binary incompatible with Electron's Node.js (v22 → ABI 130). Now `install-win-native.mjs` saves a backup of the correct Windows/Electron prebuilt to `scripts/.cache-bs3/`, and `postbuild-fix-win.mjs` (runs after electron-builder in the pipeline) verifies and restores the correct binary in the packaged output.
+
+### Changed
+- **build:win pipeline**: Extended to `... && node scripts/postbuild-fix-win.mjs` as a final verification step.
+- **README.md**: Added cross-compile ABI mismatch explanation and new build step documentation.

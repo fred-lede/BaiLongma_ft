@@ -511,11 +511,13 @@ npm run build                # 构建当前平台
 2. `build-macos-speech.mjs` — 僅 macOS 環境執行，跳過
 3. `install-win-native.mjs` — **關鍵步驟**：從 npm registry 下載 `@img/sharp-win32-x64` 和 `@img/sharp-libvips-win32-x64`，並從 GitHub Releases 下載 better-sqlite3 的 Electron ABI 130 prebuilt binary
 4. `prebuild-win.mjs` — 檢查 electron-builder 快取，提示開發者模式權限
-5. `electron-builder --win` — 執行實際打包
+5. `electron-builder --win` — 執行實際打包（可能因 Host 系統 Node.js 版本而蓋掉 better-sqlite3 binary）
+6. `postbuild-fix-win.mjs` — **驗證與修復**：比對 `scripts/.cache-bs3/better_sqlite3.node` 與打包產出，若被蓋掉則還原正確的 Windows/Electron binary
 
 **注意事項：**
 - **sharp 模組**：`@huggingface/transformers` 依賴 sharp，cross-platform 編譯需要手動安裝目標平台的 native binary。`install-win-native.mjs` 會處理這一步，但若 sharp 版本更新，需確保對應的 `@img/sharp-win32-x64` 版本在 npm registry 存在
-- **better-sqlite3**：macOS 無法編譯 Windows 的 better-sqlite3，故依賴 prebuilt release。Electron 版本與 ABI 的對應由 `node-abi` 套件動態查詢。目前 Electron 33 使用 ABI 130
+- **better-sqlite3**：macOS 無法編譯 Windows 的 better-sqlite3，故依賴 prebuilt release。Electron 版本與 ABI 的對應由 `node-abi` 套件動態查詢。目前 Electron 33 使用 ABI 130、macOS Node.js 22 為 127、Windows Node.js 24 為 137
+- **electron-builder 可能蓋掉 binary**：macOS 上編譯 Windows 版時，electron-builder 可能用 Host 的 Node.js 版本重編 better-sqlite3，導致 ABI 不符（例如 Host Node.js 24 → ABI 137，而 Electron 需要 ABI 130）。`postbuild-fix-win.mjs` 負責在打包後自動還原
 - **Electron 版本更新時**：需確認 better-sqlite3 的 GitHub Releases 頁面有提供對應 ABI 的 prebuilt，否則需改用 `electron-rebuild` 在 Windows 上原生編譯
 - **npm v22 相容性**：`.npmrc` 設有 `allow-remote=all`，`package.json` 的 `allowScripts` 陣列列了 `sharp`、`electron`、`onnxruntime-node`、`protobufjs`，確保 install scripts 在 macOS 上正常執行
 - **構建產出**：位於 `release/` 目錄，預設為 NSIS 安裝包

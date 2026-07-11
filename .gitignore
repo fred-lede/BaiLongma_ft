@@ -149,3 +149,6 @@ config.json
 
 # macOS
 .DS_Store
+
+# Build cache for Windows native modules (cross-compile backup)
+scripts/.cache-bs3/

@@ -59,3 +59,9 @@
 - Telegram photo 消息含 `![telegram photo](data:image/jpeg;base64,...)`，57313 chars base64 送進 onnxruntime 後因維度不符崩潰
 - 修復：`computeEmbedding()` 在送進 ONNX 前 strip 掉 markdown data URL，所有路徑（recognizer、backfill）經由同一入口
 - ✅ Windows 實測：影片、照片分析、生成照片全部正常運作
+
+## 2026-07-11: better-sqlite3 ABI mismatch in packaged Windows app (FIXED)
+- 從 macOS 編譯 Windows 版時，electron-builder 可能用 Host Node.js 重編 better-sqlite3，導致 ABI 不符（137 vs 130）
+- 修復：`install-win-native.mjs` 下載後存 backup 到 `scripts/.cache-bs3/`
+- 新增 `postbuild-fix-win.mjs`：electron-builder 打包後比對 binary，被蓋掉則自動還原
+- `build:win` pipeline 加入此步驟作為最後一道防線

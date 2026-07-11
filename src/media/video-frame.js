@@ -201,13 +201,25 @@ export async function extractVideoFrames(input, { durationSec, maxFrames, saveDi
   try {
     if (tmp) fs.writeFileSync(tmp, input)
     if (!durationSec) durationSec = await getVideoDuration(inputPath) || 30
-    const count = maxFrames || frameCountForDuration(durationSec)
+    const baseCount = maxFrames || frameCountForDuration(durationSec)
     const ts = Date.now()
     fs.mkdirSync(outDir, { recursive: true })
 
-    // 場景偵測取幀：挑最高分的 N 個時間點；沒場景變化則用均勻取樣
-    const keyTimes = await pickKeyTimestamps(inputPath, durationSec, count)
+    // 先找全部場景變化點（給夠大的上限以抓到所有點）
+    const keyTimes = await pickKeyTimestamps(inputPath, durationSec, 20)
     const useScene = keyTimes.length > 0
+    // 場景豐富時取更多幀，上限 12，不超過場景數
+    const count = useScene && keyTimes.length > baseCount
+      ? Math.min(keyTimes.length, 12)
+      : baseCount
+    // 場景數超過最終 count 時子取樣
+    if (useScene && keyTimes.length > count) {
+      const step = keyTimes.length / count
+      const trimmed = []
+      for (let i = 0; i < count; i++) trimmed.push(keyTimes[Math.floor(i * step)])
+      keyTimes.length = 0
+      keyTimes.push(...trimmed)
+    }
 
     if (useScene) {
       // 逐幀用 -ss 快速 seek 取出（每個約 0.5-2s）

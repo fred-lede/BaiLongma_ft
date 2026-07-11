@@ -1,5 +1,8 @@
+import fs from 'fs'
+import path from 'path'
 import { normalizeChannel, isSystemSignalRow } from './channel.js'
 import { config } from '../config.js'
+import { paths } from '../paths.js'
 
 function isVisionCapableEndpoint() {
   const cfgURL = (config?.baseURL || '').replace(/\/+$/, '')
@@ -12,7 +15,22 @@ function isVisionCapableEndpoint() {
   return model.includes('vision') || model.includes('gemma') || model.includes('llava') || model.includes('qwen2.5-vl')
 }
 
-const MD_IMAGE_RE = /!\[([^\]]*)\]\((data:[^)]+)\)/g
+// Matches markdown images with data: URLs OR /media/chat/ local paths
+const MD_IMAGE_RE = /!\[([^\]]*)\]\(((?:data:[^)]+|\/media\/chat\/[^)]+))\)/g
+
+function localMediaChatToDataUrl(url) {
+  if (!url?.startsWith('/media/chat/')) return url
+  const filename = path.basename(decodeURIComponent(url))
+  const filePath = path.join(paths.mediaDir, filename)
+  try {
+    const buf = fs.readFileSync(filePath)
+    const ext = path.extname(filename).toLowerCase()
+    const mime = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg'
+    return `data:${mime};base64,${buf.toString('base64')}`
+  } catch {
+    return url
+  }
+}
 
 function hasMarkdownImages(content) {
   MD_IMAGE_RE.lastIndex = 0
@@ -28,7 +46,8 @@ function convertMarkdownImagesToBlocks(content) {
     if (match.index > lastIndex) {
       parts.push({ type: 'text', text: content.slice(lastIndex, match.index) })
     }
-    parts.push({ type: 'image_url', image_url: { url: match[2] } })
+    const imageUrl = localMediaChatToDataUrl(match[2])
+    parts.push({ type: 'image_url', image_url: { url: imageUrl } })
     lastIndex = match.index + match[0].length
   }
   const remaining = content.slice(lastIndex).trim()

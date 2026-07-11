@@ -484,7 +484,7 @@ npm run build:linux          # 默认 x64，产出 AppImage + deb
 npm run build:linux:x64
 npm run build:linux:arm64
 
-# Windows
+# Windows（可在 macOS 或 Windows 上执行）
 npm run build:win            # 产出 NSIS 安装包
 
 # 通用构建
@@ -500,6 +500,54 @@ npm run build                # 构建当前平台
 > ```bash
 > sudo apt-get install -y libgtk-3-dev libxss1 libnss3 libasound2 libnotify-dev libxtst-dev libx11-xcb-dev libgl1-mesa-dev
 > ```
+
+### Windows 构建詳解
+
+#### 從 macOS 交叉編譯（`npm run build:win`）
+
+`npm run build:win` 會依序執行：
+
+1. `prebuild-clean.mjs` — 清除上次構建殘留
+2. `build-macos-speech.mjs` — 僅 macOS 環境執行，跳過
+3. `install-win-native.mjs` — **關鍵步驟**：從 npm registry 下載 `@img/sharp-win32-x64` 和 `@img/sharp-libvips-win32-x64`，並從 GitHub Releases 下載 better-sqlite3 的 Electron ABI 130 prebuilt binary
+4. `prebuild-win.mjs` — 檢查 electron-builder 快取，提示開發者模式權限
+5. `electron-builder --win` — 執行實際打包
+
+**注意事項：**
+- **sharp 模組**：`@huggingface/transformers` 依賴 sharp，cross-platform 編譯需要手動安裝目標平台的 native binary。`install-win-native.mjs` 會處理這一步，但若 sharp 版本更新，需確保對應的 `@img/sharp-win32-x64` 版本在 npm registry 存在
+- **better-sqlite3**：macOS 無法編譯 Windows 的 better-sqlite3，故依賴 prebuilt release。Electron 版本與 ABI 的對應由 `node-abi` 套件動態查詢。目前 Electron 33 使用 ABI 130
+- **Electron 版本更新時**：需確認 better-sqlite3 的 GitHub Releases 頁面有提供對應 ABI 的 prebuilt，否則需改用 `electron-rebuild` 在 Windows 上原生編譯
+- **npm v22 相容性**：`.npmrc` 設有 `allow-remote=all`，`package.json` 的 `allowScripts` 陣列列了 `sharp`、`electron`、`onnxruntime-node`、`protobufjs`，確保 install scripts 在 macOS 上正常執行
+- **構建產出**：位於 `release/` 目錄，預設為 NSIS 安裝包
+
+#### 在 Windows 上原生編譯
+
+```bash
+# 1. 確認 Node.js 版本（建議 v20+；v22+ 需 .npmrc 白名單）
+git clone <repo>
+cd Bailongma_ft
+
+# 2. 複製設定（config.json 在 .gitignore 中，需從舊版或 activation 頁產生）
+cp /path/to/old/config.json ./
+
+# 3. 安裝依賴
+npm install
+
+# 4. 重建原生模組給 Node.js 使用（若要用 node src/index.js 測試）
+npm rebuild better-sqlite3
+
+# 5. 打包
+npm run build:win
+```
+
+**Windows 原生編譯注意事項：**
+- **PowerShell 執行策略**：若 npm scripts 調用 `.ps1` 失敗，以系統管理員執行：`Set-ExecutionPolicy RemoteSigned -Scope CurrentUser`
+- **開發者模式**：Windows 需開啟「開發者模式」（設定 → 隱私權與安全性 → 開發人員專用），讓 electron-builder 能建立符號連結
+- **Node.js 版本**：Node.js v22+ 預設封鎖 install scripts，已透過 `.npmrc` 的 `allow-remote=all` 處理。若仍失敗，可以加 `--ignore-scripts` 安裝後手動執行 postinstall
+- **node src/index.js 模式**：安裝後需執行 `npm rebuild better-sqlite3`，因為 `electron-builder install-app-deps` 會將 native modules 編譯給 Electron（ABI 130）而非 Node.js（ABI 取決於 Node 版本）。重建後 native modules 改用 Node.js ABI，可正常啟動
+- **用戶數據目錄**：source 模式使用 repo root，打包後使用 `%APPDATA%\com.xiaoyuanda.bailongma\`。可透過環境變數 `BAILONGMA_USER_DIR` 覆蓋
+- **Telegram token**：設定 `TELEGRAM_BOT_TOKEN` 環境變數，或透過 Brain UI activation 頁填入
+- **防毒軟體**：部分防毒軟體可能隔離 NSIS 安裝包或 better-sqlite3 的 .node 檔，需加入白名單
 
 发布到 GitHub Releases：
 

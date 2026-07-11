@@ -58,3 +58,4 @@
 ## 2026-07-11: ONNX embedding crash when Telegram photo has data:image base64 URL (FIXED)
 - Telegram photo 消息含 `![telegram photo](data:image/jpeg;base64,...)`，57313 chars base64 送進 onnxruntime 後因維度不符崩潰
 - 修復：`computeEmbedding()` 在送進 ONNX 前 strip 掉 markdown data URL，所有路徑（recognizer、backfill）經由同一入口
+- ✅ Windows 實測：影片、照片分析、生成照片全部正常運作

@@ -4,6 +4,7 @@
 // Run: node src/test-capability-registry.js
 
 import {
+  BROWSER_TOOLS,
   CAPABILITIES,
   capabilityToolsFor,
   capabilityContextBlocks,
@@ -18,6 +19,40 @@ function assert(cond, label) {
 }
 const has = (arr, x) => arr.includes(x)
 const none = (arr, xs) => xs.every(x => !arr.includes(x))
+const EXPECTED_BROWSER_TOOLS = [
+  'browser_navigate',
+  'browser_navigate_back',
+  'browser_snapshot',
+  'browser_find',
+  'browser_click',
+  'browser_type',
+  'browser_fill_form',
+  'browser_select_option',
+  'browser_press_key',
+  'browser_hover',
+  'browser_drag',
+  'browser_wait_for',
+  'browser_handle_dialog',
+  'browser_tabs',
+  'browser_take_screenshot',
+  'browser_console_messages',
+  'browser_resize',
+  'browser_close',
+]
+const FORBIDDEN_BROWSER_TOOLS = [
+  'web_search',
+  'web_read',
+  'fetch_url',
+  'browser_read',
+  'browser_sessions',
+  'browser_open',
+  'browser_inspect',
+  'browser_act',
+  'browser_run_code_unsafe',
+  'browser_evaluate',
+  'browser_file_upload',
+  'browser_drop',
+]
 
 // ctx 构造器：text 小写正文 + rawText 原文 + isTick
 function ctx(rawText, isTick = false) {
@@ -28,44 +63,51 @@ function ctx(rawText, isTick = false) {
 {
   const caps = listCapabilities()
   const ids = caps.map(c => c.id)
-  assert(['web', 'weather', 'hotspot', 'worldcup', 'typhoon', 'software-install'].every(id => ids.includes(id)),
+  assert(['interactive-browser', 'weather', 'hotspot', 'worldcup', 'typhoon', 'software-install'].every(id => ids.includes(id))
+    && !ids.includes('web'),
     `1) listCapabilities 含台风在内的 v1 能力 (got: ${ids.join(',')})`)
   assert(caps.every(c => c.label && c.summary), '1) 每个能力都有 label + summary（自感知用）')
+  assert(BROWSER_TOOLS.join(',') === EXPECTED_BROWSER_TOOLS.join(','),
+    `1b) 浏览器能力只暴露官方 MCP 安全白名单 (got: ${BROWSER_TOOLS.join(',')})`)
+  assert(none(BROWSER_TOOLS, FORBIDDEN_BROWSER_TOOLS),
+    '1c) 自研会话工具、任意 JS 与文件入口不在浏览器白名单')
 }
 
 // ===== 2) tool 注入门解耦 =====
 {
-  // 无状态搜索只暴露搜索工具，避免和正文抓取/浏览器渲染竞争。
+  // 搜索、读取、交互统一只暴露官方 Playwright MCP 白名单。
   const t = capabilityToolsFor(ctx('搜一下 vLLM'))
-  assert(has(t, 'web_search') && has(t, 'web_read') && none(t, ['fetch_url', 'browser_read']), `2a) 搜索 → web_search + web_read (got: ${t.join(',')})`)
+  assert(BROWSER_TOOLS.every(name => has(t, name)) && none(t, FORBIDDEN_BROWSER_TOOLS),
+    `2a) 搜索 → 仅 Playwright MCP (got: ${t.join(',')})`)
 }
 {
   const staticRead = capabilityToolsFor(ctx('总结这篇文章正文 https://example.com/a'))
-  assert(has(staticRead, 'web_read') && none(staticRead, ['web_search', 'fetch_url', 'browser_read']),
-    `2a2) 静态正文 → 仅 web_read (got: ${staticRead.join(',')})`)
+  assert(BROWSER_TOOLS.every(name => has(staticRead, name)) && none(staticRead, FORBIDDEN_BROWSER_TOOLS),
+    `2a2) 静态正文 → 仅 Playwright MCP (got: ${staticRead.join(',')})`)
   const dynamicRead = capabilityToolsFor(ctx('用无头浏览器读取这个 JS 动态网页正文'))
-  assert(has(dynamicRead, 'web_read') && none(dynamicRead, ['web_search', 'fetch_url', 'browser_read']),
-    `2a3) 动态无状态正文 → 同一 web_read (got: ${dynamicRead.join(',')})`)
+  assert(BROWSER_TOOLS.every(name => has(dynamicRead, name)) && none(dynamicRead, FORBIDDEN_BROWSER_TOOLS),
+    `2a3) 动态正文 → 仅 Playwright MCP (got: ${dynamicRead.join(',')})`)
   const stateful = capabilityToolsFor(ctx('打开 https://example.com 并点击登录'))
-  assert(['browser_sessions', 'browser_open', 'browser_navigate', 'browser_inspect', 'browser_act', 'browser_tabs', 'browser_close'].every(name => has(stateful, name))
-    && none(stateful, ['web_search', 'fetch_url', 'browser_read']),
+  assert(BROWSER_TOOLS.every(name => has(stateful, name))
+    && none(stateful, FORBIDDEN_BROWSER_TOOLS),
   `2a4) 状态化网页 → 仅 Playwright 组 (got: ${stateful.join(',')})`)
   for (const phrase of [
     '访问 https://example.com', 'visit example.com',
     'go to https://example.com', '查看网站 https://example.com',
   ]) {
     const routed = capabilityToolsFor(ctx(phrase))
-    assert(['browser_sessions', 'browser_open', 'browser_navigate', 'browser_inspect', 'browser_act', 'browser_tabs', 'browser_close'].every(name => has(routed, name))
-      && none(routed, ['web_search', 'fetch_url', 'browser_read']),
+    assert(BROWSER_TOOLS.every(name => has(routed, name))
+      && none(routed, FORBIDDEN_BROWSER_TOOLS),
     `2a5) 明确导航同义词 → 仅 Playwright: ${phrase} (got: ${routed.join(',')})`)
   }
-  assert(none(capabilityToolsFor(ctx('go to definition in the editor')), ['browser_open', 'browser_act']),
+  assert(none(capabilityToolsFor(ctx('go to definition in the editor')), BROWSER_TOOLS),
     '2a6) 无 URL 的普通技术表达不误触发 Playwright')
 }
 {
   // Tick 不因心跳身份自动预装业务能力；需要时由 find_tool 发现。
   const t = capabilityToolsFor(ctx('', true))
-  assert(none(t, ['web_search', 'hotspot_mode']), '2b) TICK → 不自动注入 web/hotspot 工具')
+  assert(none(t, [...BROWSER_TOOLS, ...FORBIDDEN_BROWSER_TOOLS, 'hotspot_mode']),
+    '2b) TICK → 不自动注入 browser/hotspot 工具')
 }
 {
   // hotspot 关键词但非 TICK → 不注入 hotspot 工具（只递规则块，工具靠 find_tool）
@@ -88,9 +130,10 @@ function ctx(rawText, isTick = false) {
   assert(has(t, 'install_software'), `2e) 安装意图 → install_software (got: ${t.join(',')})`)
 }
 {
-  // 天气 → 带上 web 工具（修复旧路径偶尔无 fetch 的缺口）
+  // 天气也必须走唯一的官方 Playwright MCP 网页通道。
   const t = capabilityToolsFor(ctx('深圳天气怎么样'))
-  assert(has(t, 'web_read') && !has(t, 'web_search'), `2f) 天气 → 仅 web_read (got: ${t.join(',')})`)
+  assert(BROWSER_TOOLS.every(name => has(t, name)) && none(t, FORBIDDEN_BROWSER_TOOLS),
+    `2f) 天气 → 仅 Playwright MCP (got: ${t.join(',')})`)
 }
 
 // ===== 3) 工作流块注入（context）=====
@@ -105,8 +148,16 @@ function ctx(rawText, isTick = false) {
     '3c2) 台风 → Typhoon Monitoring Panel 块')
   assert(capabilityContextBlocks(ctx('安装微信')).some(b => b.includes('Software Install Workflow')),
     '3d) 安装 → Software Install Workflow 块')
+  const browserContext = capabilityContextBlocks(ctx('打开网页并点击登录')).find(b => b.includes('Microsoft Playwright MCP Only')) || ''
+  assert(browserContext.includes('browser_navigate') && browserContext.includes('browser_snapshot')
+    && browserContext.includes('automatically return a fresh accessibility snapshot')
+    && browserContext.includes('instead of routinely calling browser_snapshot')
+    && browserContext.includes('relative filename') && browserContext.includes('browser_run_code_unsafe'),
+  '3e) 浏览器工作流说明官方自动 snapshot、显式兜底、安全截图和禁用工具')
+  assert(['browser_sessions', 'session_id', 'page_id', 'ref epoch', 'browser_open'].every(term => !browserContext.includes(term)),
+    '3f) 浏览器工作流不再提示自研会话/profile/epoch 模型')
   assert(capabilityContextBlocks(ctx('随便聊两句')).length === 0,
-    '3e) 中性消息 → 无能力工作流块')
+    '3g) 中性消息 → 无能力工作流块')
 }
 
 // ===== 4) find_tool 能力发现（自感知按需激活）=====
@@ -122,13 +173,13 @@ function ctx(rawText, isTick = false) {
   assert(findCapabilitiesByQuery('看热点').some(c => c.id === 'hotspot'), '4b) "看热点" → 发现 hotspot')
   assert(findCapabilitiesByQuery('天气').some(c => c.id === 'weather'), '4c) "天气" → 发现 weather')
   assert(findCapabilitiesByQuery('台风路径').some(c => c.id === 'typhoon'), '4c2) "台风路径" → 发现 typhoon')
-  assert(findCapabilitiesByQuery('上网搜索').some(c => c.id === 'web'), '4d) "上网搜索" → 发现 web')
-  assert(findCapabilitiesByQuery('上网搜索').find(c => c.id === 'web')?.tools.join(',') === 'web_search,web_read',
-    '4d2) 搜索发现加载 web_search + web_read')
-  assert(findCapabilitiesByQuery('读取网页正文').find(c => c.id === 'web')?.tools.join(',') === 'web_read',
-    '4d3) 静态正文发现只加载 web_read')
-  assert(findCapabilitiesByQuery('读取 JS 动态网页正文').find(c => c.id === 'web')?.tools.join(',') === 'web_read',
-    '4d4) 动态正文发现也只加载 web_read')
+  assert(findCapabilitiesByQuery('上网搜索').some(c => c.id === 'interactive-browser'),
+    '4d) "上网搜索" → 发现统一 Playwright 网页能力')
+  for (const query of ['上网搜索', '读取网页正文', '读取 JS 动态网页正文']) {
+    const tools = findCapabilitiesByQuery(query).find(c => c.id === 'interactive-browser')?.tools || []
+    assert(BROWSER_TOOLS.every(name => tools.includes(name)) && none(tools, FORBIDDEN_BROWSER_TOOLS),
+      `4d) ${query} → 仅发现 Playwright MCP 白名单`)
+  }
   assert(findCapabilitiesByQuery('').length === 0, '4e) 空 query → 无发现')
 }
 

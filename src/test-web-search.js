@@ -1,69 +1,84 @@
-// 独立测试 web_search 工具：直接调真实引擎，不 mock
-// 用法：cd D:\claude\BaiLongma && node src/test-web-search.js
+// Pure routing regression for browser-only web search.
+//
+// Run: node src/test-web-search.js
 
-import { executeTool } from './capabilities/executor.js'
+import assert from 'node:assert/strict'
+import {
+  BROWSER_TOOLS,
+  capabilityContextBlocks,
+  capabilityToolsFor,
+  findCapabilitiesByQuery,
+  listCapabilities,
+} from './capabilities/capability-registry.js'
+import { selectTools } from './memory/tool-router.js'
 
-function summarize(raw) {
-  try {
-    return JSON.parse(raw)
-  } catch {
-    return { _raw: String(raw).slice(0, 200) }
+const LEGACY_WEB_TOOLS = ['web_search', 'web_read', 'fetch_url', 'browser_read']
+const REQUIRED_SEARCH_CHAIN = [
+  'browser_navigate',
+  'browser_snapshot',
+  'browser_find',
+  'browser_click',
+]
+
+function capabilityContext(messageBody) {
+  return {
+    text: messageBody.toLowerCase(),
+    rawText: messageBody,
+    isTick: false,
   }
 }
 
-async function run(label, args) {
-  const t0 = Date.now()
-  let parsed
-  try {
-    const raw = await executeTool('web_search', args, {})
-    parsed = summarize(raw)
-  } catch (err) {
-    parsed = { _threw: err.message || String(err) }
-  }
-  const ms = Date.now() - t0
-  console.log(`\n=== ${label}  (${ms}ms) ===`)
-  if (parsed.ok) {
-    console.log(`ok=true source=${parsed.source} cached=${parsed.cached || false} count=${parsed.results?.length}`)
-    for (const r of (parsed.results || []).slice(0, 3)) {
-      console.log(`  - [${r.title.slice(0, 60)}] ${r.url}`)
-      if (r.snippet) console.log(`    ${r.snippet.slice(0, 100)}...`)
-    }
-  } else {
-    console.log(`ok=false error=${parsed.error || parsed._threw || '?'}`)
-    if (parsed.failures) {
-      for (const f of parsed.failures) console.log(`    ${f.engine}: ${f.reason}`)
-    }
-  }
-  return parsed
+function assertBrowserOnly(tools, label) {
+  assert.ok(REQUIRED_SEARCH_CHAIN.every(name => tools.includes(name)),
+    `${label}: browser search chain is present (${tools.join(',')})`)
+  assert.ok(LEGACY_WEB_TOOLS.every(name => !tools.includes(name)),
+    `${label}: removed web tools stay absent (${tools.join(',')})`)
 }
 
-async function main() {
-  console.log('=== Web Search Tool — Smoke Test ===')
-  console.log('Config: SERPER_API_KEY =', process.env.SERPER_API_KEY ? `set (${process.env.SERPER_API_KEY.slice(0, 6)}...)` : 'not set')
-  console.log('Config: SEARXNG_URL =', process.env.SEARXNG_URL || 'not set')
+assert.equal(BROWSER_TOOLS.length, 18, 'browser-only web access exposes the fixed 18-tool allowlist')
+assert.ok(!listCapabilities().some(capability => capability.id === 'web'),
+  'legacy standalone web capability is removed')
 
-  // 1. 中文 query
-  await run('中文 query', { query: 'Anthropic Claude 最新模型', limit: 5 })
-
-  // 2. 英文 query（应触发自适应 gl=us/hl=en，但只有 Serper 会用到）
-  await run('英文 query', { query: 'OpenAI o3 reasoning benchmark', limit: 5 })
-
-  // 3. 缓存命中（同 query/limit 立即重发）
-  await run('cache hit', { query: 'Anthropic Claude 最新模型', limit: 5 })
-
-  // 4. 空 query
-  await run('missing query', { query: '' })
-
-  // 5. limit 边界（max 8）
-  await run('limit=20 应被夹到 8', { query: 'electron app build error', limit: 20 })
-
-  // 6. 超长 query（测日志截断）
-  await run('超长 query 测日志截断', { query: 'test '.repeat(50) + 'long query', limit: 3 })
-
-  console.log('\n=== Done ===')
+for (const messageBody of [
+  '搜一下 vLLM 最新版本',
+  'search the web for the current Playwright MCP documentation',
+  '总结网页正文 https://example.com/article',
+  '读取这个 JavaScript 动态网页正文',
+]) {
+  assertBrowserOnly(
+    capabilityToolsFor(capabilityContext(messageBody)),
+    `capability routing: ${messageBody}`,
+  )
+  assertBrowserOnly(
+    selectTools({ messageBody, isTick: false, senderId: 'ID:test' }),
+    `turn routing: ${messageBody}`,
+  )
 }
 
-main().catch(err => {
-  console.error('FATAL:', err)
-  process.exit(1)
+const discovered = findCapabilitiesByQuery('上网搜索').find(capability => capability.id === 'interactive-browser')
+assert.ok(discovered, 'find_tool discovery resolves web search to the interactive-browser capability')
+assert.deepEqual(discovered.tools, BROWSER_TOOLS,
+  'discovery returns only the fixed native Playwright allowlist')
+
+const context = capabilityContextBlocks(capabilityContext('帮我上网搜索 Playwright MCP'))
+  .join('\n')
+assert.match(context, /browser_navigate/)
+assert.match(context, /bing\.com\/search\?q=/)
+assert.match(context, /browser_snapshot/)
+assert.match(context, /browser_click/)
+assert.match(context, /automatically return a fresh accessibility snapshot/)
+assert.match(context, /instead of routinely calling browser_snapshot/)
+for (const name of LEGACY_WEB_TOOLS) {
+  assert.match(context, new RegExp(`${name}[^\\n]*unavailable`, 'i'),
+    `browser workflow explicitly marks ${name} unavailable`)
+}
+
+const sparse = selectTools({
+  messageBody: '闲聊两句',
+  isTick: false,
+  senderId: 'ID:test',
 })
+assert.ok(BROWSER_TOOLS.every(name => !sparse.includes(name)),
+  'browser tools are not injected into an unrelated sparse turn')
+
+console.log('test-web-search passed: search/read intents route exclusively through Playwright MCP')

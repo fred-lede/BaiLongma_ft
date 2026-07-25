@@ -160,13 +160,16 @@ try {
   } = await import('../src/capabilities/marketplace/index.js')
   const { TOOL_SCHEMAS } = await import('../src/capabilities/schemas.js')
 
-  assert(TOOL_SCHEMAS.web_read?.function?.name === 'web_read', 'builtin web_read schema still exists')
-  assert(getInstalledToolSchema('web_read') === null, 'builtin web_read is not overwritten by an installed tool')
+  const removedWebTools = ['web_search', 'web_read', 'fetch_url', 'browser_read']
+  assert(removedWebTools.every(name => TOOL_SCHEMAS[name] === undefined),
+    'removed built-in web schemas stay absent')
+  assert(removedWebTools.every(name => getInstalledToolSchema(name) === null),
+    'removed web names are not silently restored as installed tools')
 
   const protectedNameProposal = parseJson(await execManageToolFactory({
     action: 'propose',
     name: 'web_read',
-    description: 'Attempt to overwrite the builtin web_read tool.',
+    description: 'Attempt to restore the removed reserved web_read tool.',
     parameters_schema: { type: 'object', properties: {}, required: [] },
     code: 'return "no"',
     tests: [{ name: 'runs', args: {}, expect: 'no' }],
@@ -175,13 +178,13 @@ try {
     action: 'review',
     proposal_id: protectedNameProposal.proposal_id,
   }))
-  assert(protectedNameReview?.ok === false, 'factory refuses to approve a builtin web_read override', JSON.stringify(protectedNameReview))
+  assert(protectedNameReview?.ok === false, 'factory refuses to restore the reserved legacy web_read name', JSON.stringify(protectedNameReview))
   await execManageToolFactory({ action: 'delete', proposal_id: protectedNameProposal.proposal_id })
 
   const proposed = parseJson(await execManageToolFactory({
     action: 'propose',
     name: TOOL_NAME,
-    description: 'Fetch a web page and return readable title, description, headings, body text, and links. Use when builtin web_read returns noisy HTML.',
+    description: 'Fetch a web page and return readable title, description, headings, body text, and links.',
     parameters_schema: {
       type: 'object',
       properties: {
@@ -211,7 +214,8 @@ try {
   assert(installed?.ok === true && installed.tool === TOOL_NAME, 'approved readable web fetch installs as a separate tool', JSON.stringify(installed))
   assert(isInstalledTool(TOOL_NAME), 'new readable web fetch is in installed registry')
   assert(getInstalledToolSchema(TOOL_NAME)?.function?.name === TOOL_NAME, 'new readable web fetch exposes function-call schema')
-  assert(getInstalledToolSchema('web_read') === null, 'installing readable web fetch still does not override builtin web_read')
+  assert(removedWebTools.every(name => getInstalledToolSchema(name) === null),
+    'installing a separately named tool does not restore removed web aliases')
 
   const fixtureResult = parseJson(await executeInstalledTool(TOOL_NAME, { html: fixtureHtml }))
   assert(fixtureResult?.title === expectedExtract.title, 'installed tool extracts title from fixture html', JSON.stringify(fixtureResult))

@@ -32,12 +32,12 @@ try {
   {
     const listing =
       '我现在可以使用这些工具：recall_memory（回忆过往记忆）、send_message（给你发消息）、' +
-      'set_task（设置任务）、web_search（联网搜索）等。需要我用其中哪个帮你做事，告诉我就好。'
+      'set_task（设置任务）、browser_navigate（Playwright 联网浏览）等。需要我用其中哪个帮你做事，告诉我就好。'
     let rounds = 0
     const result = await callLLM({
       systemPrompt: 'system',
       message: '你现在有哪些工具？查看你的所有工具',
-      tools: ['send_message', 'recall_memory', 'set_task', 'web_search', 'upsert_memory'],
+      tools: ['send_message', 'recall_memory', 'set_task', 'browser_navigate', 'upsert_memory'],
       mustReply: true,
       localReply: true,   // 语音/TUI：纯文本即回复，正是出 bug 的本地渠道
       _streamOnceForTest: async () => {

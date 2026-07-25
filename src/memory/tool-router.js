@@ -31,10 +31,10 @@
 // 已迁能力的工具名 + 工具注入选择器由能力注册表提供（单向依赖：registry 不 import 本文件）。
 import {
   BROWSER_TOOLS,
-  WEB_READ_TOOLS,
-  WEB_SEARCH_TOOLS,
-  WEB_TOOLS,
   capabilityToolsFor,
+  isDynamicWebReadIntent,
+  isStatelessWebReadIntent,
+  isStatelessWebSearchIntent,
   isStatefulBrowserIntent,
   isTerseBrowserFollowup,
 } from '../capabilities/capability-registry.js'
@@ -59,8 +59,9 @@ const TASK_CTRL_OPENER  = ['set_task']  // 没任务时只暴露 set_task
 // 无任务的临时成果，靠下面这组触发词 / find_tool 主动拉进来。
 const REVIEW_TOOLS      = ['review_work']
 
-// WEB_TOOLS 由能力注册表提供（见顶部 import），用于当前意图优先的组合归一化。WORLDCUP_TOOLS /
-// SOFTWARE_INSTALL_TOOLS 已随能力迁出本文件。
+// 网页搜索、读取和交互统一由能力注册表中的 BROWSER_TOOLS（官方
+// Microsoft Playwright MCP）提供。WORLDCUP_TOOLS / SOFTWARE_INSTALL_TOOLS
+// 已随能力迁出本文件。
 const FILESYSTEM_TOOLS  = ['read_file', 'write_file', 'delete_file', 'list_dir', 'make_dir']
 const EXEC_TOOLS        = ['exec_command', 'exec_quick_command', 'exec_task_command', 'exec_background_command', 'download_file', 'kill_process', 'list_processes']
 const MEDIA_TOOLS       = ['media_mode', 'music']
@@ -74,8 +75,9 @@ const STARTUP_SELF_CHECK_TOOLS = [
   'speak',
   'complete_startup_self_check',
   ...FILESYSTEM_TOOLS,
-  ...WEB_SEARCH_TOOLS,
-  ...MEDIA_TOOLS,
+  'browser_navigate',
+  'browser_snapshot',
+  'browser_close',
   'hotspot_mode',
 ]
 const PERSON_CARD_TOOLS = ['person_card_mode']
@@ -337,17 +339,34 @@ export function selectTools(ctx = {}) {
     startupSelfCheckActive = false,
     localVisualTurn = true,
     fastUserPath = false,
-    activeBrowserSessionCount = 0,
-    recentPlaywrightAction = false,
   } = ctx
 
   const body = (messageBody || '').toLowerCase()
   const statefulBrowserIntent = isStatefulBrowserIntent(messageBody)
+  const webAccessIntent = (
+    statefulBrowserIntent
+    || isStatelessWebSearchIntent(messageBody)
+    || isStatelessWebReadIntent(messageBody)
+    || isDynamicWebReadIntent(messageBody)
+  )
+  const explicitLocalArtifactIntent = /(?:本地|项目内|工作区).{0,10}(?:文件|目录|代码|readme)|(?:保存|写入|导出|下载).{0,10}(?:文件|本地|目录)|(?:local|workspace|project).{0,12}(?:file|folder|directory|code|readme)|(?:save|write|export|download).{0,16}(?:file|local|folder|directory)/i.test(messageBody)
   const terseBrowserFollowup = isTerseBrowserFollowup(messageBody)
+  const recentPlaywrightAction = Array.isArray(recentActionLog)
+    && recentActionLog.some(entry => BROWSER_TOOLS.includes(String(entry?.tool || '')))
   const out = new Set(CORE_TOOLS)
   // 被显式抑制的工具名:ActionLog 保活 / installed 列表 / fallback 兜底都要跳过,
   // 最后一道 delete 兜底,确保不被任何路径加回来。用于跨 turn 抑制 set_tick_interval 等，以及挡住已移除的旧工具名。
-  const suppressed = new Set(['generate_video', 'fetch_url', 'browser_read'])
+  const suppressed = new Set([
+    'generate_video',
+    'web_search',
+    'web_read',
+    'fetch_url',
+    'browser_read',
+    'browser_sessions',
+    'browser_open',
+    'browser_inspect',
+    'browser_act',
+  ])
 
   // 任务控制只在已有任务或明确要求建立任务时出现。普通聊天无需为此携带
   // task schema；没有命中的任务请求仍可通过 find_tool 按需发现 set_task。
@@ -373,7 +392,7 @@ export function selectTools(ctx = {}) {
 
   // —— 按关键词逐组判断 ——
 
-  if (hits(body, FILESYSTEM_TRIGGERS)) {
+  if (hits(body, FILESYSTEM_TRIGGERS) && (!webAccessIntent || explicitLocalArtifactIntent)) {
     for (const t of FILESYSTEM_TOOLS) out.add(t)
   }
   if (hits(body, EXEC_TRIGGERS)) {
@@ -381,10 +400,10 @@ export function selectTools(ctx = {}) {
   }
   if (hits(body, MEDIA_TRIGGERS)) {
     for (const t of MEDIA_TOOLS) out.add(t)
-    // 媒体场景常需要先联网找链接——尤其视频要 web_search 搜到可嵌入的 B 站 BV 才能播。
-    // 不注入 web_search 的话，模型会误以为"没有联网搜索"而直接放弃找视频；正文抓取工具不需要。
+    // 媒体场景常需要先联网找链接——尤其视频要用 Playwright MCP 搜到可嵌入的 B 站 BV 才能播。
+    // 不注入浏览器的话，模型会误以为"没有联网搜索"而直接放弃找视频。
     // （这是"找的视频不能播放/找不到视频"的一个隐藏根因）。音乐用不到也无妨。
-    for (const t of WEB_SEARCH_TOOLS) out.add(t)
+    for (const t of BROWSER_TOOLS) out.add(t)
   }
   if (hits(body, REMINDER_TRIGGERS)) {
     for (const t of REMINDER_TOOLS) out.add(t)
@@ -398,10 +417,10 @@ export function selectTools(ctx = {}) {
   if (hits(body, TICKER_TRIGGERS) || isTick) {
     for (const t of TICKER_TOOLS) out.add(t)
   }
-  // —— 能力注册表：已迁能力（web / hotspot / worldcup / software-install）的工具注入 ——
-  // 每个能力用自己的 toolWhen 门（web=关键词、hotspot/worldcup=不自动、
+  // —— 能力注册表：已迁能力（Playwright web / hotspot / worldcup / software-install）的工具注入 ——
+  // 每个能力用自己的 toolWhen 门（浏览器=网页意图、hotspot/worldcup=不自动、
   // software-install=isSoftwareInstallRequest），保留与旧分支等价的解耦语义。
-  const capCtx = { text: body, rawText: messageBody, isTick, mmCaps, hasTask, activeBrowserSessionCount }
+  const capCtx = { text: body, rawText: messageBody, isTick, mmCaps, hasTask }
   for (const t of capabilityToolsFor(capCtx)) out.add(t)
   if (INLINE_IMAGE_RE.test(messageBody)) out.add('analyze_image')
 
@@ -441,10 +460,6 @@ export function selectTools(ctx = {}) {
   if (mmCaps.includes('lyrics') && hits(body, LYRICS_TRIGGERS))    out.add(MM_GEN_TOOLS.lyrics)
   if (mmCaps.includes('music')  && hits(body, MUSIC_GEN_TRIGGERS)) out.add(MM_GEN_TOOLS.music)
   if (mmCaps.includes('image')  && hits(body, IMAGE_GEN_TRIGGERS)) out.add(MM_GEN_TOOLS.image)
-  // Remember the tools selected from the current user message before recent
-  // history can restore continuity tools. Search deliberately includes read so
-  // the model can verify source pages without another find_tool round.
-  const directlyRoutedWebTools = WEB_TOOLS.filter(name => out.has(name))
   // —— ActionLog 保活 ——
   // 上轮（或最近 10 次）调用过的工具强制带上：跨轮工作流不能因为关键词没命中就断链。
   // 保活只覆盖白龙马的"已知工具"——installed 工具走单独的全注入路径。
@@ -452,6 +467,9 @@ export function selectTools(ctx = {}) {
   if (Array.isArray(recentActionLog)) {
     for (const entry of recentActionLog) {
       const name = entry?.tool
+      // Stateful Playwright continuity must restore the complete safe group
+      // below, never a single stranded action schema on an unrelated turn.
+      if (typeof name === 'string' && BROWSER_TOOLS.includes(name)) continue
       if (typeof name === 'string' && name && !suppressed.has(name)) out.add(name)
     }
   }
@@ -465,39 +483,19 @@ export function selectTools(ctx = {}) {
     }
   }
 
-  // A live Playwright session is stronger continuity evidence than pronoun or
-  // keyword matching. Keep the whole stateful group available so a terse
-  // follow-up can inspect/act/close the existing page without switching tools.
-  const browserContinuity = terseBrowserFollowup
-    && (Number(activeBrowserSessionCount) > 0 || recentPlaywrightAction)
+  // The official MCP server owns browser lifecycle, so there is no separate
+  // Bailongma session registry to inspect. A recent official Playwright action
+  // plus a terse follow-up is the continuity signal; restore the whole safe
+  // allowlist rather than only the one tool found in ActionLog.
+  const browserContinuity = terseBrowserFollowup && recentPlaywrightAction
   if (browserContinuity) {
     for (const name of BROWSER_TOOLS) out.add(name)
   }
 
-  // Current-turn intent wins over history, but web and Playwright are no longer
-  // mutually exclusive: "search, then open/click" needs both capability sets.
-  const statefulBrowserRoute = statefulBrowserIntent || browserContinuity
-  if (directlyRoutedWebTools.length > 0) {
-    for (const name of WEB_TOOLS) {
-      if (!directlyRoutedWebTools.includes(name)) out.delete(name)
-    }
-  } else if (statefulBrowserRoute) {
-    for (const name of WEB_TOOLS) out.delete(name)
-  } else {
-    const recentWebEntries = (Array.isArray(recentActionLog) ? recentActionLog : [])
-      .filter(entry => WEB_TOOLS.includes(String(entry?.tool || '')))
-      .map((entry, index) => ({
-        name: String(entry.tool), index,
-        time: Date.parse(entry?.timestamp || '') || 0,
-      }))
-      .sort((a, b) => b.time - a.time || b.index - a.index)
-    const recentWebTool = recentWebEntries[0]?.name
-    if (recentWebTool === WEB_SEARCH_TOOLS[0]) {
-      for (const name of WEB_TOOLS) out.add(name)
-    } else if (recentWebTool === WEB_READ_TOOLS[0]) {
-      out.add(WEB_READ_TOOLS[0])
-      out.delete(WEB_SEARCH_TOOLS[0])
-    }
+  // All current web intents get the complete safe Playwright group. There is no
+  // stateless search/read fallback to restore from ActionLog.
+  if (webAccessIntent || browserContinuity) {
+    for (const name of BROWSER_TOOLS) out.add(name)
   }
 
   // —— Fastpath 收紧（可选） ——

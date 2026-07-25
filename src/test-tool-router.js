@@ -5,8 +5,11 @@
 // Run: node src/test-tool-router.js
 
 import { selectTools } from './memory/tool-router.js'
+import { BROWSER_TOOLS } from './capabilities/capability-registry.js'
 
-const WEB_TOOL_NAMES = ['web_search', 'web_read']
+const REMOVED_WEB_TOOLS = ['web_search', 'web_read', 'fetch_url', 'browser_read']
+const REMOVED_BROWSER_TOOLS = ['browser_sessions', 'browser_open', 'browser_inspect', 'browser_act']
+const REMOVED_WEB_AND_BROWSER_TOOLS = [...REMOVED_WEB_TOOLS, ...REMOVED_BROWSER_TOOLS]
 
 let failed = 0
 function assert(cond, label) {
@@ -49,8 +52,8 @@ function hasNone(tools, names) {
     isTick: false,
     senderId: 'ID:000001',
   })
-  assert(hasAll(tools, ['web_search', 'web_read']) && hasNone(tools, ['fetch_url', 'browser_read']),
-    `2) stateless search → search + read injected (got: ${tools.join(',')})`)
+  assert(hasAll(tools, BROWSER_TOOLS) && hasNone(tools, REMOVED_WEB_AND_BROWSER_TOOLS),
+    `2) web search → only official Playwright MCP injected (got: ${tools.join(',')})`)
   assert(hasNone(tools, ['exec_command', 'kill_process']),
     '2) exec group not over-triggered')
 }
@@ -74,7 +77,7 @@ function hasNone(tools, names) {
     senderId: 'ID:000001',
   })
   // 没有强意图关键词时，不应补 web/filesystem；Agent 可经 find_tool 按需发现。
-  assert(hasNone(tools, ['web_search', 'read_file', 'write_file', 'delete_file', 'make_dir']),
+  assert(hasNone(tools, [...REMOVED_WEB_AND_BROWSER_TOOLS, ...BROWSER_TOOLS, 'read_file', 'write_file', 'delete_file', 'make_dir']),
     `4) sparse msg stays sparse (got: ${tools.join(',')})`)
   assert(has(tools, 'send_message'), '4) core still present')
   assert(hasNone(tools, ['set_task', 'search_memory', 'probe_memory', 'voice_retire']),
@@ -95,7 +98,8 @@ function hasNone(tools, names) {
   assert(has(tools, 'set_tick_interval'), '5) TICK has set_tick_interval')
   assert(tools.length === 7, `5) clean TICK baseline stays compact at 7 tools (got ${tools.length}: ${tools.join(',')})`)
   assert(hasNone(tools, [
-    'web_search', 'read_file', 'manage_reminder', 'manage_prefetch_task',
+    ...REMOVED_WEB_AND_BROWSER_TOOLS, ...BROWSER_TOOLS,
+    'read_file', 'manage_reminder', 'manage_prefetch_task',
     'hotspot_mode', 'exec_command', 'install_tool', 'media_mode',
   ]), `5) TICK does not pre-decide business capabilities (got: ${tools.join(',')})`)
 }
@@ -110,7 +114,7 @@ function hasNone(tools, names) {
   })
   assert(hasAll(tools, ['complete_task', 'update_task_step', 'review_work', 'focus_banner']),
     `5b) task TICK keeps explicit task judgment controls (got: ${tools.join(',')})`)
-  assert(hasNone(tools, ['web_search', 'read_file', 'manage_reminder', 'hotspot_mode']),
+  assert(hasNone(tools, [...REMOVED_WEB_AND_BROWSER_TOOLS, ...BROWSER_TOOLS, 'read_file', 'manage_reminder', 'hotspot_mode']),
     `5b) task TICK still discovers unrelated capabilities on demand (got: ${tools.join(',')})`)
 }
 
@@ -201,6 +205,8 @@ function hasNone(tools, names) {
   })
   assert(hasAll(tools, ['media_mode', 'music']),
     `8) "play some music" → media group injected (got: ${tools.join(',')})`)
+  assert(hasAll(tools, BROWSER_TOOLS) && hasNone(tools, REMOVED_WEB_AND_BROWSER_TOOLS),
+    '8) media link discovery uses only official Playwright MCP')
 }
 
 // ====== 9) ActionLog 保活（跨轮连贯） ======
@@ -214,16 +220,36 @@ function hasNone(tools, names) {
       { tool: 'web_read', timestamp: '2026-05-19T10:01:00Z' },
     ],
   })
-  assert(has(tools, 'web_read') && !has(tools, 'web_search'),
-    `9) actionLog保活：最近一次读取保持 web_read (got: ${tools.join(',')})`)
+  assert(hasNone(tools, REMOVED_WEB_AND_BROWSER_TOOLS) && hasNone(tools, BROWSER_TOOLS),
+    `9) legacy web ActionLog cannot revive removed tools or grant browser continuity (got: ${tools.join(',')})`)
 }
 {
   const tools = selectTools({
     messageBody: '继续', isTick: false,
     recentActionLog: [{ tool: 'web_search' }, { tool: 'web_read' }],
   })
-  assert(has(tools, 'web_read') && !has(tools, 'web_search'),
-    `9b) ActionLog 无时间戳时最后一项优先 (got: ${tools.join(',')})`)
+  assert(hasNone(tools, REMOVED_WEB_AND_BROWSER_TOOLS) && hasNone(tools, BROWSER_TOOLS),
+    `9b) legacy web ActionLog without timestamps remains suppressed (got: ${tools.join(',')})`)
+}
+{
+  const tools = selectTools({
+    messageBody: '继续',
+    isTick: false,
+    recentActionLog: [{ tool: 'browser_snapshot' }],
+  })
+  assert(hasAll(tools, BROWSER_TOOLS),
+    `9c) 官方 Playwright recent action + 简短追问保活完整安全组 (got: ${tools.join(',')})`)
+  assert(hasNone(tools, REMOVED_WEB_AND_BROWSER_TOOLS),
+    '9c) 浏览器连续操作不恢复任何旧 web/浏览器工具')
+}
+{
+  const tools = selectTools({
+    messageBody: '解释一下这个项目的架构',
+    isTick: false,
+    recentActionLog: [{ tool: 'browser_snapshot' }],
+  })
+  assert(hasNone(tools, BROWSER_TOOLS),
+    '9d) recent browser action 不向无关新话题泄漏单个或整组浏览器工具')
 }
 
 // ====== 10) 多模态生成 gate：mmCaps 没配 → 不注入 ======
@@ -267,28 +293,30 @@ function hasNone(tools, names) {
   })
   assert(hasAll(tools, [
     'speak', 'complete_startup_self_check', 'read_file', 'write_file',
-    'web_search', 'media_mode', 'hotspot_mode',
+    'browser_navigate', 'browser_snapshot', 'browser_close', 'hotspot_mode',
   ]), '11) startupSelfCheckActive → fixed self-check tool set injected')
-  assert(hasNone(tools, ['web_read', 'fetch_url', 'browser_read']),
-    '11) startup self-check only injects the search fallback it actually uses')
+  assert(hasNone(tools, BROWSER_TOOLS.filter(name => !['browser_navigate', 'browser_snapshot', 'browser_close'].includes(name))),
+    '11) startup self-check exposes only its three required Playwright tools')
+  assert(hasNone(tools, REMOVED_WEB_AND_BROWSER_TOOLS),
+    '11) startup self-check exposes no removed web/browser tools')
 }
 
-// ====== 11a) deterministic web routes expose the tools needed by the workflow ======
-for (const [messageBody, expected] of [
-  ['search current news online', ['web_search', 'web_read']],
-  ['总结这个网页正文 https://example.com/article', ['web_read']],
-  ['读取这个 JavaScript 动态网页正文', ['web_read']],
-  ['搜索一下深圳最新天气', ['web_read']],
+// ====== 11a) every web route exposes only the official Playwright MCP workflow ======
+for (const messageBody of [
+  'search current news online',
+  '总结这个网页正文 https://example.com/article',
+  '读取这个 JavaScript 动态网页正文',
+  '搜索一下深圳最新天气',
 ]) {
   const tools = selectTools({ messageBody, isTick: false })
-  assert(hasAll(tools, expected) && WEB_TOOL_NAMES.filter(name => !expected.includes(name)).every(name => !has(tools, name)),
-    `11a) ${messageBody} → ${expected.join(' + ')} (got: ${tools.join(',')})`)
+  assert(hasAll(tools, BROWSER_TOOLS) && hasNone(tools, REMOVED_WEB_AND_BROWSER_TOOLS),
+    `11a) ${messageBody} → only official Playwright MCP (got: ${tools.join(',')})`)
 }
 
 {
   const tools = selectTools({ messageBody: 'search online then open website and click the first link', isTick: false })
-  assert(hasAll(tools, ['web_search', 'web_read', 'browser_open', 'browser_navigate', 'browser_act']),
-    `11a2) combined search + interaction keeps both capability sets (got: ${tools.join(',')})`)
+  assert(hasAll(tools, BROWSER_TOOLS) && hasNone(tools, REMOVED_WEB_AND_BROWSER_TOOLS),
+    `11a2) combined search + interaction keeps only Playwright MCP (got: ${tools.join(',')})`)
 }
 
 // ====== 11b) Worldcup / Hotspot 不再被关键词自动注入 ======
@@ -408,7 +436,7 @@ for (const [messageBody, expected] of [
   })
   assert(hasAll(tools, ['install_software', 'find_tool']),
     `16) software install intent -> dedicated install tool injected (got: ${tools.join(',')})`)
-  assert(hasNone(tools, ['web_search', 'download_file', 'exec_command']),
+  assert(hasNone(tools, [...REMOVED_WEB_AND_BROWSER_TOOLS, ...BROWSER_TOOLS, 'download_file', 'exec_command']),
     `16) software install intent does not expose manual web/shell fallback before install_software (got: ${tools.join(',')})`)
 }
 
@@ -490,8 +518,9 @@ for (const [messageBody, expected] of [
   console.log(`[INFO] minimal-case tool count: ${minimalTools.length}`)
   assert(fullSetTools.length > minimalTools.length,
     `worst-case (${fullSetTools.length}) > minimal-case (${minimalTools.length})`)
-  // 主仓老版本是 ~35-40 工具全量；现在最坏情况也不应该超过那个数
-  assert(fullSetTools.length <= 45,
+  // 官方 Playwright MCP 的安全白名单比旧无状态 web 工具更完整；即使最坏场景
+  // 展开整组，仍应保持在 50 以内，不能退回无界全量注入。
+  assert(fullSetTools.length <= 50,
     `worst-case (${fullSetTools.length}) stays bounded`)
 }
 

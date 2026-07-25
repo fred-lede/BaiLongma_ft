@@ -4,14 +4,14 @@ import {
   turnNeedsExternalSendMessage,
 } from './runtime/local-reply-tools.js'
 
-const baseTools = ['send_message', 'web_search', 'read_file']
+const baseTools = ['send_message', 'browser_navigate', 'read_file']
 
 assert.deepEqual(
   filterSendMessageForLocalReply(baseTools, {
     localReply: true,
     input: '你成功把我逗乐了',
   }),
-  ['web_search', 'read_file'],
+  ['browser_navigate', 'read_file'],
   'local replies do not expose send_message to the model'
 )
 

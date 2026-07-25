@@ -26,6 +26,49 @@ export const CONTEXT_MESSAGE_LIMIT_MIN = 1
 export const CONTEXT_MESSAGE_LIMIT_MAX = 40
 export const DEFAULT_CONTEXT_MESSAGE_LIMIT = 10
 
+const LEGACY_PLAYWRIGHT_BROWSER_TOOLS = Object.freeze([
+  'browser_navigate',
+  'browser_navigate_back',
+  'browser_snapshot',
+  'browser_find',
+  'browser_click',
+  'browser_type',
+  'browser_fill_form',
+  'browser_select_option',
+  'browser_press_key',
+  'browser_hover',
+  'browser_drag',
+  'browser_wait_for',
+  'browser_handle_dialog',
+  'browser_tabs',
+  'browser_take_screenshot',
+  'browser_console_messages',
+  'browser_resize',
+  'browser_close',
+])
+
+const LEGACY_BLOCKED_TOOL_MIGRATIONS = Object.freeze({
+  playwright_browser: LEGACY_PLAYWRIGHT_BROWSER_TOOLS,
+  web_search: LEGACY_PLAYWRIGHT_BROWSER_TOOLS,
+  web_read: LEGACY_PLAYWRIGHT_BROWSER_TOOLS,
+  fetch_url: LEGACY_PLAYWRIGHT_BROWSER_TOOLS,
+  browser_read: LEGACY_PLAYWRIGHT_BROWSER_TOOLS,
+  browser_open: ['browser_navigate'],
+  browser_inspect: ['browser_snapshot', 'browser_find'],
+  browser_act: [
+    'browser_click',
+    'browser_type',
+    'browser_fill_form',
+    'browser_select_option',
+    'browser_press_key',
+    'browser_hover',
+    'browser_drag',
+    'browser_wait_for',
+    'browser_handle_dialog',
+    'browser_resize',
+  ],
+})
+
 export const DEEPSEEK_MODELS = [
   {
     id: 'deepseek-v4-flash',
@@ -1460,7 +1503,7 @@ export function getSecurity() {
 function normalizeBlockedTools(values = []) {
   return [...new Set(values
     .filter(value => typeof value === 'string')
-    .map(value => ['fetch_url', 'browser_read'].includes(value) ? 'web_read' : value))]
+    .flatMap(value => LEGACY_BLOCKED_TOOL_MIGRATIONS[value] || [value]))]
 }
 
 export function setSecurity(updates) {
@@ -1923,87 +1966,6 @@ export function setEmbeddingConfig(updates) {
     else delete next[key]
   }
   writeStoredConfig({ ...existing, embedding: next })
-}
-
-// ── Web Search 配置 ──
-// 顶级字段（与现有 serper_api_key 兼容），不嵌套到子块
-// 字段：serper_api_key / searxng_url / jina_api_key
-const WEB_SEARCH_KEY_MAP = {
-  serperKey:  'serper_api_key',
-  searxngUrl: 'searxng_url',
-  jinaKey:    'jina_api_key',
-  braveKey:   'brave_api_key',
-  tavilyKey:  'tavily_api_key',
-}
-
-function readWebSearchBlock() {
-  try {
-    const raw = JSON.parse(fs.readFileSync(paths.configFile, 'utf-8'))
-    return {
-      serperKey:  typeof raw.serper_api_key === 'string' ? raw.serper_api_key : '',
-      searxngUrl: typeof raw.searxng_url    === 'string' ? raw.searxng_url    : '',
-      jinaKey:    typeof raw.jina_api_key   === 'string' ? raw.jina_api_key   : '',
-      braveKey:   typeof raw.brave_api_key  === 'string' ? raw.brave_api_key  : '',
-      tavilyKey:  typeof raw.tavily_api_key === 'string' ? raw.tavily_api_key : '',
-    }
-  } catch {
-    return { serperKey: '', searxngUrl: '', jinaKey: '', braveKey: '', tavilyKey: '' }
-  }
-}
-
-// 前端可见视图：不暴露 key 明文，只暴露 configured 布尔 + searxngUrl（URL 不算敏感）
-// configured 同时考虑 env 兜底，避免"env 里有 key 但 UI 标未配置"的误导
-// xxxFromEnv 提示来源，让 UI 标注"已配置（环境变量）"，并暗示清空输入框不会真正生效
-export function getWebSearchConfig() {
-  const stored = readWebSearchBlock()
-  const envSerper  = process.env.SERPER_API_KEY || ''
-  const envJina    = process.env.JINA_API_KEY   || ''
-  const envSearxng = process.env.SEARXNG_URL    || ''
-  const envBrave   = process.env.BRAVE_API_KEY  || ''
-  const envTavily  = process.env.TAVILY_API_KEY || ''
-  return {
-    serperConfigured: !!(stored.serperKey  || envSerper),
-    jinaConfigured:   !!(stored.jinaKey    || envJina),
-    braveConfigured:  !!(stored.braveKey   || envBrave),
-    tavilyConfigured: !!(stored.tavilyKey  || envTavily),
-    // 输入框只回显 stored 值，避免用户以为能编辑 env 值
-    searxngUrl:       stored.searxngUrl,
-    // effective URL（含 env 兜底），UI 可显示在状态行
-    effectiveSearxngUrl: stored.searxngUrl || envSearxng,
-    serperFromEnv:    !stored.serperKey  && !!envSerper,
-    jinaFromEnv:      !stored.jinaKey    && !!envJina,
-    braveFromEnv:     !stored.braveKey   && !!envBrave,
-    tavilyFromEnv:    !stored.tavilyKey  && !!envTavily,
-    searxngFromEnv:   !stored.searxngUrl && !!envSearxng,
-  }
-}
-
-// Backend-only：读明文 key。供 src/capabilities/executor.js 内部用，不要给前端
-export function getWebSearchCredentials() {
-  const stored = readWebSearchBlock()
-  return {
-    serperKey:  stored.serperKey  || process.env.SERPER_API_KEY || '',
-    searxngUrl: stored.searxngUrl || process.env.SEARXNG_URL    || '',
-    jinaKey:    stored.jinaKey    || process.env.JINA_API_KEY   || '',
-    braveKey:   stored.braveKey   || process.env.BRAVE_API_KEY  || '',
-    tavilyKey:  stored.tavilyKey  || process.env.TAVILY_API_KEY || '',
-  }
-}
-
-export function setWebSearchConfig(updates) {
-  const existing = readExistingStoredConfig()
-  const next = { ...existing }
-  for (const [key, val] of Object.entries(updates || {})) {
-    const cfgField = WEB_SEARCH_KEY_MAP[key]
-    if (!cfgField) continue
-    const trimmed = String(val || '').trim()
-    if (key === 'searxngUrl' && trimmed && !/^https?:\/\//i.test(trimmed)) {
-      throw new Error('searxngUrl must start with http:// or https://')
-    }
-    if (trimmed) next[cfgField] = trimmed
-    else delete next[cfgField]
-  }
-  writeStoredConfig(next)
 }
 
 export const __internals = {

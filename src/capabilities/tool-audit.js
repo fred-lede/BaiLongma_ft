@@ -28,18 +28,18 @@ export function summarizeToolExecution(name, args = {}) {
       return `${name}(${String(args.url || args.link || args.href || '?').slice(0, 120)})`
     case 'web_search':
       return `web_search(${String(args.query || args.q || args.keyword || '?').slice(0, 120)})`
-    case 'browser_open':
-      return `browser_open(${String(args.url || 'about:blank').slice(0, 120)})`
     case 'browser_navigate':
-      return `browser_navigate(session=${String(args.session_id || '?').slice(0, 80)}, url=${String(args.url || '?').slice(0, 120)})`
-    case 'browser_sessions':
-      return 'browser_sessions()'
-    case 'browser_inspect':
+      return `browser_navigate(${String(args.url || '?').slice(0, 120)})`
     case 'browser_tabs':
-    case 'browser_close':
-      return `${name}(session=${String(args.session_id || '?').slice(0, 80)})`
-    case 'browser_act':
-      return `browser_act(session=${String(args.session_id || '?').slice(0, 80)}, action=${String(args.action || '?').slice(0, 30)})`
+      return `browser_tabs(action=${String(args.action || '?').slice(0, 30)})`
+    case 'browser_type':
+      return `browser_type(target=${String(args.target || args.element || '?').slice(0, 100)})`
+    case 'browser_fill_form':
+      return `browser_fill_form(fields=${Array.isArray(args.fields) ? args.fields.length : 0})`
+    case 'browser_find':
+      return `browser_find(${String(args.text || args.regex || '?').slice(0, 100)})`
+    case 'browser_take_screenshot':
+      return `browser_take_screenshot(${String(args.filename || '?').slice(0, 120)})`
     case 'send_message':
     case 'express':
       return `${name} -> ${args.target_id || '(unknown)'}`
@@ -82,32 +82,32 @@ function sanitizeBrowserAuditUrl(value) {
 export function sanitizeToolAuditArgs(name, args = {}) {
   const redacted = redactAuditValue(args)
   if (!redacted || typeof redacted !== 'object') return redacted
-  if (['browser_open', 'browser_navigate', 'browser_tabs', 'browser_close'].includes(name) && Object.prototype.hasOwnProperty.call(redacted, 'url')) {
+  if (name.startsWith('browser_') && Object.prototype.hasOwnProperty.call(redacted, 'url')) {
     redacted.url = sanitizeBrowserAuditUrl(redacted.url)
   }
-  if (name !== 'browser_act') return redacted
   const safe = { ...redacted }
-  // Form text can be a password, token, personal data, or arbitrary prose. It
-  // must never reach args_json/detail even when the key is merely "value".
-  if (Object.prototype.hasOwnProperty.call(safe, 'value')) safe.value = '[redacted]'
-  if (Object.prototype.hasOwnProperty.call(safe, 'values')) safe.values = '[redacted]'
+  // Typed/form text can be a password, token, personal data, or arbitrary
+  // prose. It must never reach args_json/detail under generic keys.
+  if (name === 'browser_type' && Object.prototype.hasOwnProperty.call(safe, 'text')) {
+    safe.text = '[redacted]'
+  }
+  if (name === 'browser_fill_form' && Array.isArray(safe.fields)) {
+    safe.fields = safe.fields.map(field => {
+      if (!field || typeof field !== 'object') return field
+      return {
+        ...field,
+        ...(Object.prototype.hasOwnProperty.call(field, 'value') ? { value: '[redacted]' } : {}),
+      }
+    })
+  }
   return safe
 }
 
+const SENSITIVE_BROWSER_INPUT_TOOLS = new Set(['browser_type', 'browser_fill_form'])
+
 function safeResultPreview(name, result, error) {
-  if (name !== 'browser_act') return previewValue(result || error, 220)
-  try {
-    const parsed = JSON.parse(String(result || '{}'))
-    return previewValue({
-      ok: parsed.ok,
-      code: parsed.code,
-      session_id: parsed.session_id,
-      page_id: parsed.page_id,
-      action: parsed.action,
-    }, 220)
-  } catch {
-    return error ? 'browser action failed' : ''
-  }
+  if (!SENSITIVE_BROWSER_INPUT_TOOLS.has(name)) return previewValue(result || error, 220)
+  return error ? 'browser input failed' : 'browser input completed'
 }
 
 export function inferToolStatus(result) {
@@ -158,7 +158,7 @@ export function buildToolAuditRecord({ name, args, context, policy, status, resu
       risk: policy?.risk || classifyTool(name),
       argsJson: safeJsonStringify(auditArgs),
       resultPreview,
-      error: name === 'browser_act' && error ? 'browser action failed' : error,
+      error: SENSITIVE_BROWSER_INPUT_TOOLS.has(name) && error ? 'browser input failed' : error,
       durationMs,
       source: getExecutionSource(context),
   }

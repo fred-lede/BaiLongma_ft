@@ -1,25 +1,45 @@
 #!/usr/bin/env node
 
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
-import { resolveTargets } from './prepare-playwright-browsers.mjs'
-import { getPrimaryChromiumLaunchOptions } from '../src/capabilities/tools/web/browser.js'
-import { launchBrowser } from '../src/capabilities/tools/browser/runtime.js'
+import {
+  browserDescriptor,
+  resolveMcpRuntime,
+  resolveTargets,
+} from './prepare-playwright-browsers.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const pkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'))
+const lock = JSON.parse(readFileSync(path.join(root, 'package-lock.json'), 'utf8'))
 const mainSource = readFileSync(path.join(root, 'electron', 'main.cjs'), 'utf8')
 const macBuildSource = readFileSync(path.join(root, 'scripts', 'build-mac.mjs'), 'utf8')
 const gitignore = readFileSync(path.join(root, '.gitignore'), 'utf8')
 const require = createRequire(import.meta.url)
-const runtime = require('../electron/playwright-runtime.cjs')
+const packagedRuntime = require('../electron/playwright-runtime.cjs')
+const mcpRuntime = resolveMcpRuntime(root)
 
-assert.equal(pkg.dependencies.playwright, '1.59.1')
-assert.equal(pkg.dependencies['playwright-core'], '1.59.1')
-assert.equal(pkg.devDependencies.playwright, undefined)
+assert.equal(pkg.dependencies['@playwright/mcp'], '0.0.78')
+assert.equal(pkg.dependencies.playwright, undefined, 'Playwright must be versioned through @playwright/mcp')
+assert.equal(pkg.dependencies['playwright-core'], undefined, 'playwright-core must be versioned through @playwright/mcp')
+assert.equal(lock.packages[''].dependencies['@playwright/mcp'], pkg.dependencies['@playwright/mcp'])
+assert.equal(lock.packages['node_modules/@playwright/mcp'].version, pkg.dependencies['@playwright/mcp'])
+assert.equal(mcpRuntime.mcpPackage.version, pkg.dependencies['@playwright/mcp'])
+assert.equal(mcpRuntime.playwrightPackage.version, mcpRuntime.mcpPackage.dependencies.playwright)
+assert.equal(mcpRuntime.playwrightCorePackage.version, mcpRuntime.mcpPackage.dependencies['playwright-core'])
+assert.equal(mcpRuntime.playwrightPackage.dependencies['playwright-core'], mcpRuntime.playwrightCorePackage.version)
+assert.equal(path.basename(mcpRuntime.mcpCli), 'cli.js')
+
+const versionResult = spawnSync(process.execPath, [mcpRuntime.mcpCli, '--version'], {
+  cwd: root,
+  encoding: 'utf8',
+})
+assert.equal(versionResult.status, 0, versionResult.stderr)
+assert.equal(versionResult.stdout.trim(), `Version ${mcpRuntime.mcpPackage.version}`)
+
 assert.deepEqual(pkg.build.extraResources, [{
   from: 'build/playwright-browsers/${os}-${arch}',
   to: 'playwright-browsers',
@@ -35,11 +55,36 @@ assert.ok(macBuildSource.indexOf('prepare-playwright-browsers.mjs') < macBuildSo
 assert.ok(mainSource.indexOf('configurePackagedPlaywright') < mainSource.indexOf('await import(pathToFileURL(BACKEND_ENTRY)'))
 assert.match(gitignore, /^build\/playwright-browsers\/$/m)
 
-assert.deepEqual(resolveTargets([], 'win32').map((target) => target.builderKey), ['win-x64'])
-assert.deepEqual(resolveTargets([], 'darwin').map((target) => target.builderKey), ['mac-x64', 'mac-arm64'])
-assert.equal(runtime.packagedHostPlatform('darwin', 'arm64'), 'mac15-arm64')
+assert.deepEqual(resolveTargets([], 'win32').map(target => target.builderKey), ['win-x64'])
+assert.deepEqual(resolveTargets([], 'darwin').map(target => target.builderKey), ['mac-x64', 'mac-arm64'])
+assert.throws(() => resolveTargets(['--arch=arm64'], 'win32'), /Windows Playwright packaging currently supports x64 only/)
+assert.throws(() => resolveTargets([], 'linux'), /not configured for linux/)
+
+const descriptors = [
+  ...resolveTargets([], 'darwin'),
+  ...resolveTargets([], 'win32'),
+].map(target => ({
+  target,
+  descriptor: browserDescriptor(
+    target,
+    path.join(root, 'fake-staging', target.builderKey),
+    mcpRuntime,
+  ),
+}))
+const revisions = new Set(descriptors.map(({ descriptor }) => descriptor.revision))
+assert.equal(revisions.size, 1, 'all packaged targets must use the MCP-pinned Chromium revision')
+for (const { target, descriptor } of descriptors) {
+  assert.match(descriptor.directory, new RegExp(`fake-staging[/\\\\]${target.builderKey}[/\\\\]chromium-${descriptor.revision}$`))
+  assert.ok(descriptor.downloadURLs.length > 0, `${target.builderKey} has no browser download URL`)
+  assert.ok(descriptor.downloadURLs.every(url => url.includes(descriptor.browserVersion)), `${target.builderKey} URL does not match its browser version`)
+}
+assert.match(descriptors.find(({ target }) => target.builderKey === 'mac-x64').descriptor.executablePath(), /chrome-mac-x64/)
+assert.match(descriptors.find(({ target }) => target.builderKey === 'mac-arm64').descriptor.executablePath(), /chrome-mac-arm64/)
+assert.match(descriptors.find(({ target }) => target.builderKey === 'win-x64').descriptor.executablePath(), /chrome-win64[/\\]chrome\.exe$/)
+
+assert.equal(packagedRuntime.packagedHostPlatform('darwin', 'arm64'), 'mac15-arm64')
 const env = {}
-assert.equal(runtime.configurePackagedPlaywright({
+assert.equal(packagedRuntime.configurePackagedPlaywright({
   isPackaged: true,
   resourcesPath: path.join(root, 'fake-resources'),
   platform: 'win32',
@@ -48,32 +93,14 @@ assert.equal(runtime.configurePackagedPlaywright({
 }), path.join(root, 'fake-resources', 'playwright-browsers'))
 assert.equal(env.PLAYWRIGHT_HOST_PLATFORM_OVERRIDE, 'win64')
 assert.equal(env.BAILONGMA_BUNDLED_PLAYWRIGHT, '1')
-assert.deepEqual(getPrimaryChromiumLaunchOptions(env), { headless: true, channel: 'chrome' })
-assert.deepEqual(getPrimaryChromiumLaunchOptions({ PLAYWRIGHT_BROWSERS_PATH: 'shared-cache' }), { headless: true, channel: 'chrome' })
-assert.deepEqual(getPrimaryChromiumLaunchOptions({}), { headless: true, channel: 'chrome' })
-assert.deepEqual(getPrimaryChromiumLaunchOptions({ BAILONGMA_BROWSER_CHANNEL: 'chromium' }), { headless: true, channel: 'chromium' })
-assert.throws(
-  () => getPrimaryChromiumLaunchOptions({ BAILONGMA_BROWSER_CHANNEL: 'firefox' }),
-  /Unsupported BAILONGMA_BROWSER_CHANNEL/,
-)
 
-const originalBundledFlag = process.env.BAILONGMA_BUNDLED_PLAYWRIGHT
-process.env.BAILONGMA_BUNDLED_PLAYWRIGHT = '1'
-try {
-  const calls = []
-  const bundledBrowser = { kind: 'bundled-chromium' }
-  const result = await launchBrowser({
-    async launch(options) {
-      calls.push(options.channel)
-      if (options.channel === 'chromium') return bundledBrowser
-      throw new Error(`${options.channel} is unavailable`)
-    },
-  }, { headless: true, channel: 'chrome' })
-  assert.equal(result, bundledBrowser)
-  assert.deepEqual(calls, ['chrome', 'msedge', 'chromium'])
-} finally {
-  if (originalBundledFlag === undefined) delete process.env.BAILONGMA_BUNDLED_PLAYWRIGHT
-  else process.env.BAILONGMA_BUNDLED_PLAYWRIGHT = originalBundledFlag
-}
-
-console.log('Playwright packaging configuration: OK')
+console.log(JSON.stringify({
+  ok: true,
+  mcpVersion: mcpRuntime.mcpPackage.version,
+  playwrightVersion: mcpRuntime.playwrightPackage.version,
+  chromiumRevision: [...revisions][0],
+  targets: descriptors.map(({ target, descriptor }) => ({
+    target: target.builderKey,
+    executable: descriptor.executablePath(),
+  })),
+}, null, 2))

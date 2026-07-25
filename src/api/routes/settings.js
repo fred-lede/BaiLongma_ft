@@ -16,7 +16,6 @@ import {
   getSocialConfig,
   getTTSConfig,
   getVoiceConfig,
-  getWebSearchConfig,
   saveLLMSettings,
   setEmbeddingConfig,
   setContextWindowConfig,
@@ -29,7 +28,6 @@ import {
   setThinking,
   setTTSConfig,
   setVoiceConfig,
-  setWebSearchConfig,
   switchModel,
 } from '../../config.js'
 import { refreshScheduler } from '../../control.js'
@@ -338,22 +336,6 @@ export async function handleSettingsRoutes(req, res, url, { requireLocalOrToken,
       const body = await readJsonBody(req)
       setTTSConfig(body)
       jsonResponse(res, 200, { ok: true, tts: getTTSConfig() })
-    } catch (err) {
-      jsonResponse(res, 400, { ok: false, error: err.message })
-    }
-    return true
-  }
-
-  if (req.method === 'GET' && url.pathname === '/settings/web-search') {
-    jsonResponse(res, 200, { ok: true, webSearch: getWebSearchConfig() })
-    return true
-  }
-
-  if (req.method === 'POST' && url.pathname === '/settings/web-search') {
-    try {
-      const body = await readJsonBody(req)
-      setWebSearchConfig(body)
-      jsonResponse(res, 200, { ok: true, webSearch: getWebSearchConfig() })
     } catch (err) {
       jsonResponse(res, 400, { ok: false, error: err.message })
     }

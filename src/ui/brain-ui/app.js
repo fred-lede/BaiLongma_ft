@@ -1267,7 +1267,7 @@ function renderActionLog() {
 
 function describeAction(name, args = {}, result = "") {
   const parsedResult = L2.parseJsonResult(result);
-  const label = L2.toolLabel(name || "tool");
+  const label = L2.toolAction(name || "tool", args);
   const subject = L2.formatToolSubject(name, args, parsedResult);
   return subject ? `${label} · ${subject}` : label;
 }
@@ -1420,14 +1420,14 @@ function restoreUserStreamHistory(events) {
         break;
       case "tool_preparing": {
         if (!roundActive) break;
-        const label = data.name ? L1.toolLabel(data.name) : "工具";
-        L1.setStatus(`准备调用 ${label}…`, "busy");
+        const action = data.name ? L1.toolAction(data.name) : "处理下一步";
+        L1.setStatus(`准备${action}…`, "busy");
         break;
       }
       case "tool_executing": {
         if (!roundActive) break;
-        const label = data.name ? L1.toolLabel(data.name) : "工具";
-        L1.setStatus(`正在执行 ${label}…`, "busy");
+        const action = data.name ? L1.toolAction(data.name) : "处理事务";
+        L1.setStatus(`正在${action}…`, "busy");
         break;
       }
       case "tool_call":
@@ -1506,15 +1506,15 @@ function restoreCognitionHistory(events) {
         break;
       case "tool_preparing": {
         if (!roundActive) break;
-        const label = data.name ? L2.toolLabel(data.name) : "工具";
-        L2.setStatus(`准备调用 ${label}…`, "busy");
+        const action = data.name ? L2.toolAction(data.name) : "处理下一步";
+        L2.setStatus(`准备${action}…`, "busy");
         lastSettledState = "tool";
         break;
       }
       case "tool_executing": {
         if (!roundActive) break;
-        const label = data.name ? L2.toolLabel(data.name) : "工具";
-        L2.setStatus(`正在执行 ${label}…`, "busy");
+        const action = data.name ? L2.toolAction(data.name) : "处理事务";
+        L2.setStatus(`正在${action}…`, "busy");
         lastSettledState = "tool";
         break;
       }
@@ -1672,7 +1672,13 @@ const AI_TOOL_GROUPS = {
   "扫描文件": new Set(["read_file", "list_dir"]),
   "改动文件": new Set(["write_file", "make_dir", "delete_file"]),
   "执行命令": new Set(["exec_command", "exec_quick_command", "exec_task_command", "exec_background_command", "download_file", "kill_process", "list_processes"]),
-  "上网": new Set(["web_search", "web_read"]),
+  "上网": new Set([
+    "browser_navigate", "browser_navigate_back", "browser_snapshot", "browser_find",
+    "browser_click", "browser_type", "browser_fill_form", "browser_select_option",
+    "browser_press_key", "browser_hover", "browser_drag", "browser_wait_for",
+    "browser_handle_dialog", "browser_tabs", "browser_take_screenshot",
+    "browser_console_messages", "browser_resize", "browser_close",
+  ]),
   "调取记忆": new Set(["search_memory", "recall_memory", "probe_memory", "upsert_memory", "merge_memories", "downgrade_memory"]),
   "推送界面": new Set(["ui_set", "focus_banner"]),
   "处理多媒体": new Set(["speak", "generate_lyrics", "generate_music", "generate_image", "music", "media_mode"]),
@@ -1731,7 +1737,7 @@ function refreshAiActivity() {
   aiActivityEl.dataset.state = "busy";
   aiActivityLabelEl.textContent = `正在${domGroup}`;
   const elapsed = Math.round((now - (aiActivityFirstTs || lastTs)) / 1000);
-  aiActivityDetailEl.textContent = `· ${aiActivityLog.length} 次工具 · ${elapsed}s`;
+  aiActivityDetailEl.textContent = `· ${aiActivityLog.length} 项操作 · ${elapsed}s`;
 }
 
 if (aiActivityEl) {
@@ -2033,14 +2039,14 @@ function handle({ type, data = {}, ts = null }) {
       break;
     case "tool_preparing": {
       setVoiceThinking(false);
-      // 思考动画已停，但工具尚未真正执行 —— 给一个占位状态避免 UI 死寂
+      // 思考动画已停，但动作尚未真正执行 —— 给一个占位状态避免 UI 死寂
       const stream = currentStream();
-      const label = data.name ? stream.toolLabel(data.name) : "";
+      const action = data.name ? stream.toolAction(data.name) : "";
       if (currentPath !== "l1") {
         revealCognitionStream();
-        setCognitionState(label ? `准备 · ${label}` : "准备工具", "tool");
+        setCognitionState(action ? `准备 · ${action}` : "准备下一步", "tool");
       }
-      stream.setStatus(label ? `准备调用 ${label}…` : "准备工具调用…", "busy");
+      stream.setStatus(action ? `准备${action}…` : "准备下一步…", "busy");
       break;
     }
     case "tool_executing": {
@@ -2048,18 +2054,18 @@ function handle({ type, data = {}, ts = null }) {
       // 工具开始执行时给一次小跳；tool_call 是完成事件，不再重复入队。
       triggerHeartbeatPulse(HEARTBEAT_TOOL_STRENGTH, "minor");
       const stream = currentStream();
-      const label = data.name ? stream.toolLabel(data.name) : "工具";
-      if (currentPath !== "l1") setCognitionState(`执行 · ${label}`, "tool");
-      stream.setTimedStatus(`正在执行 ${label}…`, "busy", {
+      const action = data.name ? stream.toolAction(data.name) : "处理事务";
+      if (currentPath !== "l1") setCognitionState(`进行中 · ${action}`, "tool");
+      stream.setTimedStatus(`正在${action}…`, "busy", {
         staleAfterMs: 45000,
-        staleText: `执行 ${label} 时间偏长，仍在等结果…`,
+        staleText: `${action}用时较长，仍在等待结果…`,
       });
       break;
     }
     case "tool_call": {
       const stream = currentStream();
       if (currentPath !== "l1") {
-        setCognitionState(`${data.ok === false ? "未完成" : "完成"} · ${stream.toolLabel(data.name)}`, "tool");
+        setCognitionState(`${data.ok === false ? "未完成" : "完成"} · ${stream.toolAction(data.name, data.args)}`, "tool");
       }
       addActionLogEntry(data.name, data.args, data.result, data.ok, Date.parse(ts) || Date.now());
       stream.tool(data.name, data.args, data.result, data.ok);
@@ -3664,7 +3670,6 @@ function initTTSSettings() {
       overlay.querySelector(`.settings-tab[data-tab="${tab}"]`)?.classList.add("active");
       if (tab === "social") loadSocialSettings();
       if (tab === "security") loadSecuritySettings();
-      if (tab === "web-search") loadWebSearchSettings();
       if (tab === "mcp") loadMcpSettings();
       if (tab === "advanced") {
         loadHeartbeatSettings();
@@ -3887,79 +3892,6 @@ function initTTSSettings() {
   const restartSecurityBtn = document.getElementById("settings-restart-security");
   const securityFeedback  = document.getElementById("settings-security-feedback");
 
-  async function loadWebSearchSettings() {
-    try {
-      const { webSearch } = await fetch(`${API}/settings/web-search`).then(r => r.json());
-      const urlEl = document.getElementById("websearch-searxng-url");
-      if (urlEl) urlEl.value = webSearch?.searxngUrl || "";
-      const setStatus = (id, configured, fromEnv, extra) => {
-        const el = document.getElementById(id);
-        if (!el) return;
-        const truncated = extra && extra.length > 60 ? extra.slice(0, 60) + "…" : extra;
-        if (configured) {
-          el.textContent = `已配置${fromEnv ? "（环境变量）" : ""}${truncated ? ` · ${truncated}` : ""}`;
-          el.style.color = "var(--ok, #4caf50)";
-        } else {
-          el.textContent = "未配置（兜底链中跳过）";
-          el.style.color = "var(--ink2)";
-        }
-      };
-      setStatus("websearch-status-serper",  !!webSearch?.serperConfigured, !!webSearch?.serperFromEnv);
-      setStatus("websearch-status-brave",   !!webSearch?.braveConfigured,  !!webSearch?.braveFromEnv);
-      setStatus("websearch-status-tavily",  !!webSearch?.tavilyConfigured, !!webSearch?.tavilyFromEnv);
-      setStatus("websearch-status-jina",    !!webSearch?.jinaConfigured,   !!webSearch?.jinaFromEnv);
-      const searxngConfigured = !!webSearch?.searxngUrl || !!webSearch?.searxngFromEnv;
-      setStatus("websearch-status-searxng", searxngConfigured, !!webSearch?.searxngFromEnv, webSearch?.effectiveSearxngUrl || "");
-    } catch {}
-  }
-
-  const saveWebSearchBtn = document.getElementById("settings-save-web-search");
-  const webSearchFeedback = document.getElementById("settings-web-search-feedback");
-  if (saveWebSearchBtn) {
-    saveWebSearchBtn.addEventListener("click", async () => {
-      const updates = {};
-      const serperEl  = document.getElementById("websearch-serper-key");
-      const braveEl   = document.getElementById("websearch-brave-key");
-      const tavilyEl  = document.getElementById("websearch-tavily-key");
-      const jinaEl    = document.getElementById("websearch-jina-key");
-      const searxngEl = document.getElementById("websearch-searxng-url");
-      const serperVal  = serperEl?.value?.trim();
-      const braveVal   = braveEl?.value?.trim();
-      const tavilyVal  = tavilyEl?.value?.trim();
-      const jinaVal    = jinaEl?.value?.trim();
-      const searxngVal = searxngEl?.value?.trim();
-      if (serperVal)  updates.serperKey  = serperVal;
-      if (braveVal)   updates.braveKey   = braveVal;
-      if (tavilyVal)  updates.tavilyKey  = tavilyVal;
-      if (jinaVal)    updates.jinaKey    = jinaVal;
-      // SearXNG URL：空字符串也要传，让用户能清掉
-      if (searxngEl)  updates.searxngUrl = searxngVal || "";
-      saveWebSearchBtn.disabled = true;
-      try {
-        const res = await fetch(`${API}/settings/web-search`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(updates),
-        });
-        const data = await res.json();
-        if (data.ok) {
-          showFeedback(webSearchFeedback, "已保存");
-          if (serperEl) serperEl.value = "";
-          if (braveEl)  braveEl.value = "";
-          if (tavilyEl) tavilyEl.value = "";
-          if (jinaEl)   jinaEl.value = "";
-          loadWebSearchSettings();
-        } else {
-          showFeedback(webSearchFeedback, data.error || "保存失败", true);
-        }
-      } catch {
-        showFeedback(webSearchFeedback, "请求失败", true);
-      } finally {
-        saveWebSearchBtn.disabled = false;
-      }
-    });
-  }
-
   const mcpServersJson = document.getElementById("mcp-servers-json");
   const mcpStatus = document.getElementById("mcp-status");
   const saveMcpBtn = document.getElementById("settings-save-mcp");
@@ -4072,6 +4004,14 @@ function initTTSSettings() {
 
   lanAddressSelect?.addEventListener("change", showSelectedLanAccessEntry);
 
+  const PLAYWRIGHT_BROWSER_TOOL_NAMES = [
+    "browser_navigate", "browser_navigate_back", "browser_snapshot", "browser_find",
+    "browser_click", "browser_type", "browser_fill_form", "browser_select_option",
+    "browser_press_key", "browser_hover", "browser_drag", "browser_wait_for",
+    "browser_handle_dialog", "browser_tabs", "browser_take_screenshot",
+    "browser_console_messages", "browser_resize", "browser_close",
+  ];
+
   async function loadSecuritySettings() {
     try {
       const { security, network } = await fetch(`${API}/settings/security`).then(r => r.json());
@@ -4080,7 +4020,10 @@ function initTTSSettings() {
       applyLanNetworkSettings(network);
       restartSecurityBtn?.classList.add("hidden");
       document.querySelectorAll(".security-blocked-tool").forEach(cb => {
-        cb.checked = (security.blockedTools || []).includes(cb.value);
+        const blocked = security.blockedTools || [];
+        cb.checked = cb.value === "playwright_browser"
+          ? PLAYWRIGHT_BROWSER_TOOL_NAMES.every(name => blocked.includes(name))
+          : blocked.includes(cb.value);
       });
     } catch {}
   }
@@ -4840,7 +4783,6 @@ function initTTSSettings() {
         t.classList.toggle("active", t.dataset.tab === tab);
       });
       if (tab === "social") loadSocialSettings();
-      if (tab === "web-search") loadWebSearchSettings();
       if (tab === "mcp") loadMcpSettings();
       if (tab === "advanced") {
         loadHeartbeatSettings();

@@ -1,9 +1,8 @@
+import { BROWSER_TOOLS } from '../capabilities/capability-registry.js'
+
 const REPAIR_TOOLS = ['manage_tool_factory', 'install_tool']
 const COMMON_TOOL_NAMES = [
-  'web_read',
-  'fetch_url',
-  'web_search',
-  'browser_read',
+  ...BROWSER_TOOLS,
   'manage_tool_factory',
   'install_tool',
   'uninstall_tool',

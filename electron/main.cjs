@@ -1504,7 +1504,6 @@ app.on('before-quit', (event) => {
   app.isQuiting = true
   if (browserShutdownComplete) return
   const shutdowns = [
-    globalThis.shutdownBailongmaBrowserTools,
     globalThis.shutdownBailongmaMcpClients,
   ].filter(shutdown => typeof shutdown === 'function')
   if (shutdowns.length === 0) {

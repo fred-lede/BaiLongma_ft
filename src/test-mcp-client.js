@@ -62,8 +62,10 @@ try {
 
   await reconcileMcpClients()
   const status = getMcpStatus()
-  assert(status.servers[0]?.status === 'connected', 'stdio MCP server connects', JSON.stringify(status))
-  assert(status.toolCount === 2, 'tools/list loads both MCP tools', JSON.stringify(status))
+  const testServerStatus = status.servers.find(server => server.id === 'test_server')
+  assert(testServerStatus?.status === 'connected', 'stdio MCP server connects', JSON.stringify(status))
+  assert(testServerStatus?.loadedToolCount === 2 && status.toolCount >= 2,
+    'tools/list loads both user MCP tools alongside built-ins', JSON.stringify(status))
 
   const tools = listMcpTools()
   const echo = tools.find(tool => tool.remoteName === 'echo')
@@ -72,7 +74,7 @@ try {
   assert(!!getMcpToolSchema(echo?.name)?.function?.parameters?.properties?.text, 'MCP inputSchema adapts to Bailongma function schema')
   assert(searchMcpTools('测试 echo').some(tool => tool.name === echo?.name), 'MCP tools participate in catalog search')
 
-  const found = parseJson(await executeTool('find_tool', { query: '测试 MCP echo' }, { source: 'test' }))
+  const found = parseJson(await executeTool('find_tool', { query: '测试 echo' }, { source: 'test' }))
   assert(found?.loaded?.includes(echo?.name), 'find_tool dynamically loads the MCP schema', JSON.stringify(found))
 
   const result = parseJson(await executeTool(echo.name, { text: 'hello' }, { source: 'test' }))

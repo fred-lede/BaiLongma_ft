@@ -10,6 +10,8 @@ import { validateToolManifest } from './capabilities/marketplace/index.js'
 
 const builtinNames = Object.keys(TOOL_SCHEMAS)
 const functionNames = builtinNames.map(name => TOOL_SCHEMAS[name]?.function?.name)
+const REMOVED_WEB_TOOLS = ['web_search', 'web_read', 'fetch_url', 'browser_read']
+const REMOVED_BROWSER_TOOLS = ['browser_sessions', 'browser_open', 'browser_inspect', 'browser_act']
 
 assert.equal(new Set(builtinNames).size, builtinNames.length)
 assert.equal(new Set(functionNames).size, functionNames.length)
@@ -17,10 +19,14 @@ assert.deepEqual(functionNames, builtinNames)
 assert.equal(BUILTIN_TOOL_NAMES.size, builtinNames.length + LEGACY_TOOL_ALIASES.length)
 
 assert.deepEqual(
-  getToolSchemas(['browser_open', 'browser_open', 'web_read', 'browser_open'])
+  getToolSchemas(['web_read', 'fetch_url', 'read_file', 'browser_read'])
     .map(schema => schema.function.name),
-  ['browser_open', 'web_read'],
+  ['read_file'],
 )
+assert.ok([...REMOVED_WEB_TOOLS, ...REMOVED_BROWSER_TOOLS].every(name => TOOL_SCHEMAS[name] === undefined))
+assert.deepEqual(getToolSchemas([...REMOVED_WEB_TOOLS, ...REMOVED_BROWSER_TOOLS]), [])
+assert.ok(REMOVED_WEB_TOOLS.every(name => LEGACY_TOOL_ALIASES.includes(name)),
+  'removed web names remain reserved without exposing schemas')
 
 assert.throws(
   () => buildBuiltinToolSchemas([

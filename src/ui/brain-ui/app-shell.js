@@ -248,7 +248,6 @@ const createSettingsModal = () => `
         <button class="settings-nav-item" data-tab="media" type="button">媒体能力</button>
         <button class="settings-nav-item" data-tab="social" type="button">社交媒体</button>
         <button class="settings-nav-item" data-tab="voice" type="button">语音对话</button>
-        <button class="settings-nav-item" data-tab="web-search" type="button">上网搜索</button>
         <button class="settings-nav-item" data-tab="mcp" type="button">MCP 工具</button>
         <button class="settings-nav-item" data-tab="security" type="button">安全沙箱</button>
         <button class="settings-nav-item" data-tab="advanced" type="button">高级功能</button>
@@ -715,73 +714,6 @@ const createSettingsModal = () => `
           </div>
         </div>
 
-        <!-- ── 上网搜索 tab ── -->
-        <div class="settings-tab" data-tab="web-search">
-          <div class="settings-section">
-            <div class="settings-section-label">搜索引擎</div>
-            <p class="settings-hint">Agent 调用 web_search 时分两梯队：第一梯队（带 key 的 API：Serper → Brave → Tavily → SearXNG）按优先级尝试；都没结果时，第二梯队（Bing / Jina / DuckDuckGo，无需配置）并行兜底。配任意一个 key 都能显著提升质量和稳定性，多配几个可避免单一额度用尽时搜索失败。</p>
-
-            <div class="settings-row">
-              <label class="settings-label" for="websearch-serper-key">Serper API Key</label>
-              <input class="settings-input" type="password" id="websearch-serper-key" placeholder="留空则不修改">
-            </div>
-            <p class="settings-hint">在 <a href="https://serper.dev" target="_blank" style="color:var(--cool)">serper.dev</a> 注册后获取（每月 2500 次免费）。Google SERP JSON 接口，最稳定。</p>
-
-            <div class="settings-row">
-              <label class="settings-label" for="websearch-brave-key">Brave API Key</label>
-              <input class="settings-input" type="password" id="websearch-brave-key" placeholder="留空则不修改">
-            </div>
-            <p class="settings-hint">在 <a href="https://brave.com/search/api" target="_blank" style="color:var(--cool)">brave.com/search/api</a> 获取（每月 2000 次免费）。独立索引，Serper 的可靠兜底。</p>
-
-            <div class="settings-row">
-              <label class="settings-label" for="websearch-tavily-key">Tavily API Key</label>
-              <input class="settings-input" type="password" id="websearch-tavily-key" placeholder="留空则不修改">
-            </div>
-            <p class="settings-hint">在 <a href="https://tavily.com" target="_blank" style="color:var(--cool)">tavily.com</a> 获取（每月 1000 次免费）。面向 LLM 的搜索接口。</p>
-
-            <div class="settings-row">
-              <label class="settings-label" for="websearch-jina-key">Jina API Key</label>
-              <input class="settings-input" type="password" id="websearch-jina-key" placeholder="留空则不修改">
-            </div>
-            <p class="settings-hint">在 <a href="https://jina.ai" target="_blank" style="color:var(--cool)">jina.ai</a> 获取（有免费额度）。s.jina.ai 搜索接口，第二梯队兜底之一。</p>
-
-            <div class="settings-row">
-              <label class="settings-label" for="websearch-searxng-url">SearXNG URL</label>
-              <input class="settings-input" type="text" id="websearch-searxng-url" placeholder="https://your-searxng-instance.com">
-            </div>
-            <p class="settings-hint">选填。自托管 SearXNG 实例地址（去隐私的元搜索引擎）。要带 http:// 或 https://。</p>
-          </div>
-
-          <div class="settings-section">
-            <div class="settings-section-label">当前状态</div>
-            <div class="settings-config-row">
-              <span class="settings-config-type">Serper</span>
-              <span class="settings-config-info" id="websearch-status-serper">—</span>
-            </div>
-            <div class="settings-config-row">
-              <span class="settings-config-type">Brave</span>
-              <span class="settings-config-info" id="websearch-status-brave">—</span>
-            </div>
-            <div class="settings-config-row">
-              <span class="settings-config-type">Tavily</span>
-              <span class="settings-config-info" id="websearch-status-tavily">—</span>
-            </div>
-            <div class="settings-config-row">
-              <span class="settings-config-type">Jina</span>
-              <span class="settings-config-info" id="websearch-status-jina">—</span>
-            </div>
-            <div class="settings-config-row">
-              <span class="settings-config-type">SearXNG</span>
-              <span class="settings-config-info" id="websearch-status-searxng">—</span>
-            </div>
-          </div>
-
-          <div class="settings-section settings-section-action">
-            <button class="settings-save-btn" id="settings-save-web-search" type="button">保存</button>
-            <span class="settings-feedback" id="settings-web-search-feedback"></span>
-          </div>
-        </div>
-
         <!-- ── MCP Client tab ── -->
         <div class="settings-tab" data-tab="mcp">
           <div class="settings-section">
@@ -889,8 +821,7 @@ const createSettingsModal = () => `
             <div class="settings-section-label">工具黑名单</div>
             <p class="settings-hint">勾选后该工具将被拒绝执行，对话中 Agent 调用时会收到"已被安全策略禁用"错误。</p>
             <div class="settings-row"><label class="settings-label"><input type="checkbox" class="security-blocked-tool" value="exec_command"> exec_command &nbsp;<span style="color:var(--ink2);font-size:12px;">（执行 shell 命令）</span></label></div>
-            <div class="settings-row"><label class="settings-label"><input type="checkbox" class="security-blocked-tool" value="web_read"> web_read &nbsp;<span style="color:var(--ink2);font-size:12px;">（HTTP / Playwright 网页读取）</span></label></div>
-            <div class="settings-row"><label class="settings-label"><input type="checkbox" class="security-blocked-tool" value="web_search"> web_search &nbsp;<span style="color:var(--ink2);font-size:12px;">（网页搜索）</span></label></div>
+            <div class="settings-row"><label class="settings-label"><input type="checkbox" class="security-blocked-tool" value="playwright_browser"> Playwright MCP &nbsp;<span style="color:var(--ink2);font-size:12px;">（全部网页搜索、读取与浏览器操作）</span></label></div>
             <div class="settings-row"><label class="settings-label"><input type="checkbox" class="security-blocked-tool" value="ui_set"> ui_set &nbsp;<span style="color:var(--ink2);font-size:12px;">（投影声明式界面 surface）</span></label></div>
           </div>
           <div class="settings-section settings-section-action">

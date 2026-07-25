@@ -72,7 +72,7 @@ const SEED_MEMORIES = [
     id: 'injector',
     type: 'knowledge',
     title: '注入器：记忆被动浮现',
-    content: '注入器在每次处理开始前自动运行，将相关记忆注入当前上下文。这不是你去"找"，而是记忆自己"来"。当你想到"天气"时，wttr.in URL 和 web_read 使用方式自动出现；想到某个人时，关于他的记忆自动浮现。注入的内容包括：相关记忆片段、与发送者的对话记录、任务知识库、方向提示。',
+    content: '注入器在每次处理开始前自动运行，将相关记忆注入当前上下文。这不是你去"找"，而是记忆自己"来"。当你想到"天气"时，wttr.in URL 和 Microsoft Playwright MCP 使用方式自动出现；想到某个人时，关于他的记忆自动浮现。注入的内容包括：相关记忆片段、与发送者的对话记录、任务知识库、方向提示。',
     parent_id: 'system_architecture',
     children_ids: [],
     links: [
@@ -123,12 +123,12 @@ const SEED_MEMORIES = [
     tags: ['system', 'tool', 'kind:tool_usage'],
   },
 
-  // ── web_read ──────────────────────────────────────────────────
+  // ── Playwright MCP 网页读取（沿用旧 id 以覆盖升级用户的旧记忆） ───
   {
     id: 'tool_web_read',
     type: 'knowledge',
-    title: 'web_read：读取网页',
-    content: '读取一个已知 URL，不保留浏览器会话。默认自动先走受保护的 HTTP 读取，内容不足或需要渲染时升级到本地 Playwright，二者失败后才可选择 Jina Reader 远程兜底。静态还是动态由工具内部判断。参数：url、render（auto/http/browser）、fresh、remote_fallback。长文自动保存到 sandbox/articles/ 并返回 body_path。实时天气应使用 fresh=true 和 render=http。',
+    title: 'Microsoft Playwright MCP：读取网页',
+    content: 'web_read、fetch_url 和 browser_read 已停用。读取已知 URL 的唯一方式是 Microsoft Playwright MCP：调用 browser_navigate({url})，并直接读取该工具结果自动附带的 accessibility snapshot。导航、点击、输入等页面动作会在各自结果中附带更新后的 snapshot，不要在每次动作后例行调用 browser_snapshot；只有页面被动变化、结果缺失或需要局部刷新时才调用 browser_snapshot，长页面可用 browser_find({text}) 定位。不要用 curl、wget、Invoke-WebRequest 或 exec_command 读取网页。',
     parent_id: 'tools_system',
     children_ids: [],
     links: [
@@ -294,7 +294,7 @@ const SEED_MEMORIES = [
     id: 'rule_no_repeat',
     type: 'self_constraint',
     title: '不重复上轮行为',
-    content: '刚做过的事不重复——TICK 到来时先检查是否有未完成任务或新消息，再决定行动。每次 TICK 前看 recentActions，避免重复上一轮的行为。探索外部信息、写日记、web_read 等都应轮换，不应连续多轮做同一件事。',
+    content: '刚做过的事不重复——TICK 到来时先检查是否有未完成任务或新消息，再决定行动。每次 TICK 前看 recentActions，避免重复上一轮的行为。探索外部信息、写日记、Playwright 浏览等都应轮换，不应连续多轮做同一件事。',
     parent_id: 'behavior_rules',
     children_ids: [],
     links: [
@@ -340,7 +340,7 @@ const SEED_MEMORIES = [
     id: 'skill_weather_card',
     type: 'knowledge',
     title: 'WeatherCard：天气卡片',
-    content: '当用户问到天气、温度、预报，且你已通过 web_read 拿到数据时，可调用 ui_show("WeatherCard", { city, temp, condition, forecast }) 把信息可视化。参数：city（城市名，字符串）、temp（当前温度数字，例如 18）、condition（天气状况，如 "晴" "多云"）、forecast（可选，未来几天数组，每项 { day, low, high, condition }）。注意：若用户只是闲聊提到天气，不要弹卡片；若你已用文字回答完且足够清晰，也不要重复弹卡片。',
+    content: '当用户问到天气、温度、预报，且你已通过 Microsoft Playwright MCP 打开 wttr.in 并从 browser_navigate 自动附带的 snapshot（或必要时的 browser_snapshot 兜底）拿到数据时，可调用 ui_show("WeatherCard", { city, temp, condition, forecast }) 把信息可视化。参数：city（城市名，字符串）、temp（当前温度数字，例如 18）、condition（天气状况，如 "晴" "多云"）、forecast（可选，未来几天数组，每项 { day, low, high, condition }）。注意：若用户只是闲聊提到天气，不要弹卡片；若你已用文字回答完且足够清晰，也不要重复弹卡片。',
     parent_id: 'ui_skills',
     children_ids: [],
     links: [
@@ -354,12 +354,12 @@ const SEED_MEMORIES = [
   //  补充工具记忆
   // ══════════════════════════════════════════════════════════════
 
-  // ── web_search ────────────────────────────────────────────────
+  // ── Playwright MCP 联网搜索（沿用旧 id 以覆盖升级用户的旧记忆） ───
   {
     id: 'tool_web_search',
     type: 'knowledge',
-    title: 'web_search：联网搜索',
-    content: '搜索互联网获取当前或未知信息。参数：query（搜索词，尽量具体，含关键词/版本/时间）、limit（最多返回条数，默认 5，上限 8）。返回结构化 JSON，含标题、URL、摘要。\n\n【web_search 与 web_read】\n- 不知道确切 URL 时，先用 web_search 找到可信链接，再用 web_read 读取全文。\n- 已知可靠 URL（如 wttr.in、wikipedia、已收藏的 API）时，直接用 web_read，不要先搜索。\n- 搜索与读取可在同一轮组合；如果用户还要求点击、登录或填写，则同时使用状态化 browser_* 工具。\n- 每次 TICK 主动发起的新请求（搜索+获取合计）不超过 2 次，避免过度消耗。',
+    title: 'Microsoft Playwright MCP：联网搜索',
+    content: 'web_search 已停用。搜索互联网的唯一方式是 Microsoft Playwright MCP：用 browser_navigate 打开带 URL 编码查询词的搜索结果页（例如 https://www.bing.com/search?q=...），直接读取导航结果自动附带的 snapshot，随后用 browser_click 或 browser_navigate 打开可信来源，并从该动作自动附带的最新 snapshot 验证正文。不要在每次动作后例行调用 browser_snapshot；只有页面被动变化、结果缺失或需要局部刷新时才用 browser_snapshot/browser_find。优先官方站点和已知官方 URL；遇到验证码或结果缺失时应如实说明，不得改用其他联网工具或 shell HTTP 客户端。',
     parent_id: 'tools_system',
     children_ids: [],
     links: [

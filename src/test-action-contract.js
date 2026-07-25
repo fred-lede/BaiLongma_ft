@@ -21,6 +21,10 @@ try {
   assert.equal(classifyActionContract('怎么创建一个 txt 文件？'), null, 'how-to is ordinary Q&A, not an execution contract')
   assert.equal(classifyActionContract('你有多少执行命令工具？'), null, 'tool meta questions must not trigger execution')
   assert.equal(classifyActionContract('帮我安装一个 npm 插件'), null, 'plugin installation is not OS software installation')
+  const webContract = classifyActionContract('请联网搜索 Microsoft Playwright MCP 官方仓库')
+  assert.equal(webContract?.id, 'web')
+  assert.deepEqual(webContract.requiredTools, ['browser_navigate'], 'fresh web lookup requires real Playwright navigation')
+  assert.equal(webContract.requiredTools.some(name => ['web_search', 'web_read', 'fetch_url', 'browser_read'].includes(name)), false)
 
   let rounds = 0
   const executed = []

@@ -2,6 +2,7 @@ import { callLLM } from '../llm.js'
 import { setRateLimited } from '../quota.js'
 import { nowTimestamp } from '../time.js'
 import { TOOL_SCHEMAS } from '../capabilities/schemas.js'
+import { BROWSER_TOOLS } from '../capabilities/capability-registry.js'
 
 // ── 审视分身（Work Reviewer）────────────────────────────────────────────────────
 // 不是子 agent，是和 recognizer / consolidator 同一类的"后台人格"：独立提示词、独立
@@ -27,7 +28,7 @@ You are given three things, and only these (you deliberately cannot see the doer
 - Diff every CONCRETE requirement in the original request against what was actually delivered: specific quantities, qualifiers, variants, units, formats, constraints (e.g. "sample" vs "population" standard deviation, "top 15" vs "top 10", "descending" vs "ascending", a named file path, an exact column). A deliverable that quietly substitutes a different variant than the user specified is at least a MAJOR issue — even if its own internal math is self-consistent and the doer's narration calls it correct. Internal consistency is not the bar; matching what the user actually asked for is.
 - Check the claim against the goal, not against the doer's narration. "Said it is done" is not "is done".
 - Trust the evidence over the claim. If the claim says a file was written but no write_file appears in the tool log, that is a gap. If a step is marked done but its tool result shows an error, that is a gap.
-- VERIFY with your read-only tools when it matters. Do not just reason about the artifact — open it. read_file the file that was supposedly written and confirm its content matches the goal. list_dir to confirm something exists. Re-run a read-only check command with exec_command (only non-mutating commands: run a test, print output, lint — never write/delete/install). Re-fetch a URL the task depended on if the result is suspect.
+- VERIFY with your read-only tools when it matters. Do not just reason about the artifact — open it. read_file the file that was supposedly written and confirm its content matches the goal. list_dir to confirm something exists. Re-run a read-only check command with exec_command (only non-mutating commands: run a test, print output, lint — never write/delete/install). For web evidence, use Microsoft Playwright MCP browser_navigate and inspect the automatic snapshot in its result; use browser_find/browser_snapshot only for targeted lookup or an explicit refresh, and never use shell HTTP clients.
 - Judge against the goal's real intent, including the obvious-but-unstated: does it actually work, is it complete, are there silent failures, did a "done" step actually produce its value, are there off-by-one / wrong-target / half-finished edges.
 - Be proportionate. A one-line answer does not need an audit. Reserve scrutiny for work where being wrong has a cost. Do not invent problems to look thorough — a clean pass is a valid, common outcome.
 
@@ -45,7 +46,14 @@ You are given three things, and only these (you deliberately cannot see the doer
 // 审视分身可用的工具：只读验证 + 结论回传。绝不给写/删/装类工具——它是来核对的，不是来改的。
 // exec_command 在其中，但 prompt 明确约束只跑非破坏性的验证命令（跑测试 / 打印 / lint），
 // 且仍受沙箱策略（evaluateToolPolicy）约束。
-const REVIEWER_TOOLS = ['read_file', 'list_dir', 'exec_command', 'web_search', 'web_read', 'search_memory', 'review_verdict']
+const REVIEWER_BROWSER_TOOLS = BROWSER_TOOLS.filter(name => [
+  'browser_navigate',
+  'browser_snapshot',
+  'browser_find',
+  'browser_tabs',
+  'browser_close',
+].includes(name))
+const REVIEWER_TOOLS = ['read_file', 'list_dir', 'exec_command', ...REVIEWER_BROWSER_TOOLS, 'search_memory', 'review_verdict']
 
 // 把主 Agent 本轮的工具调用日志压成审视分身能读的证据块。复用 recognizer 的思路：
 // 工具名 + 参数 + 结果摘要，但更看重"成功/失败"信号——审视的核心就是看声称与证据是否一致。

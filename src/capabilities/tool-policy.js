@@ -50,13 +50,24 @@ const TOOL_RISK = {
   web_read: 'high',
   fetch_url: 'high',
   browser_read: 'high',
-  browser_sessions: 'low',
-  browser_open: 'medium',
   browser_navigate: 'medium',
-  browser_inspect: 'low',
-  browser_act: 'high',
+  browser_navigate_back: 'medium',
+  browser_snapshot: 'low',
+  browser_find: 'low',
+  browser_click: 'high',
+  browser_type: 'high',
+  browser_fill_form: 'high',
+  browser_select_option: 'high',
+  browser_press_key: 'high',
+  browser_hover: 'medium',
+  browser_drag: 'high',
+  browser_wait_for: 'medium',
+  browser_handle_dialog: 'high',
   browser_tabs: 'medium',
-  browser_close: 'low',
+  browser_take_screenshot: 'low',
+  browser_console_messages: 'low',
+  browser_resize: 'medium',
+  browser_close: 'medium',
   speak: 'high',
   generate_lyrics: 'high',
   generate_music: 'high',
@@ -67,6 +78,31 @@ const TOOL_RISK = {
   manage_api_capability: 'high',
   set_security: 'high',
 }
+
+// Upstream annotates these Playwright MCP tools as non-read-only. Keep an
+// explicit local backstop as well, so an autonomous Tick cannot gain mutation
+// authority from missing/incorrect remote metadata.
+const BROWSER_MUTATING_TOOLS = [
+  'browser_navigate',
+  'browser_navigate_back',
+  'browser_click',
+  'browser_type',
+  'browser_fill_form',
+  'browser_select_option',
+  'browser_press_key',
+  'browser_hover',
+  'browser_drag',
+  'browser_wait_for',
+  'browser_handle_dialog',
+  'browser_tabs',
+  'browser_resize',
+  'browser_close',
+]
+const STARTUP_SELF_CHECK_BROWSER_TOOLS = new Set([
+  'browser_navigate',
+  'browser_snapshot',
+  'browser_close',
+])
 
 // Audit risk and autonomous authority are related but not identical. Several
 // read-only or reversible capabilities (for example web reads and speech) are
@@ -95,7 +131,7 @@ const AUTONOMOUS_USER_AUTH_REQUIRED = new Set([
   'run_capability',
   'run_api_capability',
   'analyze_image',
-  'browser_act',
+  ...BROWSER_MUTATING_TOOLS,
 ])
 export function classifyTool(name) {
   const mcpTool = getMcpToolMetadata(name)
@@ -121,13 +157,18 @@ export function isDangerousShellCommand(command) {
 }
 
 export function evaluateToolPolicy(name, args = {}, context = {}) {
-  const risk = name === 'browser_close' && args.clear_profile === true ? 'high' : classifyTool(name)
+  const risk = classifyTool(name)
   const blockedTools = config.security?.blockedTools || []
   const canonicalName = ['fetch_url', 'browser_read'].includes(name) ? 'web_read' : name
   if (blockedTools.includes(canonicalName)) {
     return { allowed: false, risk, reason: `工具 "${name}" 已被安全策略禁用` }
   }
-  if (context.autonomous && isMcpTool(name) && !context.allowHighRiskAutonomy) {
+  const startupBrowserCheck = context.autonomous
+    && context.startupSelfCheck?.active === true
+    && STARTUP_SELF_CHECK_BROWSER_TOOLS.has(name)
+    && getMcpToolMetadata(name)?.builtIn === true
+    && getMcpToolMetadata(name)?.playwrightRole === 'interactive'
+  if (context.autonomous && isMcpTool(name) && !context.allowHighRiskAutonomy && !startupBrowserCheck) {
     const mcpTool = getMcpToolMetadata(name)
     const explicitlyAllowed = mcpTool?.allowAutonomousReadOnly === true
       && mcpTool?.annotations?.readOnlyHint === true
@@ -152,23 +193,7 @@ export function evaluateToolPolicy(name, args = {}, context = {}) {
   ) {
     return { allowed: false, risk, reason: 'autonomous Tick may inspect rules, but changing persistent rules requires an explicit user-driven context' }
   }
-  if (
-    context.autonomous
-    && name === 'browser_open'
-    && (
-      args.visible !== false
-      // HTTP(S) browser opens are persistent by default. Autonomous work must
-      // opt out explicitly in addition to requesting a headless window.
-      || args.persistent !== false
-    )
-    && !context.allowHighRiskAutonomy
-  ) {
-    return { allowed: false, risk, reason: 'an autonomous Tick cannot open a visible or persistent browser profile without explicit user authority' }
-  }
-  if (context.autonomous && name === 'browser_close' && args.clear_profile === true && !context.allowHighRiskAutonomy) {
-    return { allowed: false, risk, reason: 'an autonomous Tick cannot delete saved browser login state without explicit user authority' }
-  }
-  if (context.autonomous && AUTONOMOUS_USER_AUTH_REQUIRED.has(name) && !context.allowHighRiskAutonomy) {
+  if (context.autonomous && AUTONOMOUS_USER_AUTH_REQUIRED.has(name) && !context.allowHighRiskAutonomy && !startupBrowserCheck) {
     return { allowed: false, risk, reason: 'this authority-changing, destructive, or unbudgeted tool requires an explicit user-driven context' }
   }
   return { allowed: true, risk, reason: '' }

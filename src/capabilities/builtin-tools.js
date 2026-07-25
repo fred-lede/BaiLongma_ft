@@ -1,8 +1,6 @@
 import { commsSchemas } from './schemas/comms.js'
 import { filesystemSchemas } from './schemas/filesystem.js'
 import { shellSchemas } from './schemas/shell.js'
-import { webSchemas } from './schemas/web.js'
-import { browserSchemas } from './schemas/browser.js'
 import { mediaSchemas } from './schemas/media.js'
 import { memorySchemas } from './schemas/memory.js'
 import { uiSchemas } from './schemas/ui.js'
@@ -13,13 +11,12 @@ import { remindersSchemas } from './schemas/reminders.js'
 import { agentsSchemas } from './schemas/agents.js'
 import { systemSchemas } from './schemas/system.js'
 import { apiCapabilitySchemas } from './schemas/api-capabilities.js'
+import { BUILTIN_PLAYWRIGHT_ALLOWED_TOOLS } from '../mcp/playwright-server.js'
 
 export const BUILTIN_SCHEMA_GROUPS = Object.freeze([
   ['comms', commsSchemas],
   ['filesystem', filesystemSchemas],
   ['shell', shellSchemas],
-  ['web', webSchemas],
-  ['browser', browserSchemas],
   ['media', mediaSchemas],
   ['memory', memorySchemas],
   ['ui', uiSchemas],
@@ -32,12 +29,16 @@ export const BUILTIN_SCHEMA_GROUPS = Object.freeze([
   ['api-capabilities', apiCapabilitySchemas],
 ])
 
-// These names are still accepted by the executor for old action logs and
-// persisted turns, but are deliberately absent from the model-facing schema.
+// Reserve retired aliases and built-in Playwright remote names so installed
+// tools cannot hijack them. Retired aliases remain absent from both the
+// model-facing schema and the executor.
 export const LEGACY_TOOL_ALIASES = Object.freeze([
+  'web_search',
+  'web_read',
   'fetch_url',
   'browser_read',
   'schedule_reminder',
+  ...BUILTIN_PLAYWRIGHT_ALLOWED_TOOLS,
 ])
 
 export function buildBuiltinToolSchemas(groups = BUILTIN_SCHEMA_GROUPS) {

@@ -15,8 +15,6 @@ import {
   searchMemories,
 } from '../db.js'
 import { getInstalledToolNames } from '../capabilities/marketplace/index.js'
-import { BROWSER_TOOLS, isStatefulBrowserIntent } from '../capabilities/capability-registry.js'
-import { formatBrowserRuntimeContext, getBrowserRuntimeState } from '../capabilities/tools/browser-tools.js'
 import { PRIMARY_USER_ID, isExternalChannel, isVoiceChannel } from '../identity.js'
 import { extractKeywords } from './keywords.js'
 import { stripTemporalWords } from './temporal-parser.js'
@@ -196,14 +194,6 @@ export async function runInjector({ message, state, hint = '', currentChannel = 
   // 不再用 rerankByImportance 按 salience 整体重排（详见 selectContextMemories 注释）。
   const memories = selectContextMemories(merged, { cap: mergeCap, anchorLane: 2 })
   const actionLog = getRecentActionLogs(10)
-  const browserRuntimeState = getBrowserRuntimeState()
-  const activeBrowserSessionCount = Number(browserRuntimeState?.count || 0)
-  const recentPlaywrightAction = actionLog.some(entry => BROWSER_TOOLS.includes(String(entry?.tool || '')))
-  const browserFollowup = isStatefulBrowserIntent(messageBody)
-  const browserRuntimeContext = formatBrowserRuntimeContext(browserRuntimeState, {
-    includeEmpty: activeBrowserSessionCount === 0 && (browserFollowup || recentPlaywrightAction),
-  })
-  if (browserRuntimeContext) directions.push(browserRuntimeContext)
   const activePolicies = focusText
     ? selectActivePolicies({
         focusText,
@@ -246,8 +236,6 @@ export async function runInjector({ message, state, hint = '', currentChannel = 
     installedToolNames: installedNames,
     startupSelfCheckActive: !!state?.startupSelfCheck?.active,
     localVisualTurn: !currentChannel || !isExternalChannel(currentChannel),
-    activeBrowserSessionCount,
-    recentPlaywrightAction,
     // fastUserPath 留作未来扩展——目前从 state 上拿不到，selectTools 接受未传即 false
   })
 
@@ -317,6 +305,5 @@ export async function runInjector({ message, state, hint = '', currentChannel = 
     selfPerception,
     selfSnapshot,
     selfEvolution,
-    browserRuntimeState,
   }
 }

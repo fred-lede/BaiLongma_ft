@@ -17,6 +17,24 @@ const TOOL_ZH = {
   web_read: "读取网页",
   fetch_url: "抓取网页",
   browser_read: "浏览器读取网页",
+  browser_navigate: "打开网页",
+  browser_navigate_back: "返回上一页",
+  browser_snapshot: "查看页面内容",
+  browser_find: "查找页面内容",
+  browser_click: "点击页面元素",
+  browser_type: "输入内容",
+  browser_fill_form: "填写表单",
+  browser_select_option: "选择选项",
+  browser_press_key: "操作键盘",
+  browser_hover: "悬停页面元素",
+  browser_drag: "拖动页面元素",
+  browser_wait_for: "等待页面响应",
+  browser_handle_dialog: "处理网页弹窗",
+  browser_tabs: "管理浏览器标签页",
+  browser_take_screenshot: "截取网页画面",
+  browser_console_messages: "检查网页日志",
+  browser_resize: "调整浏览器窗口",
+  browser_close: "关闭网页",
   search_memory: "检索记忆",
   probe_memory: "探测记忆",
   upsert_memory: "写入记忆",
@@ -72,6 +90,24 @@ const TOOL_ICON = {
   web_read: "🌐",
   fetch_url: "🌐",
   browser_read: "🧭",
+  browser_navigate: "🌐",
+  browser_navigate_back: "↩️",
+  browser_snapshot: "👀",
+  browser_find: "🔎",
+  browser_click: "👆",
+  browser_type: "⌨️",
+  browser_fill_form: "📝",
+  browser_select_option: "☑️",
+  browser_press_key: "⌨️",
+  browser_hover: "🖱️",
+  browser_drag: "↔️",
+  browser_wait_for: "⏳",
+  browser_handle_dialog: "💬",
+  browser_tabs: "🗂️",
+  browser_take_screenshot: "📸",
+  browser_console_messages: "🧪",
+  browser_resize: "↔️",
+  browser_close: "✕",
   search_memory: "🔍",
   probe_memory: "🩺",
   upsert_memory: "🧠",
@@ -111,6 +147,37 @@ const TOOL_ICON = {
   person_card_mode: "🪪",
   music: "🎶",
 };
+
+function normalizeToolName(name) {
+  const raw = String(name || "").trim();
+  if (TOOL_ZH[raw]) return raw;
+  if (raw.startsWith("mcp__")) {
+    const remoteName = raw.split("__").at(-1) || "";
+    if (TOOL_ZH[remoteName]) return remoteName;
+  }
+  return raw;
+}
+
+export function friendlyToolName(name, args = {}) {
+  const normalized = normalizeToolName(name);
+  if (normalized === "browser_press_key") {
+    const key = String(args?.key || "").toLowerCase();
+    if (["end", "home", "pagedown", "pageup", "space", "arrowdown", "arrowup"].includes(key)) {
+      return "滚动页面";
+    }
+  }
+  if (normalized === "browser_tabs") {
+    if (args?.action === "new") return "打开新标签页";
+    if (args?.action === "select") return "切换标签页";
+    if (args?.action === "close") return "关闭标签页";
+    if (args?.action === "list") return "查看标签页";
+  }
+  return TOOL_ZH[normalized] || "处理事务";
+}
+
+export function friendlyToolIcon(name) {
+  return TOOL_ICON[normalizeToolName(name)] || "⚙️";
+}
 
 function isFailureResult(resultStr) {
   const t = (resultStr || "").trim();
@@ -377,7 +444,7 @@ export class ThoughtStream {
 
   formatToolSubject(name, args = {}, parsed) {
     const a = args || {};
-    switch (name) {
+    switch (normalizeToolName(name)) {
       case "read_file":
       case "write_file":
       case "delete_file":
@@ -394,6 +461,37 @@ export class ThoughtStream {
       case "fetch_url":
       case "browser_read":
         return this.hostFromUrl(a.url || parsed?.url) || this.compactText(a.url || "", 60);
+      case "browser_navigate":
+        return this.hostFromUrl(a.url) || this.compactText(a.url || "", 60);
+      case "browser_find":
+        return this.compactText(a.text || "", 60);
+      case "browser_click":
+      case "browser_type":
+      case "browser_hover":
+        return this.compactText(a.element || a.name || "", 50);
+      case "browser_fill_form":
+        return Array.isArray(a.fields) ? `${a.fields.length} 项` : "";
+      case "browser_select_option":
+        return this.compactText(a.element || a.name || "", 50);
+      case "browser_press_key":
+        return this.compactText(a.key || "", 24);
+      case "browser_drag": {
+        const from = this.compactText(a.startElement || a.source || "", 24);
+        const to = this.compactText(a.endElement || a.target || "", 24);
+        return from && to ? `${from} → ${to}` : from || to;
+      }
+      case "browser_wait_for":
+        return a.time != null ? `${a.time} 秒` : this.compactText(a.text || a.textGone || "", 40);
+      case "browser_handle_dialog":
+        return a.accept === false ? "取消" : "确认";
+      case "browser_tabs":
+        return a.index != null ? `第 ${Number(a.index) + 1} 个标签页` : "";
+      case "browser_take_screenshot":
+        return this.shortPath(a.filename || "", 48);
+      case "browser_console_messages":
+        return this.compactText(a.level || "", 20);
+      case "browser_resize":
+        return a.width && a.height ? `${a.width} × ${a.height}` : "";
       case "search_memory":
         return Array.isArray(a.keywords) ? a.keywords.slice(0, 4).join(" / ") : "";
       case "upsert_memory":
@@ -527,6 +625,7 @@ export class ThoughtStream {
   }
 
   formatToolDetail(name, args, result) {
+    name = normalizeToolName(name);
     const parsed = this.parseJsonResult(result);
 
     // Web tools 保留原有人类化格式器
@@ -592,18 +691,20 @@ export class ThoughtStream {
   }
 
   toolLabel(name) {
-    const zh = TOOL_ZH[name] || name;
-    const icon = TOOL_ICON[name] || "🔧";
-    return `${icon} ${zh}`;
+    return `${friendlyToolIcon(name)} ${friendlyToolName(name)}`;
+  }
+
+  toolAction(name, args = {}) {
+    return friendlyToolName(name, args);
   }
 
   tool(name, args, result, ok = undefined) {
-    if (!this.curLine) this.newLine("工具调用");
+    if (!this.curLine) this.newLine("处理中");
     this.finalizeLastTool();
     this.clearStatus();
 
-    const zh = TOOL_ZH[name] || name;
-    const icon = TOOL_ICON[name] || "🔧";
+    const action = friendlyToolName(name, args);
+    const icon = friendlyToolIcon(name);
     const resultStr = result == null ? "" : String(result);
     const failure = ok === false || (ok !== true && isFailureResult(resultStr));
     this.hadToolCall = true;
@@ -621,7 +722,7 @@ export class ThoughtStream {
     iconSpan.textContent = icon;
     const nameSpan = document.createElement("span");
     nameSpan.className = "tool-name";
-    nameSpan.textContent = zh;
+    nameSpan.textContent = action;
 
     const parsedResult = this.parseJsonResult(resultStr);
     const subjectText = this.formatToolSubject(name, args, parsedResult);
@@ -689,7 +790,7 @@ export class ThoughtStream {
 
     const nameSpan = document.createElement("span");
     nameSpan.className = "tool-name";
-    nameSpan.textContent = this.hadToolCall ? "工具调用结束" : "本轮结束";
+    nameSpan.textContent = this.hadToolCall ? "全部操作" : "本轮";
 
     const statusSpan = document.createElement("span");
     statusSpan.className = `tool-status ${statusCls}`;

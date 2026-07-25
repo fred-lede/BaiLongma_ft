@@ -1,63 +1,170 @@
+// Regression contract after removing the legacy in-process web tools.
+//
+// The old names must remain unavailable to the model/executor while the
+// built-in Microsoft Playwright MCP keeps native browser_* tools usable.
+//
+// Run: node src/test-web-read.js
+
 import assert from 'node:assert/strict'
-import http from 'node:http'
-import { once } from 'node:events'
-import { config } from './config.js'
-import { TOOL_SCHEMAS } from './capabilities/schemas.js'
-import { execFetchUrl, execWebRead } from './capabilities/tools/web.js'
-import { shutdownBrowserTools } from './capabilities/tools/browser-tools.js'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 
-const server = http.createServer((request, response) => {
-  response.setHeader('content-type', 'text/html; charset=utf-8')
-  if (request.url === '/dynamic') {
-    response.end('<!doctype html><title>Dynamic</title><main id="app"></main><script>document.querySelector("#app").textContent = "Rendered by local Playwright with enough readable content to pass extraction and prove that JavaScript execution completed successfully."</script>')
-    return
+const tempUserDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bailongma-web-removal-'))
+process.env.BAILONGMA_USER_DIR = tempUserDir
+process.env.BAILONGMA_RESOURCES_DIR = process.cwd()
+
+const LEGACY_WEB_TOOLS = ['web_search', 'web_read', 'fetch_url', 'browser_read']
+const FORBIDDEN_PLAYWRIGHT_TOOLS = [
+  'browser_run_code_unsafe',
+  'browser_evaluate',
+  'browser_file_upload',
+  'browser_drop',
+  'browser_network_requests',
+  'browser_network_request',
+]
+
+const { BUILTIN_TOOL_NAMES, TOOL_SCHEMAS } = await import('./capabilities/builtin-tools.js')
+const { getToolSchemas } = await import('./capabilities/schemas.js')
+const { executeTool } = await import('./capabilities/executor.js')
+const { evaluateToolPolicy } = await import('./capabilities/tool-policy.js')
+const {
+  listMcpTools,
+  reconcileMcpClients,
+  shutdownMcpClients,
+} = await import('./mcp/client-manager.js')
+
+const advertisedTools = [
+  {
+    name: 'browser_navigate',
+    description: 'Navigate to a URL',
+    inputSchema: {
+      type: 'object',
+      properties: { url: { type: 'string' } },
+      required: ['url'],
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true },
+  },
+  {
+    name: 'browser_snapshot',
+    description: 'Capture accessibility snapshot',
+    inputSchema: { type: 'object', properties: {} },
+    annotations: { readOnlyHint: true, destructiveHint: false },
+  },
+  ...FORBIDDEN_PLAYWRIGHT_TOOLS.map(name => ({
+    name,
+    description: `Forbidden ${name}`,
+    inputSchema: { type: 'object', properties: {} },
+    annotations: {},
+  })),
+]
+
+class FakeTransport {
+  constructor(params) {
+    this.params = params
+    this.stderr = { on() {} }
   }
-  response.end('<!doctype html><title>Static</title><main>Static content with enough readable text for the protected HTTP extraction path to succeed.</main>')
-})
+}
 
-server.listen(0, '127.0.0.1')
-await once(server, 'listening')
-const { port } = server.address()
-const previousPrivateNetwork = config.security.browserPrivateNetwork
+class FakeClient {
+  setNotificationHandler() {}
+
+  async connect(transport) {
+    this.transport = transport
+  }
+
+  async listTools() {
+    return { tools: advertisedTools }
+  }
+
+  async callTool(request) {
+    return {
+      content: [{
+        type: 'text',
+        text: request.name === 'browser_snapshot'
+          ? '### Page\n- Page URL: https://example.com/\n### Snapshot\n- heading "Example Domain" [ref=e1]'
+          : `called:${request.name}`,
+      }],
+    }
+  }
+
+  async close() {
+    this.onclose?.()
+  }
+}
+
+const mcpDeps = {
+  ClientClass: FakeClient,
+  TransportClass: FakeTransport,
+  builtInOptions: {
+    cliPath: path.join(tempUserDir, 'playwright-mcp-cli.js'),
+    command: '/fake/node',
+    resourcesDir: process.cwd(),
+    userDir: tempUserDir,
+    sandboxDir: path.join(tempUserDir, 'sandbox'),
+    electronRuntime: false,
+  },
+}
 
 try {
-  assert.ok(TOOL_SCHEMAS.web_read, 'web_read is exposed')
-  assert.equal(TOOL_SCHEMAS.fetch_url, undefined, 'legacy fetch_url schema is hidden')
-  assert.equal(TOOL_SCHEMAS.browser_read, undefined, 'legacy browser_read schema is hidden')
+  for (const name of LEGACY_WEB_TOOLS) {
+    assert.equal(TOOL_SCHEMAS[name], undefined, `${name} has no built-in schema`)
+    assert.equal(BUILTIN_TOOL_NAMES.has(name), true, `${name} remains reserved against marketplace replacement`)
+  }
 
-  config.security.browserPrivateNetwork = false
-  const blocked = JSON.parse(await execWebRead({
-    url: `http://127.0.0.1:${port}/static`, render: 'http', fresh: true, remote_fallback: false,
-  }))
-  assert.equal(blocked.ok, false)
-  assert.equal(blocked.code, 'PRIVATE_NETWORK_BLOCKED')
+  assert.deepEqual(
+    getToolSchemas([...LEGACY_WEB_TOOLS]).map(schema => schema.function.name),
+    [],
+    'legacy web tools cannot be loaded into a model turn',
+  )
 
-  config.security.browserPrivateNetwork = true
-  const direct = JSON.parse(await execWebRead({
-    url: `http://127.0.0.1:${port}/static`, render: 'http', fresh: true, remote_fallback: false,
-  }))
-  assert.equal(direct.ok, true)
-  assert.equal(direct.tool, 'web_read')
-  assert.equal(direct.read_source, 'http')
-  assert.equal(direct.title, 'Static')
+  for (const name of LEGACY_WEB_TOOLS) {
+    assert.equal(
+      await executeTool(name, {}, { source: 'test' }),
+      `错误：未知工具 "${name}"`,
+      `${name} has no legacy executor path`,
+    )
+  }
 
-  const dynamic = JSON.parse(await execWebRead({
-    url: `http://127.0.0.1:${port}/dynamic`, render: 'auto', fresh: true, remote_fallback: false,
-  }))
-  assert.equal(dynamic.ok, true)
-  assert.equal(dynamic.tool, 'web_read')
-  assert.equal(dynamic.read_source, 'playwright')
-  assert.match(dynamic.content, /Rendered by local Playwright/)
+  await reconcileMcpClients([], mcpDeps)
+  const tools = listMcpTools()
+  assert.ok(tools.some(tool => tool.name === 'browser_navigate' && tool.builtIn === true),
+    'built-in Playwright navigation remains model-visible under its native name')
+  assert.ok(tools.some(tool => tool.name === 'browser_snapshot' && tool.builtIn === true),
+    'built-in Playwright snapshot remains model-visible under its native name')
+  assert.ok(FORBIDDEN_PLAYWRIGHT_TOOLS.every(name => !tools.some(tool => tool.name === name)),
+    'forbidden upstream Playwright tools stay outside the exposed catalog')
+  assert.equal(
+    evaluateToolPolicy('browser_navigate', { url: 'https://example.com' }, { autonomous: true }).allowed,
+    false,
+    'ordinary autonomous Tick cannot navigate the interactive browser',
+  )
+  assert.equal(
+    evaluateToolPolicy('browser_navigate', { url: 'https://example.com' }, {
+      autonomous: true,
+      startupSelfCheck: { active: true },
+    }).allowed,
+    true,
+    'startup self-check has a narrow built-in Playwright navigation exception',
+  )
 
-  const legacy = JSON.parse(await execFetchUrl({
-    url: `http://127.0.0.1:${port}/static`, render: 'http', fresh: true, remote_fallback: false,
-  }))
-  assert.equal(legacy.tool, 'web_read', 'legacy executor alias returns the canonical contract')
+  assert.deepEqual(
+    getToolSchemas([...LEGACY_WEB_TOOLS, 'browser_snapshot']).map(schema => schema.function.name),
+    ['browser_snapshot'],
+    'schema loading replaces removed web tools with the native Playwright tool',
+  )
 
-  console.log('test-web-read passed')
+  const snapshot = JSON.parse(await executeTool(
+    'browser_snapshot',
+    {},
+    { source: 'test', mcpDeps },
+  ))
+  assert.equal(snapshot.ok, true, JSON.stringify(snapshot))
+  assert.equal(snapshot.remote_tool, 'browser_snapshot')
+  assert.match(snapshot.content?.[0]?.text || '', /Example Domain/)
+
+  console.log('test-web-read passed: legacy web tools removed; Playwright MCP remains usable')
 } finally {
-  config.security.browserPrivateNetwork = previousPrivateNetwork
-  await shutdownBrowserTools()
-  server.close()
-  await once(server, 'close')
+  await shutdownMcpClients()
+  fs.rmSync(tempUserDir, { recursive: true, force: true })
 }

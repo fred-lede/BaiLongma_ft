@@ -145,10 +145,7 @@ export function buildAgentContextBlock() {
   if (!agents.length) return ''
 
   const lines = agents.map(a => {
-    const invoke = a.invoke_type === 'cli'
-      ? `exec_command("${a.invoke_cmd} ...")`
-      : `web_read({ url: "${a.invoke_cmd}/..." })`
-    return `- **${a.name}** (${a.id}): ${a.description}. Invoke: ${invoke}`
+    return `- **${a.name}** (${a.id}): ${a.description}. Invoke with delegate_to_agent(agent_id="${a.id}", ...).`
   })
 
   return `## AI Collaborators You Can Work With

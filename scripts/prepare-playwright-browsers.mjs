@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import os from 'node:os'
@@ -9,7 +9,43 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 export const stagingRoot = path.join(projectRoot, 'build', 'playwright-browsers')
-const require = createRequire(import.meta.url)
+
+export function resolveMcpRuntime(root = projectRoot) {
+  const rootRequire = createRequire(path.join(root, 'package.json'))
+  const mcpPackagePath = rootRequire.resolve('@playwright/mcp/package.json')
+  const mcpPackage = JSON.parse(readFileSync(mcpPackagePath, 'utf8'))
+  const mcpRequire = createRequire(mcpPackagePath)
+  const playwrightPackagePath = mcpRequire.resolve('playwright/package.json')
+  const playwrightCorePackagePath = mcpRequire.resolve('playwright-core/package.json')
+  const playwrightPackage = JSON.parse(readFileSync(playwrightPackagePath, 'utf8'))
+  const playwrightCorePackage = JSON.parse(readFileSync(playwrightCorePackagePath, 'utf8'))
+  const mcpBin = typeof mcpPackage.bin === 'string' ? mcpPackage.bin : mcpPackage.bin?.['playwright-mcp']
+  const mcpCli = mcpBin && path.resolve(path.dirname(mcpPackagePath), mcpBin)
+
+  if (!mcpCli || !existsSync(mcpCli)) {
+    throw new Error(`@playwright/mcp ${mcpPackage.version || '(unknown)'} does not provide a usable playwright-mcp CLI`)
+  }
+  if (mcpPackage.dependencies?.playwright !== playwrightPackage.version) {
+    throw new Error(`@playwright/mcp expects playwright ${mcpPackage.dependencies?.playwright}, resolved ${playwrightPackage.version}`)
+  }
+  if (mcpPackage.dependencies?.['playwright-core'] !== playwrightCorePackage.version) {
+    throw new Error(`@playwright/mcp expects playwright-core ${mcpPackage.dependencies?.['playwright-core']}, resolved ${playwrightCorePackage.version}`)
+  }
+  if (playwrightPackage.dependencies?.['playwright-core'] !== playwrightCorePackage.version) {
+    throw new Error(`playwright expects playwright-core ${playwrightPackage.dependencies?.['playwright-core']}, resolved ${playwrightCorePackage.version}`)
+  }
+
+  return {
+    mcpCli,
+    mcpPackage,
+    mcpPackagePath,
+    mcpRequire,
+    playwrightPackage,
+    playwrightPackagePath,
+    playwrightCorePackage,
+    playwrightCorePackagePath,
+  }
+}
 
 export function resolveTargets(args = process.argv.slice(2), hostPlatform = process.platform) {
   const platformArg = args.find((arg) => arg.startsWith('--platform='))?.split('=', 2)[1]
@@ -34,13 +70,12 @@ export function resolveTargets(args = process.argv.slice(2), hostPlatform = proc
   throw new Error(`Playwright browser staging is not configured for ${platform}`)
 }
 
-export function installTarget(target) {
+export function installTarget(target, runtime = resolveMcpRuntime()) {
   const destination = path.join(stagingRoot, target.builderKey)
   mkdirSync(destination, { recursive: true })
-  if (target.platform === 'win32') return installWindowsTarget(target, destination)
-  const cli = path.join(projectRoot, 'node_modules', 'playwright', 'cli.js')
-  console.log(`[playwright] staging Chromium for ${target.platform}-${target.arch} in ${destination}`)
-  const result = spawnSync(process.execPath, [cli, 'install', 'chromium', '--no-shell'], {
+  if (target.platform === 'win32') return installWindowsTarget(target, destination, runtime)
+  console.log(`[playwright] staging Chromium for Playwright MCP ${runtime.mcpPackage.version} (${target.platform}-${target.arch}) in ${destination}`)
+  const result = spawnSync(process.execPath, [runtime.mcpCli, 'install-browser', 'chromium', '--no-shell', '--no-progress'], {
     cwd: projectRoot,
     stdio: 'inherit',
     env: {
@@ -65,15 +100,21 @@ function run(command, args, options = {}) {
   if (result.status !== 0) throw new Error(`${command} failed (exit ${result.status})`)
 }
 
-function windowsDescriptor(target, destination) {
+export function browserDescriptor(target, destination, runtime = resolveMcpRuntime()) {
   const previousPath = process.env.PLAYWRIGHT_BROWSERS_PATH
   const previousPlatform = process.env.PLAYWRIGHT_HOST_PLATFORM_OVERRIDE
   process.env.PLAYWRIGHT_BROWSERS_PATH = destination
   process.env.PLAYWRIGHT_HOST_PLATFORM_OVERRIDE = target.hostOverride
   try {
-    // Use Playwright's own registry as the source of truth for the browser
+    // The MCP-pinned Playwright registry is the source of truth for the
     // revision, URLs, install directory and executable layout.
-    const { registry } = require(path.join(projectRoot, 'node_modules', 'playwright-core', 'lib', 'server', 'registry', 'index.js'))
+    const coreBundlePath = runtime.mcpRequire.resolve('playwright-core/lib/coreBundle')
+    delete runtime.mcpRequire.cache[coreBundlePath]
+    const coreBundle = runtime.mcpRequire('playwright-core/lib/coreBundle')
+    const registry = coreBundle.registry?.registry || coreBundle.registry
+    if (typeof registry?.findExecutable !== 'function') {
+      throw new Error('MCP Playwright core bundle does not expose its browser registry')
+    }
     return registry.findExecutable('chromium')
   } finally {
     if (previousPath === undefined) delete process.env.PLAYWRIGHT_BROWSERS_PATH
@@ -83,15 +124,15 @@ function windowsDescriptor(target, destination) {
   }
 }
 
-function installWindowsTarget(target, destination) {
-  const descriptor = windowsDescriptor(target, destination)
+function installWindowsTarget(target, destination, runtime) {
+  const descriptor = browserDescriptor(target, destination, runtime)
   if (!descriptor?.directory || !descriptor?.revision || !descriptor?.downloadURLs?.length) {
     throw new Error('Playwright registry did not provide a complete Chromium descriptor')
   }
   const executable = descriptor.executablePath()
   const marker = path.join(descriptor.directory, 'INSTALLATION_COMPLETE')
   if (existsSync(executable) && existsSync(marker)) {
-    console.log(`[playwright] Chromium ${descriptor.revision} already staged in ${descriptor.directory}`)
+    console.log(`[playwright] MCP Chromium ${descriptor.revision} already staged in ${descriptor.directory}`)
     return
   }
 
@@ -106,7 +147,7 @@ function installWindowsTarget(target, destination) {
     let downloaded = false
     let lastError
     for (const url of descriptor.downloadURLs) {
-      console.log(`[playwright] downloading Chromium ${descriptor.revision} from ${url}`)
+      console.log(`[playwright] downloading MCP Chromium ${descriptor.revision} from ${url}`)
       try {
         run('curl.exe', [
           '--fail', '--location', '--retry', '3', '--retry-delay', '2',
@@ -126,7 +167,7 @@ function installWindowsTarget(target, destination) {
     run('tar.exe', ['-xf', archive, '-C', descriptor.directory])
     if (!existsSync(executable)) throw new Error(`Chromium executable is absent after extraction: ${executable}`)
     writeFileSync(marker, '')
-    console.log(`[playwright] staged Chromium ${descriptor.revision} in ${descriptor.directory}`)
+    console.log(`[playwright] staged MCP Chromium ${descriptor.revision} in ${descriptor.directory}`)
   } finally {
     rmSync(temp, { recursive: true, force: true })
   }

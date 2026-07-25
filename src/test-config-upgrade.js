@@ -30,6 +30,31 @@ function assert(cond, label) {
   else console.log(`PASS: ${label}`)
 }
 
+const EXPECTED_BROWSER_TOOLS = [
+  'browser_navigate',
+  'browser_navigate_back',
+  'browser_snapshot',
+  'browser_find',
+  'browser_click',
+  'browser_type',
+  'browser_fill_form',
+  'browser_select_option',
+  'browser_press_key',
+  'browser_hover',
+  'browser_drag',
+  'browser_wait_for',
+  'browser_handle_dialog',
+  'browser_tabs',
+  'browser_take_screenshot',
+  'browser_console_messages',
+  'browser_resize',
+  'browser_close',
+]
+const REMOVED_WEB_AND_BROWSER_TOOLS = [
+  'web_search', 'web_read', 'fetch_url', 'browser_read',
+  'browser_sessions', 'browser_open', 'browser_inspect', 'browser_act',
+]
+
 let v = 0
 async function loadFresh(json) {
   try { fs.rmSync(llmDir, { recursive: true, force: true }) } catch {}
@@ -46,7 +71,16 @@ async function loadFresh(json) {
     apiKey: 'sk-whatever-old-key-1234567890',
     model: 'old-model',
     temperature: 1.3,
-    security: { fileSandbox: false, execSandbox: false, browserPrivateNetwork: true, blockedTools: ['exec_command', 'fetch_url', 'browser_read'] },
+    security: {
+      fileSandbox: false,
+      execSandbox: false,
+      browserPrivateNetwork: true,
+      blockedTools: [
+        'exec_command',
+        'web_search', 'web_read', 'fetch_url', 'browser_read',
+        'browser_open', 'browser_inspect', 'browser_act',
+      ],
+    },
     voice: { voiceProvider: 'aliyun', aliyunApiKey: 'sk-aliyunkeyplaceholder1234567890' },
   })
   assert(config.needsActivation === true, 'A: 未知 provider → LLM 标记为待激活')
@@ -55,7 +89,12 @@ async function loadFresh(json) {
   assert(config.temperature === 1.3, 'A: temperature 在 LLM 不可用时仍被保留')
   assert(config.security.execSandbox === false, 'A: execSandbox=false 被保留（不会悄悄重新开启沙盒）')
   assert(config.security.fileSandbox === false, 'A: fileSandbox=false 被保留')
-  assert(JSON.stringify(config.security.blockedTools) === JSON.stringify(['exec_command', 'web_read']), 'A: legacy web read blocks migrate and deduplicate')
+  assert(JSON.stringify(config.security.blockedTools) === JSON.stringify([
+    'exec_command',
+    ...EXPECTED_BROWSER_TOOLS,
+  ]), 'A: legacy web/browser blocks migrate to the official Playwright allowlist and deduplicate')
+  assert(REMOVED_WEB_AND_BROWSER_TOOLS.every(name => !config.security.blockedTools.includes(name)),
+  'A: migrated security config no longer exposes removed web/browser names')
   assert(getSecurity().browserPrivateNetwork === true, 'A: 独立 browserPrivateNetwork 权限被读取')
   setSecurity({ browserPrivateNetwork: false })
   assert(getSecurity().browserPrivateNetwork === false, 'A: setSecurity 可独立撤销 browserPrivateNetwork')

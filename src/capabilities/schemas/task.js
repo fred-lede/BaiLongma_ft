@@ -88,7 +88,7 @@ export const taskSchemas = {
           },
           results: {
             type: 'object',
-            description: 'Per-capability result map. Suggested keys: filesystem, web_search, hotspot_panel, music_player, focus_banner, ui_card. Each value should include status and detail.',
+            description: 'Per-capability result map. Suggested keys: filesystem, playwright_browser, hotspot_panel, music_player, focus_banner, ui_card. Each value should include status and detail.',
             additionalProperties: {
               type: 'object',
               properties: {

@@ -538,11 +538,53 @@ try {
   server.emitSse({ type: 'tool_preparing', data: { name: 'write_file' }, ts: new Date().toISOString() })
   server.emitSse({ type: 'tool_executing', data: { name: 'write_file' }, ts: new Date().toISOString() })
   server.emitSse({ type: 'tool_call', data: { name: 'write_file', args: { path: 'src/config-demo.js' }, result: '{"ok":true}', ok: true }, ts: new Date().toISOString() })
-  server.emitSse({ type: 'response', data: {}, ts: new Date().toISOString() })
   await page.waitForFunction(() =>
     document.querySelector('#action-log')?.textContent.includes('写入文件 · src/config-demo.js')
     && document.querySelector('#si-l1')?.textContent.includes('请更新配置文件')
     && document.querySelector('#si-l1')?.textContent.includes('写入文件'))
+
+  server.emitSse({ type: 'tool_preparing', data: { name: 'browser_navigate' }, ts: new Date().toISOString() })
+  await page.waitForFunction(() =>
+    document.querySelector('#si-l1 .line-status')?.textContent === '准备打开网页…')
+  server.emitSse({ type: 'tool_executing', data: { name: 'browser_navigate' }, ts: new Date().toISOString() })
+  await page.waitForFunction(() =>
+    document.querySelector('#si-l1 .line-status')?.textContent === '正在打开网页…')
+  server.emitSse({
+    type: 'tool_call',
+    data: {
+      name: 'browser_navigate',
+      args: { url: 'https://example.com/docs' },
+      result: '{"ok":true}',
+      ok: true,
+    },
+    ts: new Date().toISOString(),
+  })
+  server.emitSse({
+    type: 'tool_call',
+    data: {
+      name: 'browser_press_key',
+      args: { key: 'End' },
+      result: '{"ok":true}',
+      ok: true,
+    },
+    ts: new Date().toISOString(),
+  })
+  server.emitSse({ type: 'response', data: {}, ts: new Date().toISOString() })
+  await page.waitForFunction(() => {
+    const streamText = document.querySelector('#si-l1')?.textContent || ''
+    const actionText = document.querySelector('#action-log')?.textContent || ''
+    const activityText = document.querySelector('#ai-activity')?.textContent || ''
+    return streamText.includes('打开网页')
+      && streamText.includes('example.com')
+      && streamText.includes('滚动页面')
+      && streamText.includes('全部操作')
+      && actionText.includes('打开网页 · example.com')
+      && actionText.includes('滚动页面 · End')
+      && activityText.includes('项操作')
+      && !streamText.includes('browser_navigate')
+      && !streamText.includes('browser_press_key')
+      && !streamText.includes('工具调用')
+  })
 
   server.emitSse({
     type: 'scheduled_task',

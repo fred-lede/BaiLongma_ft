@@ -39,6 +39,13 @@ import { execManageRule } from './tools/rules.js'
 import { runWorkReview } from '../review/reviewer.js'
 import { CAPABILITY_DEMO_INTRO, runCapabilityDemo } from '../capability-demo.js'
 import { deliverMessage } from '../runtime/delivery.js'
+import {
+  executeMcpTool,
+  getMcpToolSchema,
+  isMcpTool,
+  listMcpTools,
+  searchMcpTools,
+} from '../mcp/client-manager.js'
 export { calculateNextDueAt } from './tools/reminders.js'
 export { autoSpeakForVoiceReply } from './tools/media.js'
 export { detectOpenFollowupQuestion } from '../runtime/delivery.js'
@@ -378,6 +385,7 @@ async function executeToolUnchecked(name, args, context = {}) {
           if (previewed) streamToolFileWriteExecutionPreview(name, args, inferFileWritePreviewOutcome(result))
           return result
         }
+        if (isMcpTool(name)) return await executeMcpTool(name, args, context)
         return `错误：未知工具 "${name}"`
     }
   } catch (err) {
@@ -472,9 +480,10 @@ function execListTools() {
     .filter(([name]) => name !== 'express')
     .map(([name, s]) => ({ name, description: s.function.description, source: 'builtin' }))
   const installed = listInstalledTools()
-  const all = [...builtins, ...installed]
+  const mcp = listMcpTools()
+  const all = [...builtins, ...installed, ...mcp]
   const lines = all.map(t => `[${t.source}] ${t.name}: ${t.description}`)
-  return `共 ${all.length} 个工具（${builtins.length} 内置 + ${installed.length} 已安装）：\n\n${lines.join('\n')}`
+  return `共 ${all.length} 个工具（${builtins.length} 内置 + ${installed.length} 已安装 + ${mcp.length} MCP）：\n\n${lines.join('\n')}`
 }
 
 // find_tool：按意图搜全量工具目录，返回命中的工具并标注 loaded（由 llm.js 工具循环把它们的 schema
@@ -508,11 +517,16 @@ function execFindTool({ query } = {}) {
       .filter(([name]) => name !== 'express')
       .map(([name, s]) => ({ name, description: s.function?.description || '' })),
     ...listInstalledTools().map(t => ({ name: t.name, description: t.description || '' })),
+    ...listMcpTools().map(t => ({
+      name: t.name,
+      description: `${t.serverName || t.serverId} ${t.remoteName || ''} ${t.description || ''}`,
+    })),
   ]
   for (const { name, description } of catalog) {
     const hay = `${name} ${description}`.toLowerCase()
     if (terms.some(t => t.length >= 2 && hay.includes(t))) matched.add(name)
   }
+  for (const tool of searchMcpTools(q)) matched.add(tool.name)
 
   // 能力工作流摘要：命中的能力把 context 压成一句话回给 Agent（自感知按需激活的「怎么用」半）。
   const capabilities = capHits.map(cap => ({
@@ -535,7 +549,7 @@ function execFindTool({ query } = {}) {
   }
 
   const describe = (name) => {
-    const s = TOOL_SCHEMAS[name] || getInstalledToolSchema(name)
+    const s = TOOL_SCHEMAS[name] || getInstalledToolSchema(name) || getMcpToolSchema(name)
     const desc = s?.function?.description || ''
     const req = s?.function?.parameters?.required || []
     return { name, description: desc.slice(0, 200), required_params: req }

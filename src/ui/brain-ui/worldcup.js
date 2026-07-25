@@ -22,7 +22,7 @@ let collapseTimer = null;
 function consoleEngaged() {
   const el = $('chat-area');
   if (!el) return false;
-  return el.matches(':hover') || el.contains(document.activeElement);
+  return el.classList.contains('chat-pinned') || el.matches(':hover') || el.contains(document.activeElement);
 }
 
 function expandConsole() {
@@ -31,7 +31,7 @@ function expandConsole() {
 }
 
 function scheduleConsoleCollapse(delay = COLLAPSE_DELAY_MS) {
-  if (!worldcupActive) return;
+  if (!worldcupActive || $('chat-area')?.classList.contains('chat-pinned')) return;
   if (collapseTimer) clearTimeout(collapseTimer);
   collapseTimer = setTimeout(() => {
     collapseTimer = null;
@@ -63,6 +63,11 @@ function initConsoleCollapse() {
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
     expandConsole();
     scheduleConsoleCollapse(MESSAGE_PEEK_MS);
+  });
+  window.addEventListener('bailongma:chat-pin', (event) => {
+    if (!worldcupActive) return;
+    if (event?.detail?.pinned) expandConsole();
+    else scheduleConsoleCollapse();
   });
 }
 

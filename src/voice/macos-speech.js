@@ -33,7 +33,44 @@ function normalizeLang(lang = 'zh-CN') {
   return value
 }
 
-export function createMacSpeechSession(config = {}, onTranscript, onError, onClose) {
+function loadElectronSystemPreferences() {
+  if (!process.versions?.electron) return null
+  return globalThis.bailongmaSystemPreferences || null
+}
+
+export async function requestMacMicrophoneAccess(onError, systemPreferencesOverride) {
+  const reportError = typeof onError === 'function' ? onError : () => {}
+  let systemPreferences = systemPreferencesOverride
+  try {
+    systemPreferences ||= loadElectronSystemPreferences()
+  } catch (err) {
+    reportError(`无法检查麦克风权限: ${err?.message || String(err)}`)
+    return false
+  }
+
+  // Standalone Node/Swift development does not expose Electron APIs. In that
+  // case the native helper below remains responsible for requesting access.
+  if (!systemPreferences?.askForMediaAccess) return true
+
+  try {
+    const status = systemPreferences.getMediaAccessStatus?.('microphone')
+    if (status === 'granted') return true
+    if (status === 'denied' || status === 'restricted') {
+      reportError('麦克风权限未授予，请在“系统设置 > 隐私与安全性 > 麦克风”中允许 Bailongma，然后重新启动应用')
+      return false
+    }
+
+    const granted = await systemPreferences.askForMediaAccess('microphone')
+    if (granted === true) return true
+    reportError('麦克风权限未授予，请在“系统设置 > 隐私与安全性 > 麦克风”中允许 Bailongma，然后重新启动应用')
+    return false
+  } catch (err) {
+    reportError(`请求麦克风权限失败: ${err?.message || String(err)}`)
+    return false
+  }
+}
+
+export async function createMacSpeechSession(config = {}, onTranscript, onError, onClose) {
   if (process.platform !== 'darwin') {
     onError('Mac 本地语音识别只支持 macOS')
     return null
@@ -44,6 +81,8 @@ export function createMacSpeechSession(config = {}, onTranscript, onError, onClo
     onError('找不到 macOS 本地语音识别模块')
     return null
   }
+
+  if (!await requestMacMicrophoneAccess(onError)) return null
 
   const lang = normalizeLang(config.lang)
   const mode = String(config.mode || config.recognitionMode || 'auto').trim() || 'auto'

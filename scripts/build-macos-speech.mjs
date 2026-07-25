@@ -80,6 +80,23 @@ function compileArch(targetArch, targetOutput) {
   }
 }
 
+function adHocSign(file) {
+  const result = spawnSync('codesign', [
+    '--force',
+    '--identifier', 'com.xiaoyuanda.bailongma.speech-helper',
+    '--sign', '-',
+    file,
+  ], { stdio: 'inherit' })
+
+  if (result.error) {
+    stop(`[macos-speech] codesign failed: ${result.error.message}`)
+  }
+
+  if (result.status !== 0) {
+    stop('[macos-speech] codesign failed')
+  }
+}
+
 fs.rmSync(output, { force: true })
 
 if (arch === 'universal') {
@@ -113,4 +130,5 @@ if (arch === 'universal') {
 }
 
 fs.chmodSync(output, 0o755)
+adHocSign(output)
 console.log(`[macos-speech] built ${arch} helper at ${output}`)

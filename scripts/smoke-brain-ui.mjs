@@ -50,6 +50,7 @@ function sendFile(res, filePath) {
 function createServer() {
   const sseClients = new Set()
   const brainUiEvents = []
+  let conversations = []
   const persistedTypes = new Set([
     'message_received', 'tick', 'scheduled_task', 'scheduled_task_completed', 'scheduled_task_retry', 'scheduled_task_failed',
     'stream_start', 'stream_end', 'tool_preparing', 'tool_executing', 'tool_call',
@@ -119,7 +120,14 @@ function createServer() {
     }
 
     if (url.pathname === '/conversations') {
-      sendJson(res, [])
+      const requestedLimit = Number.parseInt(url.searchParams.get('limit') || '60', 10)
+      const limit = Math.max(1, Math.min(Number.isFinite(requestedLimit) ? requestedLimit : 60, 500))
+      const beforeId = Number.parseInt(url.searchParams.get('before_id') || '', 10)
+      const page = conversations
+        .filter(row => !Number.isFinite(beforeId) || Number(row.id) < beforeId)
+        .sort((left, right) => Number(left.id) - Number(right.id))
+        .slice(-limit)
+      sendJson(res, page)
       return
     }
 
@@ -272,6 +280,9 @@ function createServer() {
     }
     sseClients.clear()
   }
+  server.setConversations = (rows) => {
+    conversations = Array.isArray(rows) ? rows : []
+  }
   server.emitSse = (event) => {
     if (event?.type === 'message_received') brainUiPath = 'l1'
     if (event?.type === 'tick') {
@@ -330,6 +341,101 @@ try {
   await page.waitForFunction(() => window.d3 && document.querySelector('#agent-brand-name')?.textContent.includes('SmokeLongma'))
   await page.waitForSelector('#heartbeat-state[data-state="alive"]')
   await page.waitForFunction(() => document.querySelector('#heartbeat-state-label')?.textContent === '20 分钟')
+  await page.focus('#msg-input')
+  await page.click('#chat-pin-button')
+  await page.mouse.move(0, 0)
+  await page.waitForTimeout(180)
+  const pinnedChatState = await page.evaluate(() => ({
+    pressed: document.querySelector('#chat-pin-button')?.getAttribute('aria-pressed'),
+    pinned: document.querySelector('#chat-area')?.classList.contains('chat-pinned'),
+    open: document.querySelector('#chat-history')?.classList.contains('open'),
+    stored: localStorage.getItem('bailongma-chat-pinned'),
+  }))
+  if (pinnedChatState.pressed !== 'true' || !pinnedChatState.pinned || !pinnedChatState.open || pinnedChatState.stored !== '1') {
+    throw new Error(`chat pin did not keep history open: ${JSON.stringify(pinnedChatState)}`)
+  }
+  await page.click('#chat-pin-button')
+  await page.mouse.move(0, 0)
+  await page.waitForTimeout(180)
+  const unpinnedChatState = await page.evaluate(() => ({
+    pressed: document.querySelector('#chat-pin-button')?.getAttribute('aria-pressed'),
+    pinned: document.querySelector('#chat-area')?.classList.contains('chat-pinned'),
+    open: document.querySelector('#chat-history')?.classList.contains('open'),
+    stored: localStorage.getItem('bailongma-chat-pinned'),
+  }))
+  if (unpinnedChatState.pressed !== 'false' || unpinnedChatState.pinned || unpinnedChatState.open || unpinnedChatState.stored !== '0') {
+    throw new Error(`chat did not restore auto-collapse after unpinning: ${JSON.stringify(unpinnedChatState)}`)
+  }
+  server.setConversations(Array.from({ length: 145 }, (_, index) => ({
+    id: index + 1,
+    role: index % 2 === 0 ? 'user' : 'jarvis',
+    content: `滚动位置回归消息 ${index + 1}：用户阅读较早聊天记录时，后台历史同步不能把视图拉回底部。`,
+    channel: 'TUI',
+  })))
+  let historySyncResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/conversations')
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await historySyncResponse
+  await page.waitForFunction(() => document.querySelectorAll('#chat-messages .msg').length === 60)
+  const historyScrollBeforeSync = await page.evaluate(async () => {
+    const history = document.querySelector('#chat-history')
+    const messages = document.querySelector('#chat-messages')
+    history.classList.add('open')
+    await new Promise(resolve => setTimeout(resolve, 700))
+    if (messages.scrollHeight <= messages.clientHeight) {
+      throw new Error(`chat history did not overflow: ${messages.scrollHeight}/${messages.clientHeight}`)
+    }
+    messages.scrollTop = Math.max(0, messages.scrollHeight - messages.clientHeight - 200)
+    return messages.scrollTop
+  })
+  historySyncResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/conversations')
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await historySyncResponse
+  await page.waitForTimeout(50)
+  const historyScrollAfterSync = await page.locator('#chat-messages').evaluate(element => element.scrollTop)
+  if (Math.abs(historyScrollAfterSync - historyScrollBeforeSync) > 1) {
+    throw new Error(`chat history sync changed the reader's scroll position: ${historyScrollBeforeSync} -> ${historyScrollAfterSync}`)
+  }
+
+  const firstOlderPageResponse = page.waitForResponse(response => {
+    const url = new URL(response.url())
+    return url.pathname === '/conversations' && url.searchParams.get('before_id') === '86'
+  })
+  const firstAnchorTop = await page.evaluate(() => {
+    const messages = document.querySelector('#chat-messages')
+    messages.scrollTop = 0
+    return document.querySelector('[data-message-id="86"]').getBoundingClientRect().top
+  })
+  await firstOlderPageResponse
+  await page.waitForFunction(() => document.querySelectorAll('#chat-messages .msg').length === 120)
+  const firstPageState = await page.evaluate(() => ({
+    firstId: document.querySelector('#chat-messages .msg')?.dataset.messageId,
+    anchorTop: document.querySelector('[data-message-id="86"]')?.getBoundingClientRect().top,
+    scrollTop: document.querySelector('#chat-messages')?.scrollTop,
+  }))
+  if (firstPageState.firstId !== '26' || Math.abs(firstPageState.anchorTop - firstAnchorTop) > 1 || firstPageState.scrollTop <= 0) {
+    throw new Error(`first lazy history page did not preserve the viewport: ${JSON.stringify({ firstAnchorTop, ...firstPageState })}`)
+  }
+
+  const secondOlderPageResponse = page.waitForResponse(response => {
+    const url = new URL(response.url())
+    return url.pathname === '/conversations' && url.searchParams.get('before_id') === '26'
+  })
+  const secondAnchorTop = await page.evaluate(() => {
+    const messages = document.querySelector('#chat-messages')
+    messages.scrollTop = 0
+    return document.querySelector('[data-message-id="26"]').getBoundingClientRect().top
+  })
+  await secondOlderPageResponse
+  await page.waitForFunction(() => document.querySelectorAll('#chat-messages .msg').length === 145)
+  const secondPageState = await page.evaluate(() => ({
+    firstId: document.querySelector('#chat-messages .msg')?.dataset.messageId,
+    anchorTop: document.querySelector('[data-message-id="26"]')?.getBoundingClientRect().top,
+    scrollTop: document.querySelector('#chat-messages')?.scrollTop,
+  }))
+  if (secondPageState.firstId !== '1' || Math.abs(secondPageState.anchorTop - secondAnchorTop) > 1 || secondPageState.scrollTop <= 0) {
+    throw new Error(`second lazy history page did not preserve the viewport: ${JSON.stringify({ secondAnchorTop, ...secondPageState })}`)
+  }
+  server.setConversations([])
   const l2CardStyles = await page.evaluate(() => {
     const left = getComputedStyle(document.querySelector('#panel-l1'))
     const rail = getComputedStyle(document.querySelector('#panel-l2'))

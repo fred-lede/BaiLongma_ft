@@ -2,6 +2,7 @@ import fs from 'fs'
 import path from 'path'
 import { execSync, execFileSync } from 'child_process'
 import { paths } from '../../paths.js'
+import { BUILTIN_TOOL_NAMES } from '../builtin-tools.js'
 
 const IS_WIN = process.platform === 'win32'
 
@@ -13,23 +14,6 @@ const DEFAULT_PERMISSIONS = Object.freeze({
 
 // 运行时注册表：name → { schema, execute }
 const registry = new Map()
-
-// 不允许覆盖的内置工具名（关键工具保护）
-const BUILTIN_NAMES = new Set([
-  'express', 'send_message', 'read_file', 'list_dir', 'write_file', 'delete_file',
-  'make_dir', 'exec_command', 'exec_quick_command', 'exec_task_command', 'exec_background_command',
-  'download_file', 'kill_process', 'list_processes', 'web_search', 'web_read',
-  'fetch_url', 'browser_read', 'browser_sessions', 'browser_open', 'browser_navigate', 'browser_inspect', 'browser_act', 'browser_tabs', 'browser_close',
-  'search_memory', 'probe_memory', 'upsert_memory', 'skip_recognition',
-  'speak', 'generate_lyrics', 'generate_music', 'generate_image', 'set_tick_interval',
-  'media_mode', 'hotspot_mode', 'worldcup_mode', 'typhoon_mode', 'open_doc_panel', 'person_card_mode', 'music',
-  'manage_reminder', 'schedule_reminder', 'manage_prefetch_task', 'ui_set',
-  'manage_rule', 'focus_banner', 'voice_retire',
-  'set_location', 'delegate_to_agent', 'grant_agent_delegation', 'recall_memory',
-  'complete_startup_self_check', 'set_task', 'complete_task', 'update_task_step',
-  'install_tool', 'uninstall_tool', 'list_tools', 'manage_tool_factory', 'set_security', 'connect_wechat', 'connect_feishu',
-  'run_capability', 'run_api_capability', 'analyze_image', 'manage_api_capability',
-])
 
 function ensureToolsDir() {
   fs.mkdirSync(TOOLS_DIR, { recursive: true })
@@ -156,7 +140,7 @@ function validateName(name) {
   if (!/^[a-z][a-z0-9_]{1,49}$/.test(name)) {
     throw new Error('工具名称只能含小写字母、数字、下划线，长度 2-50，且以字母开头')
   }
-  if (BUILTIN_NAMES.has(name)) throw new Error(`"${name}" 是保留名称，不允许覆盖`)
+  if (BUILTIN_TOOL_NAMES.has(name)) throw new Error(`"${name}" 是保留名称，不允许覆盖`)
 }
 
 function validateParameters(parameters) {
@@ -260,6 +244,7 @@ export async function executeInstalledTool(name, args) {
 export async function loadInstalledTools() {
   ensureToolsDir()
   const files = fs.readdirSync(TOOLS_DIR).filter(f => f.endsWith('.json'))
+  const seenNames = new Set()
   let loaded = 0
   for (const file of files) {
     const filePath = path.join(TOOLS_DIR, file)
@@ -270,6 +255,12 @@ export async function loadInstalledTools() {
         console.warn(`[marketplace] 跳过无效工具文件 ${file}`)
         continue
       }
+      validateName(name)
+      if (seenNames.has(name)) {
+        console.warn(`[marketplace] 跳过重复工具名称 "${name}"（文件 ${file}）`)
+        continue
+      }
+      seenNames.add(name)
       const legacy = !meta.permissions
       const permissions = normalizeToolPermissions(meta.permissions, { legacy })
       const executeFn = compileExecute(name, code, permissions, { legacyUnsafeGlobals: legacy })

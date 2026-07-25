@@ -53,7 +53,30 @@ try {
   assert.equal(row.content, expected, 'Chinese content round-trips through /message and /conversations')
   assert.equal(row.from_id, 'ID:UTF8_API_TEST')
 
-  console.log('PASS api /message preserves UTF-8 Chinese content')
+  const laterConversationIds = []
+  for (const suffix of ['分页第二条', '分页第三条']) {
+    const response = await fetch(`${baseUrl}/message`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json; charset=utf-8' },
+      body: JSON.stringify({
+        from_id: 'ID:UTF8_API_TEST',
+        channel: 'API_UTF8_TEST',
+        content: `${expected} ${suffix}`,
+      }),
+    })
+    assert.equal(response.status, 200)
+    laterConversationIds.push((await response.json()).conversation_id)
+  }
+
+  const olderPageRes = await fetch(
+    `${baseUrl}/conversations?limit=1&before_id=${laterConversationIds[1]}`,
+  )
+  assert.equal(olderPageRes.status, 200)
+  const olderPage = await olderPageRes.json()
+  assert.equal(olderPage.length, 1, 'conversation cursor returns one requested row')
+  assert.equal(olderPage[0].id, laterConversationIds[0], 'before_id returns the immediately older conversation')
+
+  console.log('PASS api /message preserves UTF-8 Chinese content and /conversations supports cursor pagination')
 } finally {
   if (server) {
     await new Promise(resolve => server.close(resolve))

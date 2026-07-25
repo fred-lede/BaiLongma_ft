@@ -15,7 +15,7 @@ if (IS_WIN) {
   } catch (_) {}
 }
 
-const { app, BrowserWindow, shell, dialog, Menu, ipcMain, Tray, nativeImage, clipboard } = require('electron')
+const { app, BrowserWindow, shell, dialog, Menu, ipcMain, Tray, nativeImage, clipboard, systemPreferences } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const net = require('net')
@@ -27,6 +27,11 @@ const { autoUpdater } = require('electron-updater')
 const wakeWord = require('./wake-word.cjs')
 const devLight = require('./dev-board-light.cjs')
 const { configurePackagedPlaywright } = require('./playwright-runtime.cjs')
+
+// The ESM backend is imported into this Electron main process. Expose the
+// main-process-only permission API without requiring ESM modules to import the
+// special Electron built-in module themselves.
+globalThis.bailongmaSystemPreferences = systemPreferences
 
 const IS_DEV = !app.isPackaged
 configurePackagedPlaywright({ isPackaged: !IS_DEV })
@@ -1498,8 +1503,11 @@ let browserShutdownComplete = false
 app.on('before-quit', (event) => {
   app.isQuiting = true
   if (browserShutdownComplete) return
-  const shutdown = globalThis.shutdownBailongmaBrowserTools
-  if (typeof shutdown !== 'function') {
+  const shutdowns = [
+    globalThis.shutdownBailongmaBrowserTools,
+    globalThis.shutdownBailongmaMcpClients,
+  ].filter(shutdown => typeof shutdown === 'function')
+  if (shutdowns.length === 0) {
     browserShutdownComplete = true
     return
   }
@@ -1509,7 +1517,7 @@ app.on('before-quit', (event) => {
   // upper bound so a broken browser connection cannot trap the quit loop.
   let browserShutdownTimer
   browserShutdownBeforeQuit = Promise.race([
-    Promise.resolve().then(() => shutdown()).catch(() => {}),
+    Promise.allSettled(shutdowns.map(shutdown => Promise.resolve().then(() => shutdown()))),
     new Promise(resolve => { browserShutdownTimer = setTimeout(resolve, 5_000) }),
   ]).finally(() => {
     clearTimeout(browserShutdownTimer)

@@ -44,6 +44,7 @@ export const paths = {
   // seedance（AI 视频生成）单独成文件，与主 config.json 物理隔离，
   // 避免被 activate() 等“全量覆盖写 config.json”的操作误删。
   seedanceConfigFile: path.join(USER_DIR, 'seedance.json'),
+  mcpServersFile: path.join(USER_DIR, 'mcp-servers.json'),
   apiCapabilitySlotsFile: path.join(USER_DIR, 'api-capability-slots.json'),
   apiCapabilitySecretsFile: path.join(USER_DIR, 'data', 'api-capability-secrets.json'),
   apiCapabilitySecretKeyFile: path.join(USER_DIR, 'data', '.api-capability-secret.key'),

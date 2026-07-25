@@ -33,6 +33,7 @@ import { isRunning, setScheduler } from './control.js'
 import { getCustomIntervalMs, consumeTick as consumeTickerTick, getStatus as getTickerStatus } from './ticker.js'
 import { seedSandboxOnce, seedMusicOnce, rescueDataFromInstallDir } from './paths.js'
 import { loadInstalledTools } from './capabilities/marketplace/index.js'
+import { startMcpClients } from './mcp/client-manager.js'
 import { resumePendingVideoJobs, getAIVideoPanelState } from './capabilities/tools/media.js'
 import { dispatchSocialMessage } from './social/dispatch.js'
 import { startSocialConnectors } from './social/index.js'
@@ -140,6 +141,12 @@ reportStartupProgress('agents', 'done', '本地 Agent 扫描完成', '本地 Age
 reportStartupProgress('tools', 'running', '恢复已安装能力', '正在加载工具槽')
 await withStartupTimeout(loadInstalledTools(), 12000, '[startup] installed-tools')
 reportStartupProgress('tools', 'done', '工具槽已加载', '工具槽已加载')
+
+// Connect enabled local MCP stdio servers and cache their tool catalogs. MCP is
+// optional: one broken external server must never block the Bailongma API/agent.
+reportStartupProgress('mcp', 'running', '连接已启用的 MCP Server', '正在加载 MCP 工具')
+await withStartupTimeout(startMcpClients(), 30000, '[startup] mcp-clients')
+reportStartupProgress('mcp', 'done', 'MCP 工具已加载', 'MCP 工具已加载')
 
 // 本地嵌入模型预热：provider==='local' 时后台 fire-and-forget 建好 pipeline（含首次模型下载），
 // 让首条向量召回不被冷启动撞穿超时。绝不阻塞启动，失败静默（召回会自动退化为 FTS5）。

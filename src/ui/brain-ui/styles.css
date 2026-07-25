@@ -1203,6 +1203,7 @@ body {
 }
 
 #chat-history {
+  position: relative;
   flex: 1 1 auto;
   min-height: 0;
   max-height: 0;
@@ -1212,6 +1213,56 @@ body {
 
 #chat-history.open { max-height: min(800px, calc(100vh - 160px)); }
 
+.chat-pin-button {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  z-index: 3;
+  display: grid;
+  width: 28px;
+  height: 28px;
+  padding: 5px;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #ffffff;
+  opacity: 0;
+  pointer-events: none;
+  cursor: pointer;
+  transform: rotate(-38deg);
+  transform-origin: center;
+  transition: opacity 0.16s ease, background 0.16s ease, transform 0.2s ease;
+}
+
+#chat-history.open .chat-pin-button {
+  opacity: 0.42;
+  pointer-events: auto;
+}
+
+.chat-pin-button:hover,
+.chat-pin-button:focus-visible {
+  opacity: 0.84;
+  background: rgba(255, 255, 255, 0.08);
+  outline: none;
+}
+
+.chat-pin-button[aria-pressed="true"] {
+  opacity: 0.9;
+  background: rgba(255, 255, 255, 0.1);
+  transform: rotate(0deg);
+}
+
+.chat-pin-button svg {
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 #chat-messages {
   display: flex;
   flex-direction: column;
@@ -1219,7 +1270,7 @@ body {
   min-height: 0;
   max-height: min(800px, calc(100vh - 220px));
   overflow-y: auto;
-  padding: 14px 18px 10px;
+  padding: 42px 18px 10px;
   scrollbar-width: thin;
   scrollbar-color: var(--line-strong) transparent;
 }
@@ -4963,7 +5014,7 @@ body.worldcup-mode .console > #voice-panel .voice-transcript {
     flex: 1 1 auto;
     width: 100%;
     max-height: none;
-    padding: 12px 14px 10px;
+    padding: 42px 14px 10px;
   }
 
   body:not(:is(

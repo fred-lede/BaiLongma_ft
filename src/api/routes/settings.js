@@ -40,6 +40,8 @@ import { jsonResponse, readJsonBody } from '../utils.js'
 import { setConfig } from '../../db.js'
 import { getMapServiceSettings, setMapServiceSettings } from '../../map-service.js'
 import QRCode from 'qrcode'
+import { getMcpServersConfig, setMcpServersConfig } from '../../mcp/config.js'
+import { getMcpStatus, reconcileMcpClients } from '../../mcp/client-manager.js'
 
 function checkLocalOrToken(req, res, url, requireLocalOrToken) {
   if (typeof requireLocalOrToken === 'function') return requireLocalOrToken(req, res, url)
@@ -172,6 +174,34 @@ export async function handleSettingsRoutes(req, res, url, { requireLocalOrToken,
       refreshScheduler()
       emitEvent('heartbeat_settings_updated', heartbeat)
       jsonResponse(res, 200, { ok: true, heartbeat })
+    } catch (err) {
+      jsonResponse(res, 400, { ok: false, error: err.message })
+    }
+    return true
+  }
+
+  if (req.method === 'GET' && url.pathname === '/settings/mcp') {
+    if (!checkLocalOrToken(req, res, url, requireLocalOrToken)) return true
+    jsonResponse(res, 200, {
+      ok: true,
+      mcp: getMcpServersConfig(),
+      status: getMcpStatus(),
+    })
+    return true
+  }
+
+  if (req.method === 'POST' && url.pathname === '/settings/mcp') {
+    if (!checkLocalOrToken(req, res, url, requireLocalOrToken)) return true
+    try {
+      const body = await readJsonBody(req)
+      const mcp = setMcpServersConfig(body)
+      const status = await reconcileMcpClients()
+      emitEvent('mcp_settings_updated', {
+        serverCount: mcp.servers.length,
+        enabledCount: mcp.servers.filter(server => server.enabled).length,
+        toolCount: status.toolCount,
+      })
+      jsonResponse(res, 200, { ok: true, mcp, status })
     } catch (err) {
       jsonResponse(res, 400, { ok: false, error: err.message })
     }

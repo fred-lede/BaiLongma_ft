@@ -1,39 +1,8 @@
 import { getInstalledToolSchema } from './marketplace/index.js'
-import { commsSchemas } from './schemas/comms.js'
-import { filesystemSchemas } from './schemas/filesystem.js'
-import { shellSchemas } from './schemas/shell.js'
-import { webSchemas } from './schemas/web.js'
-import { browserSchemas } from './schemas/browser.js'
-import { mediaSchemas } from './schemas/media.js'
-import { memorySchemas } from './schemas/memory.js'
-import { uiSchemas } from './schemas/ui.js'
-import { sceneSchemas } from './schemas/scene.js'
-import { taskSchemas } from './schemas/task.js'
-import { reviewSchemas } from './schemas/review.js'
-import { remindersSchemas } from './schemas/reminders.js'
-import { agentsSchemas } from './schemas/agents.js'
-import { systemSchemas } from './schemas/system.js'
-import { apiCapabilitySchemas } from './schemas/api-capabilities.js'
+import { getMcpToolSchema } from '../mcp/client-manager.js'
+import { TOOL_SCHEMAS } from './builtin-tools.js'
 
-// 所有工具的 schema 定义（按类别拆分到 ./schemas/*.js，此处合并）。
-// 调用方按需用 getToolSchemas(toolNames) 取子集，合并顺序不影响输出顺序。
-export const TOOL_SCHEMAS = {
-  ...commsSchemas,
-  ...filesystemSchemas,
-  ...shellSchemas,
-  ...webSchemas,
-  ...browserSchemas,
-  ...mediaSchemas,
-  ...memorySchemas,
-  ...uiSchemas,
-  ...sceneSchemas,
-  ...taskSchemas,
-  ...reviewSchemas,
-  ...remindersSchemas,
-  ...agentsSchemas,
-  ...systemSchemas,
-  ...apiCapabilitySchemas,
-}
+export { TOOL_SCHEMAS } from './builtin-tools.js'
 
 function normalizeToolPromptHints(toolPromptHints = null) {
   if (!toolPromptHints) return new Map()
@@ -72,16 +41,31 @@ function appendToolPromptHints(schema, hints = []) {
 // 根据名称列表获取 schema 数组（含已安装工具）
 export function getToolSchemas(toolNames, { toolPromptHints = null } = {}) {
   const hintsByTool = normalizeToolPromptHints(toolPromptHints)
-  return toolNames
+  const seenNames = new Set()
+  const seenSchemaNames = new Set()
+  return (Array.isArray(toolNames) ? toolNames : [])
     // `express` remains as a backward-compatible executor alias,
     // but we don't expose it to the model. The model should use
     // `send_message` for outbound text messages.
-    .filter(name => name !== 'express')
+    .filter(name => {
+      if (name === 'express' || typeof name !== 'string' || seenNames.has(name)) return false
+      seenNames.add(name)
+      return true
+    })
     .map(name => {
-      const schema = TOOL_SCHEMAS[name] ?? getInstalledToolSchema(name)
+      const schema = TOOL_SCHEMAS[name] ?? getInstalledToolSchema(name) ?? getMcpToolSchema(name)
       return appendToolPromptHints(schema, hintsByTool.get(name) || [])
     })
     .filter(Boolean)
+    // The requested alias and the schema's actual function name should normally
+    // be identical. Deduplicate by the final API-visible name as a last line of
+    // defense against malformed extension schemas or future aliases.
+    .filter(schema => {
+      const name = schema?.function?.name
+      if (!name || seenSchemaNames.has(name)) return false
+      seenSchemaNames.add(name)
+      return true
+    })
     // 剥离识别器专用元数据，避免发给 LLM API
     .map(({ recognizer_highlights, ...rest }) => rest)
 }

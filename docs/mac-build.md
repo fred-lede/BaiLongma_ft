@@ -29,6 +29,9 @@
 
 ```json
 "mac": {
+  "forceCodeSigning": true,
+  "hardenedRuntime": true,
+  "binaries": ["Contents/Resources/app.asar.unpacked/build/native-speech-recognizer"],
   "target": ["dmg"],
   "category": "public.app-category.productivity",
   "artifactName": "${productName}-${version}-mac-${arch}.${ext}"
@@ -75,7 +78,10 @@ node --version
 npm --version
 xcode-select -p
 xcrun --sdk macosx swiftc --version
+security find-identity -v -p codesigning
 ```
+
+用于发布的 macOS 构建必须安装有效的 `Developer ID Application` 证书。`forceCodeSigning` 已启用；找不到签名身份时构建会直接失败，不再生成权限行为不可靠的未签名 DMG。
 
 项目当前使用：
 
@@ -299,6 +305,7 @@ npm run smoke:mac-artifacts
 - app 可执行文件是预期的单一架构；
 - `build/native-speech-recognizer` 是预期的单一架构；
 - `better_sqlite3.node` 是预期的单一架构；
+- app 和 `native-speech-recognizer` 都带有有效的 Developer Team 签名；
 - `better-sqlite3` 的 `test_extension.node` 没有被打进包里。
 
 常用手动检查命令：
@@ -315,7 +322,9 @@ hdiutil detach "/Volumes/<mounted-volume>"
 
 ## 代码签名、公证与 Gatekeeper
 
-当前仓库配置没有定义 Developer ID 签名或 Apple 公证流程。未签名或 ad-hoc 签名的本地构建仍然可以是有效的开发构建，但分发体验会更差。
+当前仓库要求 `electron-builder` 使用可用的 Developer ID 身份签名 app 及嵌套可执行文件。Swift helper 在独立编译后会先获得稳定标识的 ad-hoc 签名，打包时必须再由 Developer ID 对整个 app bundle 正式签名。产物冒烟检查会同时验证 app 和 helper 的签名及 Developer Team 标识。
+
+Apple 公证仍需在发布环境中配置相应凭据；代码签名成功不等于已经完成公证。
 
 没有 Developer ID 签名和公证时，用户可能会看到类似提示：
 
@@ -503,7 +512,7 @@ NSMicrophoneUsageDescription
 NSSpeechRecognitionUsageDescription
 ```
 
-Swift helper 会单独请求 Speech 和麦克风权限。运行时错误可能包括：
+Electron 主进程会在启动 Swift helper 前请求麦克风权限；Swift helper 仍会请求 Speech 权限，并再次校验麦克风权限。运行时错误可能包括：
 
 ```text
 macOS speech recognition permission was denied

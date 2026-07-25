@@ -48,6 +48,29 @@ function assertSingleArch(filePath, expectedArch, label) {
   }
 }
 
+function assertCodeSigned(filePath, label, { deep = false } = {}) {
+  assertFile(filePath, label)
+  const args = ['--verify']
+  if (deep) args.push('--deep')
+  args.push('--strict', '--verbose=2', filePath)
+  run('codesign', args)
+}
+
+function assertDeveloperTeam(filePath, label) {
+  const result = spawnSync('codesign', ['--display', '--verbose=4', filePath], {
+    cwd: root,
+    encoding: 'utf8',
+  })
+  const detail = `${result.stdout || ''}\n${result.stderr || ''}`
+  if (result.error || result.status !== 0) {
+    throw new Error(`${label} signing metadata is unavailable: ${detail.trim()}`)
+  }
+  const teamId = detail.match(/^TeamIdentifier=(.+)$/m)?.[1]?.trim()
+  if (!teamId || teamId === 'not set') {
+    throw new Error(`${label} does not have a Developer Team signature`)
+  }
+}
+
 function mountDmg(dmgPath) {
   const mountPoint = fs.mkdtempSync(path.join(os.tmpdir(), 'bailongma-dmg-'))
   run('hdiutil', ['attach', '-readonly', '-nobrowse', '-mountpoint', mountPoint, dmgPath])
@@ -87,6 +110,10 @@ function smokeTarget(target) {
     assertSingleArch(executablePath, target.machArch, `${target.label} app executable`)
     assertSingleArch(speechHelperPath, target.machArch, `${target.label} native speech helper`)
     assertSingleArch(sqliteNodePath, target.machArch, `${target.label} better-sqlite3 native module`)
+    assertCodeSigned(appPath, `${target.label} app`, { deep: true })
+    assertCodeSigned(speechHelperPath, `${target.label} native speech helper`)
+    assertDeveloperTeam(appPath, `${target.label} app`)
+    assertDeveloperTeam(speechHelperPath, `${target.label} native speech helper`)
 
     if (fs.existsSync(sqliteTestExtensionPath)) {
       throw new Error(`${target.label} package still includes better-sqlite3 test_extension.node`)

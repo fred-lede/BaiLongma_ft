@@ -121,15 +121,25 @@ export async function handleMemoryRoutes(req, res, url) {
 
   if (req.method === 'GET' && url.pathname === '/conversations') {
     const db = getDB()
-    const limit = Math.min(parseInt(url.searchParams.get('limit') || '60'), 500)
+    const requestedLimit = parseInt(url.searchParams.get('limit') || '60', 10)
+    const limit = Math.max(1, Math.min(Number.isFinite(requestedLimit) ? requestedLimit : 60, 500))
+    const requestedBeforeId = parseInt(url.searchParams.get('before_id') || '', 10)
+    const beforeId = Number.isFinite(requestedBeforeId) && requestedBeforeId > 0
+      ? requestedBeforeId
+      : null
     const includeSystemSignals = url.searchParams.get('includeSystemSignals') === 'true'
     const rows = db.prepare(`
       SELECT id, role, from_id, to_id, content, timestamp, channel, external_party_id, focus_absorbed, focus_topic, open_question
       FROM conversations
       WHERE (? OR NOT (from_id = 'SYSTEM' AND channel = 'APP_SIGNAL'))
+        ${beforeId ? 'AND id < ?' : ''}
       ORDER BY id DESC
       LIMIT ?
-    `).all(includeSystemSignals ? 1 : 0, limit)
+    `).all(...(
+      beforeId
+        ? [includeSystemSignals ? 1 : 0, beforeId, limit]
+        : [includeSystemSignals ? 1 : 0, limit]
+    ))
     jsonResponse(res, 200, rows.reverse().map(row => (
       row.role === 'jarvis'
         ? { ...row, content: stripAssistantHistoryLabels(row.content) }

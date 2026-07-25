@@ -182,15 +182,16 @@ function attachCloudASR() {
     }
     attachWebSocketIdleTimeout(ws, 60 * 1000, cleanup)
 
-    ws.on('message', (raw) => {
+    ws.on('message', async (raw) => {
       if (!configured) {
         try {
           const msg = JSON.parse(raw.toString())
           if (msg.type !== 'config') return
+          configured = true
           const rawCfg = getVoiceRuntimeConfig(msg.provider || 'aliyun')
           const provider = rawCfg.provider
           const lang = msg.lang || rawCfg.lang || 'zh'
-          session = createCloudASRSession(
+          const nextSession = await createCloudASRSession(
             { ...rawCfg, provider, lang },
             (text, isFinal, seg) => {
               try { ws.send(JSON.stringify({ type: 'transcript', text, is_final: isFinal, seg })) } catch {}
@@ -203,8 +204,13 @@ function attachCloudASR() {
               try { ws.send(JSON.stringify({ type: 'diag', event, info })) } catch {}
             },
           )
-          configured = true
+          if (cleanedUp) {
+            nextSession?.close()
+          } else {
+            session = nextSession
+          }
         } catch (err) {
+          if (!cleanedUp) configured = false
           try {
             ws.send(JSON.stringify({
               type: 'error',

@@ -29,17 +29,19 @@ export function isImeComposing(event, compositionActive = false) {
 
 export function initChat({
   apiBase,
-  maxHistory,
+  historyPageSize,
   activationWarmupKey,
   getAgentName,
   defaultInputPlaceholder,
   onUserMessage = null,
   openSettings = null,
 } = {}) {
+  const CHAT_PIN_STORAGE_KEY = "bailongma-chat-pinned";
   const chatHistory = document.getElementById("chat-history");
   const chatMessages = document.getElementById("chat-messages");
   const msgInput = document.getElementById("msg-input");
   const chatArea = document.getElementById("chat-area");
+  const chatPinButton = document.getElementById("chat-pin-button");
   const sendBtn = document.getElementById("send-btn");
   const pasteAttachments = document.getElementById("paste-attachments");
 
@@ -47,6 +49,7 @@ export function initChat({
   const pendingLocalSends = new Set();
   const pendingPastedImages = [];
   let closeTimer = null;
+  let chatPinned = false;
   let hasPendingJarvisMessage = false;
   let pendingMessageDismissed = false;
   let compositionActive = false;
@@ -55,10 +58,15 @@ export function initChat({
   let audioUnlocked = false;
   let warmupTimer = null;
   let historySyncPromise = null;
+  let olderHistoryPromise = null;
+  let historyInitialized = false;
+  let oldestHistoryId = "";
+  let hasOlderHistory = true;
   const renderedMessageIds = new Set();
   const pendingClientMessages = new Map();
   const recentRenderedKeys = new Map();
   const RENDER_DEDUPE_TTL_MS = 2 * 60 * 1000;
+  const CHAT_BOTTOM_THRESHOLD_PX = 32;
 
   const PUSH_TO_TALK_PLACEHOLDER = "按住空格键开始说话";
   const MAX_PASTED_IMAGES = 8;
@@ -79,6 +87,15 @@ export function initChat({
     for (const [key, ts] of recentRenderedKeys) {
       if (now - ts > RENDER_DEDUPE_TTL_MS) recentRenderedKeys.delete(key);
     }
+  }
+
+  function isNearChatBottom() {
+    const distance = chatMessages.scrollHeight - chatMessages.clientHeight - chatMessages.scrollTop;
+    return distance <= CHAT_BOTTOM_THRESHOLD_PX;
+  }
+
+  function scrollChatToBottomIfFollowing(wasNearBottom) {
+    if (wasNearBottom) chatMessages.scrollTop = chatMessages.scrollHeight;
   }
 
   function claimRenderedMessage({ messageId, role, text, label, source = "event", dedupe = true } = {}) {
@@ -144,6 +161,29 @@ export function initChat({
 
   function isHoveringChat() {
     return chatArea.matches(":hover") || chatHistory.matches(":hover") || chatMessages.matches(":hover");
+  }
+
+  function readPinnedPreference() {
+    try { return localStorage.getItem(CHAT_PIN_STORAGE_KEY) === "1"; } catch { return false; }
+  }
+
+  function setChatPinned(pinned, { persist = true } = {}) {
+    chatPinned = Boolean(pinned);
+    chatArea.classList.toggle("chat-pinned", chatPinned);
+    chatPinButton?.setAttribute("aria-pressed", String(chatPinned));
+    chatPinButton?.setAttribute("aria-label", chatPinned ? "取消钉住聊天窗口" : "钉住聊天窗口");
+    if (chatPinButton) chatPinButton.title = chatPinned ? "取消钉住" : "钉住聊天窗口";
+    if (persist) {
+      try { localStorage.setItem(CHAT_PIN_STORAGE_KEY, chatPinned ? "1" : "0"); } catch {}
+    }
+    if (chatPinned) {
+      if (closeTimer) { clearTimeout(closeTimer); closeTimer = null; }
+      chatHistory.classList.add("open");
+      chatArea.classList.remove("wc-collapsed", "ty-collapsed");
+    }
+    window.dispatchEvent(new CustomEvent("bailongma:chat-pin", {
+      detail: { pinned: chatPinned },
+    }));
   }
 
   function ensureAudioContext() {
@@ -215,13 +255,16 @@ export function initChat({
     return document.activeElement === msgInput || msgInput.value.trim().length > 0 || pendingPastedImages.length > 0;
   }
 
-  async function fetchChatHistory() {
+  async function fetchChatHistory({ beforeId = "" } = {}) {
     try {
-      const res = await fetch(`${apiBase}/conversations?limit=${maxHistory}`);
-      if (!res.ok) return [];
+      const url = new URL("/conversations", `${apiBase}/`);
+      url.searchParams.set("limit", String(historyPageSize));
+      if (beforeId) url.searchParams.set("before_id", String(beforeId));
+      const res = await fetch(url);
+      if (!res.ok) return null;
       const rows = await res.json();
-      if (!Array.isArray(rows)) return [];
-      return rows
+      if (!Array.isArray(rows)) return null;
+      const messages = rows
         .filter(r => r && (r.role === "user" || r.role === "jarvis") && typeof r.content === "string")
         .map(r => {
           // 外部渠道判定：channel 非空且不是本地（TUI/API），或 from_id 仍带外部前缀（兼容历史数据）
@@ -236,7 +279,8 @@ export function initChat({
           }
           return { role: r.role, text: r.content, messageId: r.id };
         });
-    } catch { return []; }
+      return { messages, rowCount: rows.length };
+    } catch { return null; }
   }
 
   function openChat(autoClose = false) {
@@ -246,12 +290,12 @@ export function initChat({
   }
 
   function closeChat() {
-    if ((hasPendingJarvisMessage && !pendingMessageDismissed) || isTyping() || isHoveringChat()) return;
+    if (chatPinned || (hasPendingJarvisMessage && !pendingMessageDismissed) || isTyping() || isHoveringChat()) return;
     chatHistory.classList.remove("open");
   }
 
   function scheduleClose(ms = 100) {
-    if ((hasPendingJarvisMessage && !pendingMessageDismissed) || isTyping() || isHoveringChat()) return;
+    if (chatPinned || (hasPendingJarvisMessage && !pendingMessageDismissed) || isTyping() || isHoveringChat()) return;
     if (closeTimer) clearTimeout(closeTimer);
     closeTimer = setTimeout(closeChat, ms);
   }
@@ -265,10 +309,13 @@ export function initChat({
       clientMessageId,
       source = "event",
       dedupe = true,
+      forceScroll = false,
+      prepend = false,
     } = options;
     const defaultLabel = role === "user" ? "You" : role === "jarvis" ? getAgentName() : "Peer";
     const labelText = label || defaultLabel;
     if (!claimRenderedMessage({ messageId, role, text, label: labelText, source, dedupe })) return false;
+    const shouldScrollToBottom = !prepend && (forceScroll || isNearChatBottom());
     const div = document.createElement("div");
     div.className = `msg msg-${role}`;
     const normalizedId = normalizeMessageId(messageId);
@@ -283,23 +330,23 @@ export function initChat({
     labelSpan.textContent = labelText;
     div.appendChild(labelSpan);
     div.appendChild(createMarkdownBody(text));
-    chatMessages.appendChild(div);
+    if (prepend) chatMessages.insertBefore(div, chatMessages.firstChild);
+    else chatMessages.appendChild(div);
 
-    while (chatMessages.children.length > maxHistory) {
-      chatMessages.removeChild(chatMessages.firstChild);
+    // 历史渲染不应改变“有新回复待查看”等实时会话状态。
+    if (source !== "history") {
+      if (role === "jarvis") {
+        hasPendingJarvisMessage = pending;
+        pendingMessageDismissed = !pending;
+        if (alert) playJarvisAlert();
+        if (pending) openChat();
+      } else if (role === "user") {
+        hasPendingJarvisMessage = false;
+        pendingMessageDismissed = false;
+      }
     }
 
-    if (role === "jarvis") {
-      hasPendingJarvisMessage = pending;
-      pendingMessageDismissed = !pending;
-      if (alert) playJarvisAlert();
-      if (pending) openChat();
-    } else if (role === "user") {
-      hasPendingJarvisMessage = false;
-      pendingMessageDismissed = false;
-    }
-
-    chatMessages.scrollTop = chatMessages.scrollHeight;
+    if (!prepend) scrollChatToBottomIfFollowing(shouldScrollToBottom);
     return true;
   }
 
@@ -320,8 +367,10 @@ export function initChat({
 
   function restoreChatHistory() {
     if (historySyncPromise) return historySyncPromise;
-    historySyncPromise = fetchChatHistory().then(history => {
-      history.forEach(i => addMsg(i.role, i.text, {
+    historySyncPromise = fetchChatHistory().then(page => {
+      if (!page) return [];
+      const { messages, rowCount } = page;
+      messages.forEach(i => addMsg(i.role, i.text, {
         persist: false,
         alert: false,
         pending: false,
@@ -329,16 +378,62 @@ export function initChat({
         messageId: i.messageId,
         source: "history",
       }));
-      if (history.length) {
-        pendingMessageDismissed = true;
-        chatMessages.scrollTop = chatMessages.scrollHeight;
+      if (!historyInitialized || !oldestHistoryId) {
+        oldestHistoryId = normalizeMessageId(messages[0]?.messageId);
+        hasOlderHistory = rowCount >= historyPageSize;
       }
-      return history;
+      historyInitialized = true;
+      if (messages.length) {
+        pendingMessageDismissed = true;
+      }
+      return messages;
     }).finally(() => {
       historySyncPromise = null;
     });
     return historySyncPromise;
   }
+
+  function loadOlderHistory() {
+    if (olderHistoryPromise || !historyInitialized || !hasOlderHistory || !oldestHistoryId) {
+      return olderHistoryPromise || Promise.resolve([]);
+    }
+    const beforeId = oldestHistoryId;
+    olderHistoryPromise = fetchChatHistory({ beforeId }).then(page => {
+      if (!page) return [];
+      const { messages, rowCount } = page;
+      if (!messages.length) {
+        hasOlderHistory = false;
+        return [];
+      }
+
+      const previousScrollHeight = chatMessages.scrollHeight;
+      const previousScrollTop = chatMessages.scrollTop;
+      for (let index = messages.length - 1; index >= 0; index -= 1) {
+        const item = messages[index];
+        addMsg(item.role, item.text, {
+          persist: false,
+          alert: false,
+          pending: false,
+          label: item.label,
+          messageId: item.messageId,
+          source: "history",
+          prepend: true,
+        });
+      }
+      oldestHistoryId = normalizeMessageId(messages[0]?.messageId) || oldestHistoryId;
+      hasOlderHistory = rowCount >= historyPageSize;
+      const addedHeight = chatMessages.scrollHeight - previousScrollHeight;
+      chatMessages.scrollTop = previousScrollTop + addedHeight;
+      return messages;
+    }).finally(() => {
+      olderHistoryPromise = null;
+    });
+    return olderHistoryPromise;
+  }
+
+  chatMessages.addEventListener("scroll", () => {
+    if (chatMessages.scrollTop <= 48) loadOlderHistory();
+  }, { passive: true });
 
   // text 显式传入时直接发送、不经过输入框（语音识别用：voice 完全不在 msg-input 留草稿）；
   // 不传 text 则保持原行为，从输入框读取并清空。
@@ -530,6 +625,7 @@ export function initChat({
       label: label || undefined,
       clientMessageId,
       dedupe: false,
+      forceScroll: true,
     });
     openChat();
     scheduleClose(1000);
@@ -592,6 +688,7 @@ export function initChat({
     openChat();
   });
   chatArea.addEventListener("mouseleave", () => scheduleClose());
+  chatPinButton?.addEventListener("click", () => setChatPinned(!chatPinned));
   msgInput.addEventListener("focus", () => {
     openChat();
     if (!inputLocked) msgInput.placeholder = defaultInputPlaceholder();
@@ -791,6 +888,7 @@ export function initChat({
 
   document.addEventListener("pointerdown", event => {
     if (chatArea.contains(event.target)) return;
+    if (chatPinned) return;
     if (hasPendingJarvisMessage && !isTyping()) {
       pendingMessageDismissed = true;
       closeChat();
@@ -804,6 +902,8 @@ export function initChat({
       chatHistory.classList.remove("open");
     }
   });
+
+  setChatPinned(readPinnedPreference(), { persist: false });
 
   function deleteLastUserMsg() {
     const msgs = chatMessages.querySelectorAll('.msg-user')
@@ -820,6 +920,7 @@ export function initChat({
   // 该气泡始终是最后一个 .msg-jarvis，所以打断 ✋（updateLastJarvisMsg）照常作用其上。
   function beginLiveJarvisMsg({ alert = true } = {}) {
     if (liveEl) finalizeLiveJarvisMsg(null);  // 兜底：上一轮孤儿气泡先定稿
+    const shouldScrollToBottom = isNearChatBottom();
     const div = document.createElement("div");
     div.className = "msg msg-jarvis msg-live";
     const labelSpan = document.createElement("span");
@@ -828,28 +929,27 @@ export function initChat({
     div.appendChild(labelSpan);
     div.appendChild(createMarkdownBody(""));
     chatMessages.appendChild(div);
-    while (chatMessages.children.length > maxHistory) {
-      chatMessages.removeChild(chatMessages.firstChild);
-    }
     liveEl = div;
     hasPendingJarvisMessage = true;
     pendingMessageDismissed = false;
     if (alert) playJarvisAlert();
     openChat();
-    chatMessages.scrollTop = chatMessages.scrollHeight;
+    scrollChatToBottomIfFollowing(shouldScrollToBottom);
   }
 
   function updateLiveJarvisMsg(text) {
     if (!liveEl) return;
+    const shouldScrollToBottom = isNearChatBottom();
     const children = Array.from(liveEl.children);
     for (let i = 1; i < children.length; i++) children[i].remove();
     liveEl.appendChild(createMarkdownBody(text));
-    chatMessages.scrollTop = chatMessages.scrollHeight;
+    scrollChatToBottomIfFollowing(shouldScrollToBottom);
   }
 
   // text 为字符串则替换为权威全文；为 null 仅去掉 live 标记（保留已流出的内容）
   function finalizeLiveJarvisMsg(text, options = {}) {
     if (!liveEl) return false;
+    const shouldScrollToBottom = isNearChatBottom();
     if (typeof text === "string") {
       const labelText = getAgentName();
       if (!claimRenderedMessage({ messageId: options.messageId, role: "jarvis", text, label: labelText, source: options.source || "event" })) {
@@ -865,7 +965,7 @@ export function initChat({
     }
     liveEl.classList.remove("msg-live");
     liveEl = null;
-    chatMessages.scrollTop = chatMessages.scrollHeight;
+    scrollChatToBottomIfFollowing(shouldScrollToBottom);
     return true;
   }
 
@@ -874,12 +974,13 @@ export function initChat({
   function updateLastJarvisMsg(newText) {
     const msgs = chatMessages.querySelectorAll('.msg-jarvis');
     if (!msgs.length) return;
+    const shouldScrollToBottom = isNearChatBottom();
     const last = msgs[msgs.length - 1];
     // Remove the original markdown body (all child nodes after the label span)
     const children = Array.from(last.children);
     for (let i = 1; i < children.length; i++) children[i].remove();
     last.appendChild(createMarkdownBody(newText));
-    chatMessages.scrollTop = chatMessages.scrollHeight;
+    scrollChatToBottomIfFollowing(shouldScrollToBottom);
   }
 
   return {

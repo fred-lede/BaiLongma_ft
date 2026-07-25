@@ -193,6 +193,18 @@ const createConsole = () => `
     <span class="compact-voice-transcript" id="compact-voice-transcript">按住空格键开始说话</span>
   </div>
   <div id="chat-history">
+    <button
+      class="chat-pin-button"
+      id="chat-pin-button"
+      type="button"
+      aria-label="钉住聊天窗口"
+      aria-pressed="false"
+      title="钉住聊天窗口"
+    >
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 17v5M5 17h14M6 3h12l-2 7v3l2 2H6l2-2v-3z"></path>
+      </svg>
+    </button>
     <div id="chat-messages"></div>
   </div>
   <div id="paste-attachments" class="paste-attachments" hidden></div>
@@ -237,6 +249,7 @@ const createSettingsModal = () => `
         <button class="settings-nav-item" data-tab="social" type="button">社交媒体</button>
         <button class="settings-nav-item" data-tab="voice" type="button">语音对话</button>
         <button class="settings-nav-item" data-tab="web-search" type="button">上网搜索</button>
+        <button class="settings-nav-item" data-tab="mcp" type="button">MCP 工具</button>
         <button class="settings-nav-item" data-tab="security" type="button">安全沙箱</button>
         <button class="settings-nav-item" data-tab="advanced" type="button">高级功能</button>
         <button class="settings-nav-item" data-tab="update" type="button">更新</button>
@@ -766,6 +779,44 @@ const createSettingsModal = () => `
           <div class="settings-section settings-section-action">
             <button class="settings-save-btn" id="settings-save-web-search" type="button">保存</button>
             <span class="settings-feedback" id="settings-web-search-feedback"></span>
+          </div>
+        </div>
+
+        <!-- ── MCP Client tab ── -->
+        <div class="settings-tab" data-tab="mcp">
+          <div class="settings-section">
+            <div class="settings-section-label">本地 MCP Server（stdio）</div>
+            <p class="settings-hint">保存后白龙马会启动已启用的 MCP Server、读取工具目录，并通过 find_tool 按需加载工具。command 会直接启动本地程序，请只配置你信任的 Server。环境变量会加密保存在本机；已保存的值显示为 [configured]。</p>
+            <textarea
+              class="settings-input"
+              id="mcp-servers-json"
+              rows="16"
+              spellcheck="false"
+              style="width:100%;min-height:280px;resize:vertical;font-family:'JetBrains Mono',ui-monospace,monospace;line-height:1.55;"
+              placeholder='[
+  {
+    "id": "example",
+    "name": "Example MCP",
+    "enabled": true,
+    "transport": "stdio",
+    "command": "node",
+    "args": ["/absolute/path/server.js"],
+    "env": {},
+    "allowedTools": [],
+    "allowAutonomousReadOnly": false,
+    "timeoutMs": 60000
+  }
+]'></textarea>
+          </div>
+
+          <div class="settings-section">
+            <div class="settings-section-label">连接状态</div>
+            <pre id="mcp-status" style="margin:0;white-space:pre-wrap;word-break:break-word;color:var(--ink2);font:12px/1.65 'JetBrains Mono',ui-monospace,monospace;">尚未加载</pre>
+          </div>
+
+          <div class="settings-section settings-section-action">
+            <button class="settings-save-btn" id="settings-save-mcp" type="button">保存并连接</button>
+            <span class="settings-feedback" id="settings-mcp-feedback"></span>
           </div>
         </div>
 

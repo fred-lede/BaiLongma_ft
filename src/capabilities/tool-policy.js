@@ -1,4 +1,5 @@
 import { config } from '../config.js'
+import { getMcpToolMetadata, isMcpTool } from '../mcp/client-manager.js'
 
 const TOOL_RISK = {
   read_file: 'low',
@@ -97,6 +98,9 @@ const AUTONOMOUS_USER_AUTH_REQUIRED = new Set([
   'browser_act',
 ])
 export function classifyTool(name) {
+  const mcpTool = getMcpToolMetadata(name)
+  if (mcpTool?.annotations?.destructiveHint === true) return 'high'
+  if (mcpTool?.annotations?.readOnlyHint === true) return 'low'
   return TOOL_RISK[name] || 'medium'
 }
 
@@ -122,6 +126,19 @@ export function evaluateToolPolicy(name, args = {}, context = {}) {
   const canonicalName = ['fetch_url', 'browser_read'].includes(name) ? 'web_read' : name
   if (blockedTools.includes(canonicalName)) {
     return { allowed: false, risk, reason: `工具 "${name}" 已被安全策略禁用` }
+  }
+  if (context.autonomous && isMcpTool(name) && !context.allowHighRiskAutonomy) {
+    const mcpTool = getMcpToolMetadata(name)
+    const explicitlyAllowed = mcpTool?.allowAutonomousReadOnly === true
+      && mcpTool?.annotations?.readOnlyHint === true
+      && mcpTool?.annotations?.destructiveHint !== true
+    if (!explicitlyAllowed) {
+      return {
+        allowed: false,
+        risk,
+        reason: 'MCP tools are disabled for autonomous Tick/scheduled work unless this server explicitly allows annotated read-only tools',
+      }
+    }
   }
   if (['exec_command', 'exec_quick_command', 'exec_task_command', 'exec_background_command'].includes(name)) {
     const reasons = isDangerousShellCommand(args.command || args.cmd || '')

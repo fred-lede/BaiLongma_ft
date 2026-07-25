@@ -15,6 +15,7 @@ import { initFeishuPopup, showFeishuPopup } from "./feishu-popup.js";
 import { attachJarvisAudioGraph, attachJarvisFx, isFxEnabledForVoice, setFxEnabledForVoice, getJarvisFxParams, setJarvisFxParams, resetJarvisFxParams, isFxUnlocked, tryUnlockFx, resumeJarvisAudioContext } from "./tts-fx.js";
 import { initAudioOutputRouting, applyOutputSink, listOutputDevices, getOutputPreference, setOutputPreference } from "./audio-output.js";
 import { createVoiceReplyCoordinator } from "./voice-reply-coordinator.js";
+import { createPlaybackProgressWatchdog, isCurrentStreamingTtsSession, nextStreamingTtsSession } from "./tts-lifecycle.js";
 const hasWindowsTitleBarOverlay = window.bailongma?.isElectron && window.bailongma?.platform === "win32";
 document.documentElement.classList.toggle("windows-titlebar-overlay", Boolean(hasWindowsTitleBarOverlay));
 if (hasWindowsTitleBarOverlay) {
@@ -29,7 +30,7 @@ const THEME_KEY = "jarvis-brain-ui-theme";
 const PHYSICS_STORAGE_KEY = "jarvis-brain-ui-physics";
 const ACTIVATION_WARMUP_KEY = "bailongma_activation_warmup_until";
 const UI_ZOOM_STORAGE_KEY = "bailongma_ui_zoom_factor";
-const MAX_CHAT_HISTORY = 60;
+const CHAT_HISTORY_PAGE_SIZE = 60;
 const DEFAULT_AGENT_NAME = "小白龙";
 const DEFAULT_UI_ZOOM = 1.1;
 const MIN_UI_ZOOM = 0.8;
@@ -2316,6 +2317,7 @@ let appleSharedAudioEl = null;
 let appleAudioPrimed = false;
 let pendingTTSPlayback = null;
 const startedTTSPlaybackKeys = new Set();
+let ttsPlaybackEpoch = 0;     // 整段播放轮次；替换/打断后旧异步结果不得回写当前状态
 
 // ── 边出文字边逐句流式合成（streaming sentence TTS）─────────────────────────────
 // 正文 token 边到边按句末标点切句入队，一个顺序播放队列逐句 /tts/stream 播放——第一句在
@@ -2333,6 +2335,7 @@ let sttsCurSeg = '';          // 当前正在播放的句子文本
 let sttsStreamDone = false;   // 正文已全部到达（message 定稿），队列放完即收尾
 let sttsMicSuspended = false; // 已对麦克风做过一次 suspendForTTS
 let sttsTurnData = null;      // 当前逐句会话所属的后端 turn / target
+let sttsEpoch = 0;            // 每次替换/结束递增；隔离旧播放 Promise 的迟到结果
 
 const STTS_SENTENCE_RE = /[^。！？!?\n]*[。！？!?\n]+/g;
 function sttsHasReadable(s) { return /[\p{L}\p{N}]/u.test(s); }
@@ -2345,6 +2348,7 @@ let liveTurnSpeak = false;
 // 流式语音合成：边下边播，首包到达即出声（后端 /tts/stream 本就分块返回，
 // 这里用 MediaSource 消费，省去"等整段下载完再播"的延迟）。默认开启，可在设置关闭。
 const TTS_STREAMING_KEY = 'bailongma.tts.streaming';
+const TTS_RESPONSE_TIMEOUT_MS = 20_000;
 function isTTSStreamingEnabled() {
   try { return localStorage.getItem(TTS_STREAMING_KEY) !== '0'; } catch { return true; } // 默认开启
 }
@@ -2436,7 +2440,9 @@ function applyTTSInterruption(spokenUpTo) {
 // Called by voice-panel interruption detection: stop current TTS and record cut point
 window.stopTTS = () => {
   if (ttsStreamingMode && sttsActive) { stopStreamingTTS(); return; }
-  if (!ttsAudioEl) return;
+  // 即使音频元素尚未创建，请求也可能正在等待 TTS 响应；先废止该轮，防止稍后突然开播。
+  ttsPlaybackEpoch += 1;
+  if (!ttsAudioEl) { ttsCurrentText = ""; return; }
   const { remaining, spokenUpTo } = calcRemainingText(
     ttsCurrentText,
     ttsAudioEl.currentTime,
@@ -2445,12 +2451,7 @@ window.stopTTS = () => {
   // When duration is not yet loaded (NaN): spokenUpTo=0, remaining='', falls back to full text
   ttsInterruptedRemaining = remaining || ttsCurrentText;
   applyTTSInterruption(spokenUpTo);
-  ttsAudioCancel?.("interrupted");
-  clearTTSAudioGraph();
-  ttsAudioEl.pause();
-  try { URL.revokeObjectURL(ttsAudioEl.src); } catch {}
-  if (ttsStreamReader) { try { ttsStreamReader.cancel(); } catch {} ttsStreamReader = null; }
-  ttsAudioEl = null;
+  releaseCurrentTTSAudio("interrupted");
 };
 
 // Called by voice-panel on impact noise: duck TTS volume without stopping
@@ -2501,6 +2502,22 @@ function clearTTSAudioGraph(graph) {
   window.bailongmaVoice?.setTTSAnalyser?.(null);
 }
 
+// 先抓住元素引用再触发 cancel：cancel 会同步把全局 ttsAudioEl 置空。
+// 若之后再通过全局变量 pause，旧音频会继续在后台播放，且打断路径还可能抛空引用异常。
+function releaseCurrentTTSAudio(kind = "cancelled") {
+  const audioEl = ttsAudioEl;
+  const audioSrc = audioEl?.src || "";
+  try { audioEl?.pause(); } catch {}
+  ttsAudioCancel?.(kind);
+  clearTTSAudioGraph();
+  if (audioEl) {
+    try { audioEl.removeAttribute("src"); audioEl.load(); } catch {}
+    if (audioSrc.startsWith("blob:")) { try { URL.revokeObjectURL(audioSrc); } catch {} }
+  }
+  if (ttsStreamReader) { try { ttsStreamReader.cancel(); } catch {} ttsStreamReader = null; }
+  if (ttsAudioEl === audioEl) ttsAudioEl = null;
+}
+
 const SILENT_WAV_DATA_URL = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=";
 
 function createTTSAudio(url) {
@@ -2544,24 +2561,44 @@ for (const eventName of ["pointerdown", "touchstart", "keydown"]) {
 // 接管一个 <audio> 元素并明确返回播放结果；Safari 的 play() 拒绝、解码错误不再静默吞掉。
 async function startTTSAudio(audioEl, revokeUrl, opts = {}) {
   const { manageMic = true, onStart = null } = opts;
+  const superseded = () => {
+    try { audioEl.pause(); audioEl.removeAttribute("src"); audioEl.load(); } catch {}
+    if (revokeUrl) { try { URL.revokeObjectURL(revokeUrl); } catch {} }
+    if (ttsAudioEl === audioEl) ttsAudioEl = null;
+    return { ok: false, kind: "superseded", started: false, error: new Error("superseded") };
+  };
+  if (opts.isCurrent?.() === false) return superseded();
   ttsAudioEl = audioEl;
   audioEl.volume = 1.0; // ensure full volume (avoid residual duck state from previous play)
   const audioContextState = await resumeJarvisAudioContext();
+  if (opts.isCurrent?.() === false) return superseded();
   const audioGraph = isAppleMobileBrowser() ? null : attachJarvisAudioGraph(audioEl, activeTTSVoiceId);
   activateTTSAudioGraph(audioGraph);
-  // Suspend cloud ASR but keep the mic hardware open for interruption detection
-  if (manageMic) window.bailongmaVoice?.suspendForTTS?.();
   const sink = await applyOutputSink(audioEl).catch(error => ({ sinkApplyError: String(error?.message || error) }));
+  if (opts.isCurrent?.() === false) {
+    clearTTSAudioGraph(audioGraph);
+    return superseded();
+  }
+  // 所有异步准备均完成且轮次仍有效后才挂起 ASR，避免被替换的旧播放留下悬挂状态。
+  if (manageMic) window.bailongmaVoice?.suspendForTTS?.();
 
   return new Promise(resolve => {
     let settled = false;
     let started = false;
     let startTimer = null;
+    let playbackWatchdog = null;
     const finish = (ok, kind, error = null) => {
       if (settled) return;
       settled = true;
       if (startTimer) clearTimeout(startTimer);
+      playbackWatchdog?.stop();
       if (ttsAudioCancel === cancel) ttsAudioCancel = null;
+      audioEl.onplaying = null;
+      audioEl.onended = null;
+      audioEl.onerror = null;
+      // 无论成功、失败还是替换都主动释放解码器/输出设备；仅 revoke blob URL
+      // 并不保证 Chromium 会立即停止已经缓冲的 MediaSource 音频。
+      try { audioEl.pause(); audioEl.removeAttribute("src"); audioEl.load(); } catch {}
       clearTTSAudioGraph(audioGraph);
       if (revokeUrl) { try { URL.revokeObjectURL(revokeUrl); } catch {} }
       if (ttsAudioEl === audioEl) {
@@ -2583,12 +2620,20 @@ async function startTTSAudio(audioEl, revokeUrl, opts = {}) {
     };
     const cancel = (kind = "cancelled") => finish(false, kind, new Error(kind));
     ttsAudioCancel = cancel;
+    playbackWatchdog = createPlaybackProgressWatchdog({
+      audioEl,
+      onTerminal: ({ ok, kind, error }) => {
+        if (!ok) { try { audioEl.pause(); } catch {} }
+        finish(ok, kind, error);
+      },
+    });
     startTimer = setTimeout(() => {
       if (!started) finish(false, "playback-start-timeout", new Error("audio did not start within 10 seconds"));
     }, 10_000);
     audioEl.onplaying = () => {
       started = true;
       if (startTimer) { clearTimeout(startTimer); startTimer = null; }
+      playbackWatchdog.start();
       onStart?.();
     };
     audioEl.onended = () => finish(true, "ended");
@@ -2608,15 +2653,23 @@ async function startTTSAudio(audioEl, revokeUrl, opts = {}) {
 
 // 流式播放：把 /tts/stream 的分块响应喂进 MediaSource，首包到达即出声。
 async function playTTSViaMediaSource(resp, opts = {}) {
+  if (opts.isCurrent?.() === false) {
+    try { await resp.body?.cancel(); } catch {}
+    return { ok: false, kind: "superseded", started: false, error: new Error("superseded") };
+  }
   const mediaSource = new MediaSource();
   const url = URL.createObjectURL(mediaSource);
   const audioEl = createTTSAudio(url);
   const isCurrentAudio = () => ttsAudioEl === audioEl;
+  const failCurrentAudio = (kind, error = null) => {
+    if (isCurrentAudio()) ttsAudioCancel?.(kind);
+    voiceDiag(kind, { error: error?.message || (error ? String(error) : "") });
+    try { audioEl.removeAttribute("src"); audioEl.load(); } catch {}
+  };
   let sourceOpened = false;
   const sourceOpenTimer = setTimeout(() => {
     if (!sourceOpened && isCurrentAudio()) {
-      voiceDiag("mse-sourceopen-timeout");
-      try { audioEl.src = ""; audioEl.load(); } catch {}
+      failCurrentAudio("mse-sourceopen-timeout");
     }
   }, 4000);
   mediaSource.addEventListener('sourceopen', () => {
@@ -2626,8 +2679,7 @@ async function playTTSViaMediaSource(resp, opts = {}) {
     let sb;
     try { sb = mediaSource.addSourceBuffer('audio/mpeg'); }
     catch (error) {
-      voiceDiag("mse-source-buffer-failed", { error: error?.message || String(error) });
-      try { audioEl.src = ""; audioEl.load(); } catch {}
+      failCurrentAudio("mse-source-buffer-failed", error);
       return;
     }
     const reader = resp.body.getReader();
@@ -2642,14 +2694,14 @@ async function playTTSViaMediaSource(resp, opts = {}) {
       if (queue.length) {
         try { sb.appendBuffer(queue.shift()); }
         catch (error) {
-          voiceDiag("mse-append-failed", { error: error?.message || String(error) });
-          try { audioEl.src = ""; audioEl.load(); } catch {}
+          failCurrentAudio("mse-append-failed", error);
         }
         return;
       }
       if (finished && mediaSource.readyState === 'open') { try { mediaSource.endOfStream(); } catch {} }
     };
     sb.addEventListener('updateend', flush);
+    sb.addEventListener('error', () => failCurrentAudio("mse-source-buffer-error"), { once: true });
     (async () => {
       try {
         for (;;) {
@@ -2662,7 +2714,7 @@ async function playTTSViaMediaSource(resp, opts = {}) {
           if (done) {
             if (ttsStreamReader === reader) ttsStreamReader = null;
             if (!receivedBytes) {
-              try { audioEl.src = ""; audioEl.load(); } catch {}
+              failCurrentAudio("mse-empty-stream");
               break;
             }
             finished = true; flush(); break;
@@ -2687,11 +2739,21 @@ async function playTTSViaMediaSource(resp, opts = {}) {
 
 async function requestTTS(text) {
   voiceDiag("tts-request", { text_length: text.length });
-  const resp = await fetch(`${API}/tts/stream`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text }),
-  });
+  const controller = new AbortController();
+  const responseTimer = setTimeout(() => {
+    controller.abort(new Error(`TTS response headers timed out after ${TTS_RESPONSE_TIMEOUT_MS}ms`));
+  }, TTS_RESPONSE_TIMEOUT_MS);
+  let resp;
+  try {
+    resp = await fetch(`${API}/tts/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(responseTimer);
+  }
   if (!resp.ok) {
     let errMsg = `HTTP ${resp.status}`;
     try { const j = await resp.json(); errMsg = j.error || errMsg; } catch {}
@@ -2705,18 +2767,38 @@ async function requestTTS(text) {
 }
 
 async function playTTSAsBlob(text, opts = {}) {
+  if (opts.isCurrent?.() === false) {
+    return { ok: false, kind: "superseded", started: false, error: new Error("superseded") };
+  }
   const resp = await requestTTS(text);
+  if (opts.isCurrent?.() === false) {
+    try { await resp.body?.cancel(); } catch {}
+    return { ok: false, kind: "superseded", started: false, error: new Error("superseded") };
+  }
   const blob = await resp.blob();
   if (!blob.size) throw new Error("TTS returned an empty audio Blob");
+  if (opts.isCurrent?.() === false) {
+    return { ok: false, kind: "superseded", started: false, error: new Error("superseded") };
+  }
   const url = URL.createObjectURL(blob);
   return startTTSAudio(createTTSAudio(url), url, opts);
 }
 
 async function synthesizeAndPlay(text, opts = {}) {
+  if (opts.isCurrent?.() === false) {
+    return { ok: false, kind: "superseded", started: false, error: new Error("superseded") };
+  }
   if (ttsCanStream()) {
     try {
       const resp = await requestTTS(text);
+      if (opts.isCurrent?.() === false) {
+        try { await resp.body?.cancel(); } catch {}
+        return { ok: false, kind: "superseded", started: false, error: new Error("superseded") };
+      }
       const streamed = await playTTSViaMediaSource(resp, opts);
+      if (opts.isCurrent?.() === false) {
+        return { ok: false, kind: "superseded", started: streamed.started, error: new Error("superseded") };
+      }
       if (streamed.ok || streamed.started) return { ...streamed, mode: "media-source" };
       voiceDiag("tts-stream-fallback", {
         reason: streamed.kind,
@@ -2724,6 +2806,9 @@ async function synthesizeAndPlay(text, opts = {}) {
         error: streamed.error?.message || "",
       });
     } catch (error) {
+      if (opts.isCurrent?.() === false) {
+        return { ok: false, kind: "superseded", started: false, error: new Error("superseded") };
+      }
       voiceDiag("tts-stream-fallback", {
         reason: "stream-exception",
         error_name: error?.name || "",
@@ -2743,27 +2828,30 @@ async function playTTSReply(text, { playbackKey = "", reason = "whole-reply" } =
     return false;
   }
   if (playbackKey) startedTTSPlaybackKeys.add(playbackKey);
+  const playbackEpoch = ++ttsPlaybackEpoch;
   ttsStreamingMode = false; // 单段整段播放：stopTTS 走原有进度估算分支
-  ttsCurrentText = normalized;
-  ttsInterruptedRemaining = '';
-  ttsInterruptionApplied = false;
-  ttsInterruptedOriginalContent = '';
-  // 取消上一段仍在进行的流式读取，避免旧网络流继续占用
-  if (ttsStreamReader) { try { ttsStreamReader.cancel(); } catch {} ttsStreamReader = null; }
   try {
-    if (ttsAudioEl) {
-      ttsAudioCancel?.("replaced");
-      clearTTSAudioGraph();
-      ttsAudioEl.pause();
-      try { URL.revokeObjectURL(ttsAudioEl.src); } catch {}
+    // 取消上一段仍在进行的音频和网络流，避免旧播放继续占用输出设备。
+    if (ttsAudioEl || ttsStreamReader || ttsAudioGraph) {
+      releaseCurrentTTSAudio("replaced");
     }
+    // 必须在旧播放 cancel 完之后再写新状态；旧 finish 会清空 ttsCurrentText。
+    ttsCurrentText = normalized;
+    ttsInterruptedRemaining = '';
+    ttsInterruptionApplied = false;
+    ttsInterruptedOriginalContent = '';
     const result = await synthesizeAndPlay(normalized, {
       manageMic: true,
+      isCurrent: () => playbackEpoch === ttsPlaybackEpoch,
       onStart: () => voiceDiag("audio-playing", {
         playback_key: playbackKey,
         mode: "whole-reply",
       }),
     });
+    if (playbackEpoch !== ttsPlaybackEpoch) {
+      if (playbackKey) startedTTSPlaybackKeys.delete(playbackKey);
+      return false;
+    }
     voiceDiag(result.ok ? "tts-complete" : "tts-playback-failed", {
       playback_key: playbackKey,
       playback_mode: result.mode,
@@ -2785,6 +2873,10 @@ async function playTTSReply(text, { playbackKey = "", reason = "whole-reply" } =
     pendingTTSPlayback = null;
     return true;
   } catch (error) {
+    if (playbackEpoch !== ttsPlaybackEpoch) {
+      if (playbackKey) startedTTSPlaybackKeys.delete(playbackKey);
+      return false;
+    }
     if (playbackKey) startedTTSPlaybackKeys.delete(playbackKey);
     clearTTSAudioGraph();
     ttsCurrentText = '';
@@ -2873,7 +2965,8 @@ function streamingSpokenPrefix() {
   return sttsSpoken + (sttsCurSegStarted ? sttsCurSeg : "");
 }
 
-function failStreamingTTS(reason, error = null) {
+function failStreamingTTS(reason, error = null, expectedEpoch = sttsEpoch) {
+  if (!isCurrentStreamingTtsSession(expectedEpoch, sttsEpoch)) return;
   if (!sttsTurnData) return;
   const failedTurn = sttsTurnData;
   const spokenPrefix = streamingSpokenPrefix();
@@ -2895,18 +2988,18 @@ function failStreamingTTS(reason, error = null) {
 
 // ── 逐句流式 TTS 队列 ──────────────────────────────────────────────────────────
 function beginStreamingTTS(turnData = {}) {
+  // 替换上一轮时，旧队列可能已经挂起了麦克风。所有权必须交给新轮，不能清零；
+  // 否则新轮若只有 emoji/标点、没有可播放分段，就无人负责恢复麦克风和 speaking 状态。
+  const nextSession = nextStreamingTtsSession(sttsEpoch, sttsMicSuspended);
+  sttsEpoch = nextSession.epoch;
+  ttsPlaybackEpoch += 1; // 同时废止仍在等待响应/Blob fallback 的旧整段播放
   // 停掉上一段仍在进行的单段播放 / 流读取
-  if (ttsStreamReader) { try { ttsStreamReader.cancel(); } catch {} ttsStreamReader = null; }
-  if (ttsAudioEl) {
-    ttsAudioCancel?.("replaced");
-    clearTTSAudioGraph();
-    try { ttsAudioEl.pause(); URL.revokeObjectURL(ttsAudioEl.src); } catch {}
-    ttsAudioEl = null;
-  }
+  releaseCurrentTTSAudio("replaced");
   ttsStreamingMode = true;
   sttsActive = true;
   sttsConsumed = 0; sttsBuf = ''; sttsQueue = []; sttsPlaying = false;
-  sttsSpoken = ''; sttsCurSeg = ''; sttsStreamDone = false; sttsMicSuspended = false;
+  sttsSpoken = ''; sttsCurSeg = ''; sttsStreamDone = false;
+  sttsMicSuspended = nextSession.micSuspended;
   sttsCurSegStarted = false;
   sttsTurnData = { ...turnData };
   ttsCurrentText = '';
@@ -2914,6 +3007,8 @@ function beginStreamingTTS(turnData = {}) {
     turn_id: turnData.turn_id || "",
     target_client_id: turnData.target_client_id || "",
     transport: ttsCanStream() ? "media-source" : "blob",
+    epoch: sttsEpoch,
+    inherited_mic_suspension: sttsMicSuspended,
   });
 }
 
@@ -2945,8 +3040,8 @@ function extractSttsSentences({ flushPartial = false, markDone = false } = {}) {
   pumpSttsQueue();
 }
 
-async function pumpSttsQueue() {
-  if (!sttsActive || sttsPlaying) return;
+async function pumpSttsQueue(expectedEpoch = sttsEpoch) {
+  if (!sttsActive || sttsPlaying || !isCurrentStreamingTtsSession(expectedEpoch, sttsEpoch)) return;
   const seg = sttsQueue.shift();
   if (!seg) {
     if (sttsStreamDone) endStreamingTTS(); // 正文已尽且队列放完 → 收尾
@@ -2960,7 +3055,9 @@ async function pumpSttsQueue() {
   try {
     const result = await synthesizeAndPlay(seg, {
       manageMic: false,
+      isCurrent: () => sttsActive && isCurrentStreamingTtsSession(expectedEpoch, sttsEpoch),
       onStart: () => {
+        if (!isCurrentStreamingTtsSession(expectedEpoch, sttsEpoch)) return;
         sttsCurSegStarted = true;
         voiceReplyCoordinator.audioStarted(sttsTurnData || {});
         voiceDiag("sentence-audio-playing", {
@@ -2969,19 +3066,19 @@ async function pumpSttsQueue() {
         });
       },
     });
-    if (!sttsActive) return; // 期间被打断/收尾
+    if (!sttsActive || !isCurrentStreamingTtsSession(expectedEpoch, sttsEpoch)) return; // 期间被替换/打断/收尾
     if (!result.ok) {
-      failStreamingTTS(result.kind || "audio-playback-failed", result.error);
+      failStreamingTTS(result.kind || "audio-playback-failed", result.error, expectedEpoch);
       return;
     }
     sttsSpoken += seg;
     sttsCurSeg = '';
     sttsCurSegStarted = false;
     sttsPlaying = false;
-    pumpSttsQueue();
+    pumpSttsQueue(expectedEpoch);
   } catch (error) {
-    if (!sttsActive) return;
-    failStreamingTTS("tts-request-failed", error);
+    if (!sttsActive || !isCurrentStreamingTtsSession(expectedEpoch, sttsEpoch)) return;
+    failStreamingTTS("tts-request-failed", error, expectedEpoch);
   }
 }
 
@@ -2996,6 +3093,7 @@ function finalizeStreamingTTS() {
 }
 
 function endStreamingTTS() {
+  sttsEpoch += 1; // 让仍在 await 的旧 pump 结果失效
   sttsActive = false;
   ttsStreamingMode = false;
   clearTTSAudioGraph();
@@ -3021,13 +3119,8 @@ function stopStreamingTTS() {
   ttsCurrentText = fullPlain;                       // 让 ✋/续播的文本计算有一致的全文基准
   ttsInterruptedRemaining = remainingPlain || fullPlain;
   applyTTSInterruption(spokenPlain.length);
-  if (ttsAudioEl) {
-    ttsAudioCancel?.("interrupted");
-    clearTTSAudioGraph();
-    try { ttsAudioEl.pause(); URL.revokeObjectURL(ttsAudioEl.src); } catch {}
-  }
-  if (ttsStreamReader) { try { ttsStreamReader.cancel(); } catch {} ttsStreamReader = null; }
-  ttsAudioEl = null;
+  releaseCurrentTTSAudio("interrupted");
+  sttsEpoch += 1; // 让仍在 await 的旧 pump 结果失效
   sttsActive = false; ttsStreamingMode = false;
   sttsQueue = []; sttsBuf = ''; sttsCurSeg = ''; sttsSpoken = ''; sttsPlaying = false;
   sttsCurSegStarted = false; sttsTurnData = null;
@@ -3131,7 +3224,7 @@ updatePhysicsReadout();
 refreshThemeColors();
 chat = initChat({
   apiBase: API,
-  maxHistory: MAX_CHAT_HISTORY,
+  historyPageSize: CHAT_HISTORY_PAGE_SIZE,
   activationWarmupKey: ACTIVATION_WARMUP_KEY,
   getAgentName: () => agentName,
   defaultInputPlaceholder,
@@ -3572,6 +3665,7 @@ function initTTSSettings() {
       if (tab === "social") loadSocialSettings();
       if (tab === "security") loadSecuritySettings();
       if (tab === "web-search") loadWebSearchSettings();
+      if (tab === "mcp") loadMcpSettings();
       if (tab === "advanced") {
         loadHeartbeatSettings();
         loadMapSettings();
@@ -3862,6 +3956,72 @@ function initTTSSettings() {
         showFeedback(webSearchFeedback, "请求失败", true);
       } finally {
         saveWebSearchBtn.disabled = false;
+      }
+    });
+  }
+
+  const mcpServersJson = document.getElementById("mcp-servers-json");
+  const mcpStatus = document.getElementById("mcp-status");
+  const saveMcpBtn = document.getElementById("settings-save-mcp");
+  const mcpFeedback = document.getElementById("settings-mcp-feedback");
+
+  function renderMcpStatus(status = {}) {
+    if (!mcpStatus) return;
+    const servers = Array.isArray(status.servers) ? status.servers : [];
+    if (servers.length === 0) {
+      mcpStatus.textContent = "没有配置 MCP Server";
+      return;
+    }
+    mcpStatus.textContent = servers.map(server => {
+      const marker = server.status === "connected" ? "●" : server.status === "disabled" ? "○" : "×";
+      const tools = `${server.loadedToolCount || 0}/${server.toolCount || 0} tools`;
+      const error = server.error ? `\n  ${server.error}` : "";
+      return `${marker} ${server.name || server.id} · ${server.status} · ${tools}${error}`;
+    }).join("\n");
+  }
+
+  async function loadMcpSettings() {
+    try {
+      const data = await fetch(`${API}/settings/mcp`).then(r => r.json());
+      if (!data.ok) throw new Error(data.error || "读取失败");
+      if (mcpServersJson) {
+        const servers = (data.mcp?.servers || []).map(({ envKeys, ...server }) => server);
+        mcpServersJson.value = JSON.stringify(servers, null, 2);
+      }
+      renderMcpStatus(data.status);
+    } catch (error) {
+      if (mcpStatus) mcpStatus.textContent = error?.message || "读取 MCP 设置失败";
+    }
+  }
+
+  if (saveMcpBtn) {
+    saveMcpBtn.addEventListener("click", async () => {
+      let servers;
+      try {
+        servers = JSON.parse(mcpServersJson?.value || "[]");
+        if (!Array.isArray(servers)) throw new Error("顶层必须是 Server 数组");
+      } catch (error) {
+        showFeedback(mcpFeedback, `JSON 格式错误：${error.message}`, true);
+        return;
+      }
+      saveMcpBtn.disabled = true;
+      showFeedback(mcpFeedback, "正在保存并连接…");
+      try {
+        const res = await fetch(`${API}/settings/mcp`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ servers }),
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || "保存失败");
+        const publicServers = (data.mcp?.servers || []).map(({ envKeys, ...server }) => server);
+        if (mcpServersJson) mcpServersJson.value = JSON.stringify(publicServers, null, 2);
+        renderMcpStatus(data.status);
+        showFeedback(mcpFeedback, `已保存，加载 ${data.status?.toolCount || 0} 个 MCP 工具`);
+      } catch (error) {
+        showFeedback(mcpFeedback, error?.message || "请求失败", true);
+      } finally {
+        saveMcpBtn.disabled = false;
       }
     });
   }
@@ -4681,6 +4841,7 @@ function initTTSSettings() {
       });
       if (tab === "social") loadSocialSettings();
       if (tab === "web-search") loadWebSearchSettings();
+      if (tab === "mcp") loadMcpSettings();
       if (tab === "advanced") {
         loadHeartbeatSettings();
         loadMapSettings();

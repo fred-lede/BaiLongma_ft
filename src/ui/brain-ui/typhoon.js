@@ -15,10 +15,10 @@ let collapseTimer = null
 function reportState(visible, source = 'brain-ui') {
   fetch(apiUrl('/typhoon-state'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ active: !!visible, source }) }).catch(() => {})
 }
-function consoleEngaged() { const area = $('chat-area'); return !!area && (area.matches(':hover') || area.contains(document.activeElement)) }
+function consoleEngaged() { const area = $('chat-area'); return !!area && (area.classList.contains('chat-pinned') || area.matches(':hover') || area.contains(document.activeElement)) }
 function expandConsole() { if (collapseTimer) { clearTimeout(collapseTimer); collapseTimer = null }; $('chat-area')?.classList.remove('ty-collapsed') }
 function scheduleConsoleCollapse(delay = COLLAPSE_DELAY_MS) {
-  if (!active) return
+  if (!active || $('chat-area')?.classList.contains('chat-pinned')) return
   if (collapseTimer) clearTimeout(collapseTimer)
   collapseTimer = setTimeout(() => { collapseTimer = null; if (active && !consoleEngaged()) $('chat-area')?.classList.add('ty-collapsed') }, delay)
 }
@@ -71,6 +71,11 @@ export function initTyphoon() {
     if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return
     expandConsole()
     scheduleConsoleCollapse(MESSAGE_PEEK_MS)
+  })
+  window.addEventListener('bailongma:chat-pin', (event) => {
+    if (!active) return
+    if (event?.detail?.pinned) expandConsole()
+    else scheduleConsoleCollapse()
   })
   window.addEventListener('bailongma:hotspot-mode', (event) => { if (event?.detail?.active && active) setTyphoonMode(false, { source: 'hotspot_open' }) })
   window.addEventListener('bailongma:worldcup-mode', (event) => { if (event?.detail?.active && active) setTyphoonMode(false, { source: 'worldcup_open' }) })

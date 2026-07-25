@@ -34,6 +34,7 @@ import { getCustomIntervalMs, consumeTick as consumeTickerTick, getStatus as get
 import { seedSandboxOnce, seedMusicOnce, rescueDataFromInstallDir } from './paths.js'
 import { loadInstalledTools } from './capabilities/marketplace/index.js'
 import { startMcpClients } from './mcp/client-manager.js'
+import { inferBrowserDisplayMode } from './mcp/browser-display.js'
 import { resumePendingVideoJobs, getAIVideoPanelState } from './capabilities/tools/media.js'
 import { dispatchSocialMessage } from './social/dispatch.js'
 import { startSocialConnectors } from './social/index.js'
@@ -1272,6 +1273,11 @@ async function runTurn(input, label, msg = null) {
 
     // 3. Call Jarvis LLM (can be interrupted by a new message)
     const toolContext = buildToolContextForProcess(msg, injection, sessionRef)
+    const browserDisplayMode = inferBrowserDisplayMode(semanticInput || '', {
+      autonomous: isTick || isScheduledTask,
+    })
+    toolContext.browserDisplayMode = browserDisplayMode
+    toolContext.playwrightRole = browserDisplayMode === 'card' ? 'reader' : 'interactive'
     // A reply being delivered is not evidence that a requested side effect
     // happened.  Keep a narrow action contract for clear imperative requests;
     // callLLM uses it to require a successful matching tool result before it
@@ -1397,7 +1403,16 @@ async function runTurn(input, label, msg = null) {
         // 截断策略：保证 JSON 仍可解析，否则前端格式化器会回退展示原始 JSON 文本。
         // 优先压缩 stdout/stderr/content/snippet 等长字段，再整体 stringify，而非粗暴 slice。
         const resultForEvent = truncateToolResultForUI(parsed, resultText)
-        emitEvent('tool_call', { name, args: cleanArgs, result: resultForEvent, ok })
+        if (parsed?.browser_preview) {
+          emitEvent('browser_preview', parsed.browser_preview)
+        }
+        emitEvent('tool_call', {
+          name,
+          args: cleanArgs,
+          result: resultForEvent,
+          ok,
+          ...(String(name || '').startsWith('browser_') ? { browser_display_mode: browserDisplayMode } : {}),
+        })
         const recognizerResultLimit = ok ? 500 : 1200
         toolCallLog.push({ name, args: cleanArgs, result: resultText.slice(0, recognizerResultLimit), ok, fallback: isFallbackDelivery, ack: isAckDelivery })
         // send_message playback is driven by executor.js via message.speak.
@@ -1408,7 +1423,10 @@ async function runTurn(input, label, msg = null) {
         emitEvent('llm_retry', { attempt, nextAttempt, maxAttempts, delayMs, error })
       },
       onToolExecute: (name) => {
-        emitEvent('tool_executing', { name })
+        emitEvent('tool_executing', {
+          name,
+          ...(String(name || '').startsWith('browser_') ? { browser_display_mode: browserDisplayMode } : {}),
+        })
       },
       onStream: ({ event, mode, text, name }) => {
         if (event === 'start') {
@@ -1453,7 +1471,12 @@ async function runTurn(input, label, msg = null) {
             target_client_id: msg?.clientId || '',
           })
         }
-        else if (event === 'tool_preparing') emitEvent('tool_preparing', { name })
+        else if (event === 'tool_preparing') {
+          emitEvent('tool_preparing', {
+            name,
+            ...(String(name || '').startsWith('browser_') ? { browser_display_mode: browserDisplayMode } : {}),
+          })
+        }
       },
     })
     throwIfAborted(controller.signal)

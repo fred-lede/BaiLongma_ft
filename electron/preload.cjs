@@ -25,6 +25,11 @@ contextBridge.exposeInMainWorld('bailongma', {
     return () => ipcRenderer.removeListener('window:fullscreen-changed', listener)
   },
   setTitleBarTheme: (theme) => ipcRenderer.invoke('window:set-title-bar-theme', theme),
+  browserEmbed: {
+    update: (options) => ipcRenderer.invoke('browser-embed:update', options),
+    hide: () => ipcRenderer.invoke('browser-embed:hide'),
+    getState: () => ipcRenderer.invoke('browser-embed:get-state'),
+  },
   onUpdaterStatus: (handler) => {
     if (typeof handler !== 'function') return () => {}
     const listener = (_event, payload) => handler(payload)

@@ -1194,9 +1194,30 @@ const heartbeatStateLabelEl = document.getElementById("heartbeat-state-label");
 const heartbeatCountEl = document.getElementById("heartbeat-count");
 const heartbeatLastEl = document.getElementById("heartbeat-last");
 const actionLogEl = document.getElementById("action-log");
+const actionLogModuleEl = actionLogEl?.closest(".action-log-module");
+const actionLogSurfaceEl = document.getElementById("action-log-surface");
+const browserPreviewEl = document.getElementById("browser-preview");
+const browserPreviewImageEl = document.getElementById("browser-preview-image");
+const browserPreviewNativeSlotEl = document.getElementById("browser-preview-native-slot");
 const cognitionStateEl = document.getElementById("cognition-state");
 const l3StateEl = document.getElementById("l3-state");
 const cognitionEmptyEl = document.getElementById("cognition-empty");
+const BROWSER_PREVIEW_TRANSITION_MS = 480;
+const browserEmbedBridge = window.bailongma?.isElectron
+  && typeof window.bailongma?.browserEmbed?.update === "function"
+  && typeof window.bailongma?.browserEmbed?.hide === "function"
+  ? window.bailongma.browserEmbed
+  : null;
+let browserPreviewObjectUrl = "";
+let browserPreviewLoadToken = 0;
+let browserPreviewActive = false;
+let browserPreviewPending = false;
+let browserPreviewNativeUrl = "";
+let browserEmbedFrameRequest = 0;
+let browserEmbedAnimationUntil = 0;
+let browserPreviewTransitionFrame = 0;
+let browserPreviewTransitionTimer = null;
+let lastBrowserEmbedGeometry = "";
 
 function readHeartbeatStorage(key, fallback) {
   try {
@@ -1283,6 +1304,362 @@ function addActionLogEntry(name, args = {}, result = "", ok = true, ts = Date.no
   actionLog = actionLog.slice(-ACTION_LOG_LIMIT);
   try { localStorage.setItem(ACTION_LOG_KEY, JSON.stringify(actionLog)); } catch {}
   renderActionLog();
+}
+
+function isCardBrowserAction(data = {}) {
+  return String(data.name || "").startsWith("browser_")
+    && data.browser_display_mode === "card";
+}
+
+function browserPreviewTransitionDuration() {
+  return window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches
+    ? 1
+    : BROWSER_PREVIEW_TRANSITION_MS;
+}
+
+function clearBrowserPreviewTransition() {
+  if (browserPreviewTransitionFrame) {
+    cancelAnimationFrame(browserPreviewTransitionFrame);
+    browserPreviewTransitionFrame = 0;
+  }
+  if (browserPreviewTransitionTimer) {
+    clearTimeout(browserPreviewTransitionTimer);
+    browserPreviewTransitionTimer = null;
+  }
+}
+
+function callBrowserEmbed(method, payload) {
+  if (!browserEmbedBridge || typeof browserEmbedBridge[method] !== "function") return;
+  try {
+    Promise.resolve(browserEmbedBridge[method](payload)).catch(error => {
+      console.warn(`[brain-ui] browser embed ${method} failed:`, error?.message || error);
+    });
+  } catch (error) {
+    console.warn(`[brain-ui] browser embed ${method} failed:`, error?.message || error);
+  }
+}
+
+function hideNativeBrowserEmbed() {
+  if (!browserEmbedBridge) return;
+  browserEmbedAnimationUntil = 0;
+  if (browserEmbedFrameRequest) {
+    cancelAnimationFrame(browserEmbedFrameRequest);
+    browserEmbedFrameRequest = 0;
+  }
+  lastBrowserEmbedGeometry = "";
+  callBrowserEmbed("hide");
+}
+
+function browserEmbedPayload() {
+  if (
+    !browserEmbedBridge
+    || !browserPreviewActive
+    || browserPreviewEl?.hidden
+    || document.visibilityState === "hidden"
+    || !browserPreviewNativeSlotEl
+  ) return null;
+  const rect = browserPreviewNativeSlotEl.getBoundingClientRect();
+  if (rect.width < 1 || rect.height < 1) return null;
+  const radius = Math.max(
+    0,
+    Number.parseFloat(getComputedStyle(browserPreviewNativeSlotEl).borderTopLeftRadius) || 0,
+  );
+  // getBoundingClientRect() is expressed in renderer CSS pixels, while Electron
+  // View bounds use device-independent window pixels. Page zoom changes the
+  // relationship between the two, so apply webFrame's zoom factor (but not
+  // devicePixelRatio, which would incorrectly double-scale Retina displays).
+  const rendererZoom = Math.max(
+    0.25,
+    Math.min(5, Number(window.bailongma?.getZoomFactor?.()) || 1),
+  );
+  return {
+    mode: "card",
+    visible: true,
+    bounds: {
+      x: Math.round(rect.left * rendererZoom),
+      y: Math.round(rect.top * rendererZoom),
+      width: Math.max(1, Math.round(rect.width * rendererZoom)),
+      height: Math.max(1, Math.round(rect.height * rendererZoom)),
+    },
+    radius: Math.round(radius * rendererZoom),
+    ...(browserPreviewNativeUrl ? { url: browserPreviewNativeUrl } : {}),
+    interactive: false,
+  };
+}
+
+function syncNativeBrowserEmbed(timestamp = performance.now()) {
+  browserEmbedFrameRequest = 0;
+  const payload = browserEmbedPayload();
+  if (!payload) {
+    if (browserPreviewActive) hideNativeBrowserEmbed();
+    return;
+  }
+  const geometry = JSON.stringify(payload);
+  if (geometry !== lastBrowserEmbedGeometry) {
+    lastBrowserEmbedGeometry = geometry;
+    callBrowserEmbed("update", payload);
+  }
+  if (timestamp < browserEmbedAnimationUntil) scheduleNativeBrowserEmbedSync();
+}
+
+function scheduleNativeBrowserEmbedSync(animationDuration = 0) {
+  const duration = Number.isFinite(animationDuration) ? Math.max(0, animationDuration) : 0;
+  if (duration > 0) {
+    browserEmbedAnimationUntil = Math.max(
+      browserEmbedAnimationUntil,
+      performance.now() + duration + 34,
+    );
+  }
+  if (!browserEmbedBridge || browserEmbedFrameRequest) return;
+  browserEmbedFrameRequest = requestAnimationFrame(syncNativeBrowserEmbed);
+}
+
+function clearBrowserPreviewAsset() {
+  if (browserPreviewImageEl) browserPreviewImageEl.removeAttribute("src");
+  if (browserPreviewObjectUrl) {
+    URL.revokeObjectURL(browserPreviewObjectUrl);
+    browserPreviewObjectUrl = "";
+  }
+}
+
+function finalizeBrowserPreviewHidden({
+  hideEmbed = true,
+  preservePending = false,
+  clearAsset = true,
+} = {}) {
+  clearBrowserPreviewTransition();
+  browserEmbedAnimationUntil = 0;
+  browserPreviewActive = false;
+  browserPreviewNativeUrl = "";
+  if (!preservePending) {
+    browserPreviewPending = false;
+  }
+  if (browserPreviewEl) {
+    browserPreviewEl.hidden = true;
+    browserPreviewEl.dataset.state = "idle";
+    delete browserPreviewEl.dataset.renderer;
+    browserPreviewEl.setAttribute("aria-hidden", "true");
+  }
+  if (actionLogEl) actionLogEl.hidden = false;
+  actionLogSurfaceEl?.setAttribute("aria-hidden", "false");
+  if (actionLogModuleEl) {
+    delete actionLogModuleEl.dataset.browserActive;
+    delete actionLogModuleEl.dataset.browserPhase;
+  }
+  if (hideEmbed) hideNativeBrowserEmbed();
+  if (clearAsset) clearBrowserPreviewAsset();
+}
+
+function revealBrowserPreviewSurface() {
+  if (!browserPreviewEl || !actionLogModuleEl) return;
+  clearBrowserPreviewTransition();
+  const wasRendered = !browserPreviewEl.hidden;
+  if (actionLogEl) actionLogEl.hidden = false;
+  actionLogSurfaceEl?.setAttribute("aria-hidden", "false");
+  browserPreviewEl.hidden = false;
+  browserPreviewEl.setAttribute("aria-hidden", "false");
+  actionLogModuleEl.dataset.browserActive = "true";
+  if (!wasRendered) delete actionLogModuleEl.dataset.browserPhase;
+
+  // Keep the initial, off-screen browser pose for one rendered frame. The
+  // next frame flips both layers together, allowing CSS and the native
+  // WebContentsView geometry loop to follow the same motion curve.
+  void actionLogModuleEl.offsetWidth;
+  browserPreviewTransitionFrame = requestAnimationFrame(() => {
+    browserPreviewTransitionFrame = 0;
+    if (!browserPreviewActive || browserPreviewEl.hidden) return;
+    actionLogModuleEl.dataset.browserPhase = "browser";
+    const duration = browserPreviewTransitionDuration();
+    scheduleNativeBrowserEmbedSync(duration);
+    browserPreviewTransitionTimer = setTimeout(() => {
+      browserPreviewTransitionTimer = null;
+      if (!browserPreviewActive || actionLogModuleEl.dataset.browserPhase !== "browser") return;
+      if (actionLogEl) actionLogEl.hidden = true;
+      actionLogSurfaceEl?.setAttribute("aria-hidden", "true");
+      scheduleNativeBrowserEmbedSync();
+    }, duration + 34);
+  });
+}
+
+function concealBrowserPreviewSurface({
+  hideEmbed = true,
+  preservePending = false,
+  clearAsset = true,
+  immediate = false,
+} = {}) {
+  if (immediate || !browserPreviewActive || !browserPreviewEl || browserPreviewEl.hidden) {
+    finalizeBrowserPreviewHidden({ hideEmbed, preservePending, clearAsset });
+    return;
+  }
+  clearBrowserPreviewTransition();
+  if (actionLogEl) actionLogEl.hidden = false;
+  actionLogSurfaceEl?.setAttribute("aria-hidden", "false");
+  const duration = browserPreviewTransitionDuration();
+  browserPreviewTransitionFrame = requestAnimationFrame(() => {
+    browserPreviewTransitionFrame = 0;
+    if (actionLogModuleEl) delete actionLogModuleEl.dataset.browserPhase;
+    scheduleNativeBrowserEmbedSync(duration);
+    browserPreviewTransitionTimer = setTimeout(() => {
+      browserPreviewTransitionTimer = null;
+      finalizeBrowserPreviewHidden({ hideEmbed, preservePending, clearAsset });
+    }, duration + 34);
+  });
+}
+
+function concealBrowserPreviewForAction({ hideEmbed = true } = {}) {
+  concealBrowserPreviewSurface({
+    hideEmbed,
+    preservePending: true,
+    clearAsset: false,
+  });
+}
+
+function hideBrowserPreview({ immediate = false } = {}) {
+  browserPreviewLoadToken += 1;
+  browserPreviewPending = false;
+  browserPreviewNativeUrl = "";
+  concealBrowserPreviewSurface({ immediate });
+}
+
+function prepareBrowserPreview() {
+  browserPreviewLoadToken += 1;
+  browserPreviewPending = true;
+  // Once the live page is visible, keep it on screen while Playwright clicks,
+  // types, scrolls, or navigates. Only the very first load waits off-screen;
+  // browser_close owns the later decision to dismiss the surface.
+  if (!browserPreviewActive) concealBrowserPreviewForAction();
+}
+
+function showNativeBrowserPreview(data = {}) {
+  browserPreviewLoadToken += 1;
+  browserPreviewPending = false;
+  browserPreviewActive = true;
+  browserPreviewNativeUrl = String(data.url || "");
+  if (browserPreviewEl) {
+    browserPreviewEl.dataset.renderer = "native";
+    browserPreviewEl.dataset.state = "ready";
+  }
+  revealBrowserPreviewSurface();
+}
+
+function showNativeBrowserWindow(data = {}) {
+  if (!browserEmbedBridge) {
+    hideBrowserPreview();
+    return;
+  }
+  browserPreviewLoadToken += 1;
+  browserPreviewPending = false;
+  finalizeBrowserPreviewHidden({ hideEmbed: false });
+  if (browserEmbedFrameRequest) {
+    cancelAnimationFrame(browserEmbedFrameRequest);
+    browserEmbedFrameRequest = 0;
+  }
+  lastBrowserEmbedGeometry = "";
+  callBrowserEmbed("update", {
+    mode: "window",
+    visible: true,
+    ...(data.url ? { url: String(data.url) } : {}),
+    interactive: true,
+  });
+}
+
+async function loadBrowserPreviewImage(data = {}) {
+  const imagePath = String(data.image_url || "");
+  if (!imagePath || !browserPreviewImageEl) return;
+  browserPreviewPending = true;
+  const loadToken = ++browserPreviewLoadToken;
+  let objectUrl = "";
+  let previousObjectUrl = "";
+  try {
+    const imageUrl = new URL(imagePath, `${API}/`);
+    if (data.revision) imageUrl.searchParams.set("revision", String(data.revision));
+    const response = await fetch(imageUrl, { cache: "no-store" });
+    if (!response.ok) throw new Error(`browser preview HTTP ${response.status}`);
+    const blob = await response.blob();
+    if (!blob.type.startsWith("image/")) throw new Error("browser preview is not an image");
+    objectUrl = URL.createObjectURL(blob);
+    const preloadedImage = new Image();
+    preloadedImage.src = objectUrl;
+    await preloadedImage.decode();
+    if (loadToken !== browserPreviewLoadToken || !browserPreviewPending) {
+      URL.revokeObjectURL(objectUrl);
+      return;
+    }
+    previousObjectUrl = browserPreviewObjectUrl;
+    browserPreviewImageEl.src = objectUrl;
+    await browserPreviewImageEl.decode();
+    if (loadToken !== browserPreviewLoadToken || !browserPreviewPending) {
+      URL.revokeObjectURL(objectUrl);
+      return;
+    }
+    browserPreviewObjectUrl = objectUrl;
+    objectUrl = "";
+    if (previousObjectUrl) URL.revokeObjectURL(previousObjectUrl);
+    browserPreviewPending = false;
+    browserPreviewActive = true;
+    if (browserPreviewEl) {
+      browserPreviewEl.dataset.renderer = "fallback";
+      browserPreviewEl.dataset.state = "ready";
+    }
+    revealBrowserPreviewSurface();
+  } catch (error) {
+    if (objectUrl) URL.revokeObjectURL(objectUrl);
+    if (loadToken !== browserPreviewLoadToken) return;
+    if (previousObjectUrl && browserPreviewActive) {
+      browserPreviewImageEl.src = previousObjectUrl;
+    }
+    browserPreviewPending = false;
+    console.warn("[brain-ui] browser preview unavailable:", error?.message || error);
+    if (!browserPreviewActive) hideBrowserPreview();
+  }
+}
+
+function handleBrowserPreviewEvent(data = {}) {
+  if (data.mode === "window" && browserEmbedBridge) {
+    if (data.state === "closed" || data.state === "failed") {
+      hideBrowserPreview();
+    } else if (data.state === "ready") {
+      showNativeBrowserWindow(data);
+    }
+    return;
+  }
+  if (data.mode !== "card") return;
+  if (data.state === "closed") {
+    hideBrowserPreview();
+    return;
+  }
+  if (data.state === "failed") {
+    if (!browserPreviewActive) hideBrowserPreview();
+    return;
+  }
+  if (data.state !== "ready") return;
+  if (browserEmbedBridge) {
+    showNativeBrowserPreview(data);
+    return;
+  }
+  void loadBrowserPreviewImage(data);
+}
+
+if (browserEmbedBridge) {
+  callBrowserEmbed("hide");
+  if (typeof browserEmbedBridge.getState === "function") {
+    callBrowserEmbed("getState");
+  }
+  const browserPreviewResizeObserver = typeof ResizeObserver === "function"
+    ? new ResizeObserver(scheduleNativeBrowserEmbedSync)
+    : null;
+  if (browserPreviewNativeSlotEl) browserPreviewResizeObserver?.observe(browserPreviewNativeSlotEl);
+  if (browserPreviewEl) browserPreviewResizeObserver?.observe(browserPreviewEl);
+  window.addEventListener("resize", scheduleNativeBrowserEmbedSync);
+  window.addEventListener("scroll", scheduleNativeBrowserEmbedSync, true);
+  window.visualViewport?.addEventListener("resize", scheduleNativeBrowserEmbedSync);
+  window.visualViewport?.addEventListener("scroll", scheduleNativeBrowserEmbedSync);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") hideNativeBrowserEmbed();
+    else scheduleNativeBrowserEmbedSync();
+  });
+  window.addEventListener("pagehide", hideNativeBrowserEmbed);
+  window.addEventListener("beforeunload", hideNativeBrowserEmbed);
 }
 
 function beginHeartbeatRound(ts = Date.now()) {
@@ -2042,6 +2419,10 @@ function handle({ type, data = {}, ts = null }) {
       // 思考动画已停，但动作尚未真正执行 —— 给一个占位状态避免 UI 死寂
       const stream = currentStream();
       const action = data.name ? stream.toolAction(data.name) : "";
+      if (isCardBrowserAction(data)) prepareBrowserPreview();
+      else if (String(data.name || "").startsWith("browser_") && data.browser_display_mode === "window") {
+        showNativeBrowserWindow(data);
+      }
       if (currentPath !== "l1") {
         revealCognitionStream();
         setCognitionState(action ? `准备 · ${action}` : "准备下一步", "tool");
@@ -2055,6 +2436,10 @@ function handle({ type, data = {}, ts = null }) {
       triggerHeartbeatPulse(HEARTBEAT_TOOL_STRENGTH, "minor");
       const stream = currentStream();
       const action = data.name ? stream.toolAction(data.name) : "处理事务";
+      if (isCardBrowserAction(data)) prepareBrowserPreview();
+      else if (String(data.name || "").startsWith("browser_") && data.browser_display_mode === "window") {
+        showNativeBrowserWindow(data);
+      }
       if (currentPath !== "l1") setCognitionState(`进行中 · ${action}`, "tool");
       stream.setTimedStatus(`正在${action}…`, "busy", {
         staleAfterMs: 45000,
@@ -2072,6 +2457,9 @@ function handle({ type, data = {}, ts = null }) {
       recordAiActivity(data.name);
       break;
     }
+    case "browser_preview":
+      handleBrowserPreviewEvent(data);
+      break;
     case "response":
       // Round complete — stop all animations
       currentStream().end();
@@ -2092,6 +2480,7 @@ function handle({ type, data = {}, ts = null }) {
     case "processing_preempted":
       currentStream().end();
       setVoiceThinking(false);
+      hideBrowserPreview();
       if (currentPath === "l2") {
         finishHeartbeatRound("interrupted");
         setCognitionState("已中止", "idle");
@@ -2117,6 +2506,7 @@ function handle({ type, data = {}, ts = null }) {
     }
     case "message_dropped":
       setVoiceThinking(false);
+      hideBrowserPreview();
       currentStream().startThinkingSession();
       currentStream().setStatus("LLM 繁忙，重试次数已达上限", "failed");
       if (currentPath === "l2") {
@@ -2131,6 +2521,7 @@ function handle({ type, data = {}, ts = null }) {
         currentStream().setStatus("LLM 繁忙，请稍后重试", "busy");
       } else {
         setVoiceThinking(false);
+        hideBrowserPreview();
         currentStream().stopThinking();
         currentStream().setStatus(data.error || "处理失败", "failed");
         if (currentPath === "l2") {
@@ -2142,6 +2533,7 @@ function handle({ type, data = {}, ts = null }) {
     case "protocol_violation":
       currentStream().end();
       setVoiceThinking(false);
+      hideBrowserPreview();
       if (currentPath === "l2") {
         finishHeartbeatRound("interrupted", "心跳协议校验未通过");
         setCognitionState("未完成", "idle");

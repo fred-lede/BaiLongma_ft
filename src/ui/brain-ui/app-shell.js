@@ -153,14 +153,21 @@ const createSecondaryPanel = () => `
     </section>
 
     <section class="l2-module action-log-module" aria-labelledby="action-log-title">
-      <div class="l2-module-head compact">
-        <div>
-          <div class="l2-module-kicker">ACTION LOG</div>
-          <h2 class="l2-module-title" id="action-log-title">行动日志</h2>
+      <div class="action-log-surface" id="action-log-surface">
+        <div class="l2-module-head compact">
+          <div>
+            <div class="l2-module-kicker">ACTION LOG</div>
+            <h2 class="l2-module-title" id="action-log-title">行动日志</h2>
+          </div>
+        </div>
+        <div class="action-log" id="action-log" aria-live="polite">
+          <div class="action-log-empty" id="action-log-empty">Agent 最近执行的文件、命令和工具动作会显示在这里</div>
         </div>
       </div>
-      <div class="action-log" id="action-log" aria-live="polite">
-        <div class="action-log-empty" id="action-log-empty">Agent 最近执行的文件、命令和工具动作会显示在这里</div>
+      <div class="browser-preview" id="browser-preview" data-state="idle" aria-label="Agent 正在操作浏览器" hidden>
+        <div class="browser-preview-viewport" id="browser-preview-native-slot">
+          <img class="browser-preview-image" id="browser-preview-image" alt="Agent 正在操作的网页缩略画面" draggable="false">
+        </div>
       </div>
     </section>
 

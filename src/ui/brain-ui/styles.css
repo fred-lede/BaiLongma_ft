@@ -781,9 +781,42 @@ body {
 }
 
 .action-log-module {
+  --browser-surface-duration: 480ms;
+  --browser-surface-easing: cubic-bezier(0.22, 1, 0.36, 1);
   height: clamp(180px, 25vh, 220px);
+  display: block;
+  padding: 0;
+  border: 0;
+  border-radius: 20px;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  overflow: visible;
+  isolation: isolate;
+}
+
+.action-log-surface {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  padding: 16px 18px;
+  border: 1px solid color-mix(in srgb, var(--line-strong) 78%, transparent);
+  border-radius: 12px;
+  background: var(--panel);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  box-shadow: var(--shadow-soft), var(--shadow-inset);
+  transform: translate3d(0, 0, 0);
+  opacity: 1;
+  will-change: transform, opacity;
+  transition:
+    transform var(--browser-surface-duration) var(--browser-surface-easing),
+    opacity 300ms ease;
 }
 
 .action-log {
@@ -850,6 +883,88 @@ body {
   font: 500 8.5px/1 "JetBrains Mono", ui-monospace, monospace;
 }
 
+.browser-preview[hidden],
+.action-log[hidden] {
+  display: none;
+}
+
+.action-log-module[data-browser-phase="browser"] .action-log-surface {
+  transform: translate3d(calc(-100% - 24px), 0, 0);
+  opacity: 0;
+}
+
+.browser-preview {
+  --browser-frame-radius: 20px;
+  --browser-frame-bezel: 9px;
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  min-height: 0;
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border: var(--browser-frame-bezel) solid #020305;
+  border-radius: var(--browser-frame-radius);
+  background: #020305;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+    0 0 0 1px rgba(255, 255, 255, 0.055),
+    0 8px 22px rgba(0, 0, 0, 0.28);
+  transform: translate3d(calc(100% + 24px), 0, 0);
+  opacity: 0;
+  will-change: transform, opacity;
+  transition:
+    transform var(--browser-surface-duration) var(--browser-surface-easing),
+    opacity 300ms ease;
+}
+
+.action-log-module[data-browser-phase="browser"] .browser-preview {
+  transform: translate3d(0, 0, 0);
+  opacity: 1;
+}
+
+.browser-preview-viewport {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  contain: paint;
+  border-radius: calc(var(--browser-frame-radius) - var(--browser-frame-bezel));
+  background:
+    radial-gradient(circle at 50% 42%, color-mix(in srgb, var(--warm) 7%, transparent), transparent 55%),
+    #101318;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+}
+
+.browser-preview[data-renderer="native"] .browser-preview-viewport {
+  background: #fff;
+}
+
+.browser-preview-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
+  display: block;
+  object-fit: contain;
+  object-position: center;
+  background: #fff;
+  opacity: 0;
+  transition: opacity 180ms ease, filter 180ms ease;
+}
+
+.browser-preview[data-renderer="fallback"][data-state="ready"] .browser-preview-image {
+  opacity: 1;
+}
+
+.browser-preview[data-renderer="native"] .browser-preview-image {
+  display: none;
+}
+
 .cognition-module {
   flex: 1 1 180px;
   min-height: 150px;
@@ -903,6 +1018,11 @@ body {
   .cognition-state[data-state="thinking"]::before,
   .cognition-state[data-state="tool"]::before {
     animation: none;
+  }
+
+  .action-log-surface,
+  .browser-preview {
+    transition-duration: 1ms;
   }
 }
 

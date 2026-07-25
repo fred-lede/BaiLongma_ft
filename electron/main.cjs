@@ -15,7 +15,7 @@ if (IS_WIN) {
   } catch (_) {}
 }
 
-const { app, BrowserWindow, shell, dialog, Menu, ipcMain, Tray, nativeImage, clipboard, systemPreferences } = require('electron')
+const { app, BaseWindow, BrowserWindow, WebContentsView, View, webContents, shell, dialog, Menu, ipcMain, Tray, nativeImage, clipboard, systemPreferences } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const net = require('net')
@@ -27,6 +27,7 @@ const { autoUpdater } = require('electron-updater')
 const wakeWord = require('./wake-word.cjs')
 const devLight = require('./dev-board-light.cjs')
 const { configurePackagedPlaywright } = require('./playwright-runtime.cjs')
+const { createBrowserEmbedHost } = require('./browser-embed-host.cjs')
 
 // The ESM backend is imported into this Electron main process. Expose the
 // main-process-only permission API without requiring ESM modules to import the
@@ -70,6 +71,8 @@ if (PORTABLE_USER_DIR) {
 }
 
 const USER_DIR = app.getPath('userData')
+app.commandLine.appendSwitch('remote-debugging-address', '127.0.0.1')
+app.commandLine.appendSwitch('remote-debugging-port', '0')
 const CODE_ROOT = app.getAppPath()
 const RESOURCE_ROOT = CODE_ROOT
 const BACKEND_ENTRY = path.join(CODE_ROOT, 'src', 'index.js')
@@ -376,6 +379,12 @@ function applyGpuPreference() {
 applyGpuPreference()
 
 let mainWindow = null
+const browserEmbedHost = createBrowserEmbedHost({
+  WebContentsView,
+  View,
+  BaseWindow,
+  isAppQuitting: () => app.isQuiting === true,
+})
 let backendPort = 0
 let tray = null
 let focusBannerWindow = null
@@ -384,12 +393,76 @@ let terminalStreamWindowStreamId = null
 let wakeProbeWindow = null
 let voiceOrbWindow = null
 
+function readDevToolsActivePort() {
+  const activePortFile = path.join(USER_DIR, 'DevToolsActivePort')
+  try {
+    const [portLine] = fs.readFileSync(activePortFile, 'utf8').split(/\r?\n/)
+    const port = Number(portLine)
+    return Number.isInteger(port) && port > 0 && port <= 65535 ? port : null
+  } catch {
+    return null
+  }
+}
+
+function readLocalJson(port, pathname) {
+  return new Promise((resolve, reject) => {
+    const request = http.get({
+      hostname: '127.0.0.1',
+      port,
+      path: pathname,
+      timeout: 2_000,
+    }, response => {
+      const chunks = []
+      response.on('data', chunk => chunks.push(chunk))
+      response.on('end', () => {
+        try {
+          resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')))
+        } catch (error) {
+          reject(error)
+        }
+      })
+    })
+    request.on('timeout', () => request.destroy(new Error('CDP target lookup timed out')))
+    request.on('error', reject)
+  })
+}
+
+async function resolveBrowserEmbedCdpTarget() {
+  const target = browserEmbedHost.getTarget()
+  if (!target) return null
+  const port = readDevToolsActivePort()
+  if (!port) return { ...target, cdpEndpoint: null, targetId: null }
+
+  const cdpEndpoint = `http://127.0.0.1:${port}`
+  try {
+    const targets = await readLocalJson(port, '/json/list')
+    const match = Array.isArray(targets)
+      ? targets.find(candidate => {
+          if (!candidate?.id) return false
+          try { return webContents.fromDevToolsTargetId(candidate.id)?.id === target.webContentsId }
+          catch { return false }
+        })
+      : null
+    return {
+      ...target,
+      cdpEndpoint,
+      targetId: match?.id || null,
+    }
+  } catch (error) {
+    console.warn('[browser-embed] unable to resolve CDP target:', error?.message || error)
+    return { ...target, cdpEndpoint, targetId: null }
+  }
+}
+
 // 后端通过 global.focusBannerBridge 控制横幅窗口
 const focusBannerBridge = new EventEmitter()
 global.focusBannerBridge = focusBannerBridge
 const terminalStreamBridge = new EventEmitter()
 global.terminalStreamBridge = terminalStreamBridge
 global.getBailongmaWindowLayoutSnapshot = getBailongmaWindowLayoutSnapshot
+globalThis.bailongmaBrowserEmbedBridge = Object.freeze({
+  getTarget: () => resolveBrowserEmbedCdpTarget(),
+})
 global.bailongmaAppControl = {
   restart() {
     console.log('[main] restart requested')
@@ -646,9 +719,13 @@ async function createWindow({ loadStartup = true, show = true, assignAsMain = tr
   })
 
   window.on('closed', () => {
-    if (window === mainWindow) mainWindow = null
+    if (window === mainWindow) {
+      browserEmbedHost.releaseWindow(window)
+      mainWindow = null
+    }
   })
 
+  if (assignAsMain) await browserEmbedHost.prime(window)
   return window
 }
 
@@ -671,6 +748,7 @@ async function replaceStartupWithMainApp() {
     )
 
     const shouldShow = !hasStartupWindow || startupWindow.isVisible()
+    if (hasStartupWindow) browserEmbedHost.transferMainWindow(startupWindow, readyWindow)
     mainWindow = readyWindow
     if (wasFullScreen) readyWindow.setFullScreen(true)
     else if (wasMaximized) readyWindow.maximize()
@@ -1395,6 +1473,28 @@ ipcMain.handle('window:set-title-bar-theme', (event, theme) => {
   return true
 })
 
+function requireMainWindowSender(event) {
+  if (
+    !mainWindow
+    || mainWindow.isDestroyed()
+    || event.sender !== mainWindow.webContents
+    || event.sender.isDestroyed()
+  ) {
+    throw new Error('browser embed requests are only accepted from the main window')
+  }
+  return mainWindow
+}
+
+ipcMain.handle('browser-embed:update', (event, options) => {
+  return browserEmbedHost.update(requireMainWindowSender(event), options)
+})
+ipcMain.handle('browser-embed:hide', event => {
+  return browserEmbedHost.hide(requireMainWindowSender(event))
+})
+ipcMain.handle('browser-embed:get-state', event => {
+  return browserEmbedHost.getState(requireMainWindowSender(event))
+})
+
 ipcMain.handle('system-screenshot:get-latest', async (_event, options = {}) => {
   const maxAgeMs = Number(options?.maxAgeMs || 15 * 60 * 1000)
   const preferClipboard = options?.preferClipboard !== false
@@ -1502,12 +1602,16 @@ let browserShutdownBeforeQuit = null
 let browserShutdownComplete = false
 app.on('before-quit', (event) => {
   app.isQuiting = true
-  if (browserShutdownComplete) return
+  if (browserShutdownComplete) {
+    browserEmbedHost.destroyAll()
+    return
+  }
   const shutdowns = [
     globalThis.shutdownBailongmaMcpClients,
   ].filter(shutdown => typeof shutdown === 'function')
   if (shutdowns.length === 0) {
     browserShutdownComplete = true
+    browserEmbedHost.destroyAll()
     return
   }
   event.preventDefault()

@@ -6,7 +6,7 @@ const { default: installPageGuard } = require('./playwright-page-guard.cjs')
 const previousPrivateNetwork = process.env.BAILONGMA_BROWSER_PRIVATE_NETWORK
 
 function fakePage() {
-  const context = {
+  const page = {
     httpHandler: null,
     webSocketHandler: null,
     routeCalls: 0,
@@ -21,8 +21,7 @@ function fakePage() {
     },
   }
   return {
-    context,
-    page: { context: () => context },
+    page,
   }
 }
 
@@ -51,35 +50,35 @@ try {
   const guarded = fakePage()
   await installPageGuard({ page: guarded.page })
   await installPageGuard({ page: guarded.page })
-  assert.equal(guarded.context.routeCalls, 1, 'HTTP guard installs once per browser context')
-  assert.equal(guarded.context.webSocketRouteCalls, 1, 'WebSocket guard installs once per browser context')
+  assert.equal(guarded.page.routeCalls, 1, 'HTTP guard installs once per managed page')
+  assert.equal(guarded.page.webSocketRouteCalls, 1, 'WebSocket guard installs once per managed page')
 
   const privateRoute = fakeRoute('http://169.254.169.254/latest/meta-data/')
-  await guarded.context.httpHandler(privateRoute)
+  await guarded.page.httpHandler(privateRoute)
   assert.equal(privateRoute.aborted, true, 'private HTTP subrequest/redirect is aborted')
   assert.equal(privateRoute.continued, false)
 
   const publicRoute = fakeRoute('https://93.184.216.34/resource.js')
-  await guarded.context.httpHandler(publicRoute)
+  await guarded.page.httpHandler(publicRoute)
   assert.equal(publicRoute.continued, true, 'public HTTP subrequest is continued')
   assert.equal(publicRoute.aborted, false)
 
   const privateSocket = fakeWebSocket('ws://127.0.0.1:3721/events')
-  await guarded.context.webSocketHandler(privateSocket)
+  await guarded.page.webSocketHandler(privateSocket)
   assert.equal(privateSocket.closed, true, 'private WebSocket is closed')
   assert.equal(privateSocket.connected, false)
 
   const publicSocket = fakeWebSocket('wss://93.184.216.34/events')
-  await guarded.context.webSocketHandler(publicSocket)
+  await guarded.page.webSocketHandler(publicSocket)
   assert.equal(publicSocket.connected, true, 'public WebSocket is connected')
   assert.equal(publicSocket.closed, false)
 
   process.env.BAILONGMA_BROWSER_PRIVATE_NETWORK = '1'
   const unrestricted = fakePage()
   await installPageGuard({ page: unrestricted.page })
-  assert.equal(unrestricted.context.routeCalls, 0,
+  assert.equal(unrestricted.page.routeCalls, 0,
     'explicit private-network permission bypasses the request guard')
-  assert.equal(unrestricted.context.webSocketRouteCalls, 0)
+  assert.equal(unrestricted.page.webSocketRouteCalls, 0)
 } finally {
   if (previousPrivateNetwork === undefined) delete process.env.BAILONGMA_BROWSER_PRIVATE_NETWORK
   else process.env.BAILONGMA_BROWSER_PRIVATE_NETWORK = previousPrivateNetwork

@@ -68,6 +68,11 @@ assert.match(context, /browser_snapshot/)
 assert.match(context, /browser_click/)
 assert.match(context, /automatically return a fresh accessibility snapshot/)
 assert.match(context, /instead of routinely calling browser_snapshot/)
+assert.match(context, /CAPTCHA\/challenge page/)
+assert.match(context, /Try at most one different search provider/)
+assert.match(context, /share the same persistent browser profile/)
+assert.match(context, /do not replace it with model memory for current\/latest\/recent facts/)
+assert.match(context, /Count and name only sources that actually loaded/)
 for (const name of LEGACY_WEB_TOOLS) {
   assert.match(context, new RegExp(`${name}[^\\n]*unavailable`, 'i'),
     `browser workflow explicitly marks ${name} unavailable`)

@@ -174,6 +174,11 @@ assert.match(browserContext, /instead of routinely calling browser_snapshot/)
 assert.match(browserContext, /browser_find/)
 assert.match(browserContext, /relative filename/)
 assert.match(browserContext, /browser_snapshot rather than a screenshot/)
+assert.match(browserContext, /no automatic timeout[\s\S]*stays visible after the response and across later turns/)
+assert.match(browserContext, /asks to open, show, browse, watch, or keep a page[\s\S]*do not call browser_close/)
+assert.match(browserContext, /one-shot lookup or extraction[\s\S]*call browser_close[\s\S]*only when the page is no longer useful/)
+assert.match(browserContext, /intent is ambiguous, prefer leaving the page visible/)
+assert.match(browserContext, /browser_close only hides the browser surface[\s\S]*in-page history[\s\S]*sign-in state/)
 for (const name of ['browser_run_code_unsafe', 'browser_evaluate', 'browser_file_upload', 'browser_drop']) {
   assert.match(browserContext, new RegExp(name), `${name} is explicitly unavailable in the workflow`)
 }

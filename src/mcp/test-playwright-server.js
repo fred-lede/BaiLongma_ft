@@ -58,6 +58,25 @@ const advertisedTools = [
     inputSchema: { type: 'object', properties: {} },
     annotations: { readOnlyHint: true, destructiveHint: false },
   },
+  {
+    name: 'browser_close',
+    description: 'Close browser',
+    inputSchema: { type: 'object', properties: {} },
+    annotations: { readOnlyHint: false, destructiveHint: false },
+  },
+  {
+    name: 'browser_tabs',
+    description: 'Manage tabs',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['list', 'new', 'close', 'select'] },
+        index: { type: 'number' },
+      },
+      required: ['action'],
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false },
+  },
   ...[
     'browser_run_code_unsafe',
     'browser_evaluate',
@@ -100,8 +119,20 @@ class FakeClient {
 
   async callTool(request) {
     FakeClient.calls.push({ request, args: this.transport.params.args })
+    if (request.name === 'browser_take_screenshot' && request.arguments?.filename) {
+      fs.mkdirSync(this.transport.params.cwd, { recursive: true })
+      fs.writeFileSync(
+        path.join(this.transport.params.cwd, request.arguments.filename),
+        Buffer.from('fake-png'),
+      )
+    }
     return {
-      content: [{ type: 'text', text: `called:${request.name}` }],
+      content: [{
+        type: 'text',
+        text: request.name === 'browser_navigate'
+          ? 'called:browser_navigate\n- Page URL: https://example.com/search?q=bailongma\n- Page Title: Bailongma Search'
+          : `called:${request.name}`,
+      }],
       structuredContent: { called: request.name },
     }
   }
@@ -140,6 +171,10 @@ try {
   assert(interactive.env.BAILONGMA_BROWSER_PRIVATE_NETWORK === '0',
     'child request guard defaults to private-network blocked')
   assert(interactive.args.includes('--user-data-dir'), 'interactive server uses a persistent profile')
+  assert(interactive.args.includes('--config')
+    && interactive.args[interactive.args.indexOf('--config') + 1]
+      .endsWith('src/mcp/playwright-shared-profile.json'),
+  'built-in server restores the previous Chromium session when display modes switch')
   assert(interactive.args.includes('--init-page')
     && interactive.args[interactive.args.indexOf('--init-page') + 1].endsWith('src/mcp/playwright-page-guard.cjs'),
     'built-in server installs Bailongma request-level URL guard')
@@ -158,6 +193,25 @@ try {
     'interactive server remains headed and persistent')
   assert(interactive.cwd === path.join(tmp, 'sandbox', 'browser-output', 'interactive'),
     'Playwright filesystem scope is rooted in its dedicated Bailongma sandbox output directory')
+  assert(listMcpTools().some(tool => tool.name === 'browser_navigate' && tool.builtIn === true)
+    && getMcpToolSchema('browser_navigate')?.function?.parameters?.required?.includes('url'),
+  'trusted official schemas remain discoverable before the first MCP connection')
+
+  const coldStartNavigation = parseJson(await executeMcpTool(
+    'browser_navigate',
+    { url: 'https://example.com/cold-start' },
+    {
+      mcpDeps: deps,
+      webUrlPolicyOptions: {
+        hostnameResolver: async () => [{ address: '93.184.216.34' }],
+      },
+    },
+  ))
+  assert(coldStartNavigation?.ok === true
+    && coldStartNavigation?.remote_tool === 'browser_navigate',
+  'a discovered built-in browser tool lazily connects instead of returning unknown tool',
+  JSON.stringify(coldStartNavigation))
+  await shutdownMcpClients()
 
   const automaticSnapshotPath = path.join(interactive.cwd, 'page-auto-test.yml')
   fs.writeFileSync(automaticSnapshotPath, '- textbox "Search" [ref=e1]\n- button "Submit" [ref=e2]\n')
@@ -199,10 +253,16 @@ try {
     ...deps.builtInOptions,
   })
   assert(reader.id === BUILTIN_PLAYWRIGHT_READER_ID, 'reader server has a reserved stable id')
-  assert(reader.args.includes('--headless') && reader.args.includes('--isolated'),
-    'reader server is headless and isolated')
-  assert(!reader.args.includes('--user-data-dir') && reader.catalogVisible === false,
-    'reader has no persistent profile and is hidden from the model catalog')
+  const interactiveProfileDir = interactive.args[interactive.args.indexOf('--user-data-dir') + 1]
+  const readerProfileDir = reader.args[reader.args.indexOf('--user-data-dir') + 1]
+  assert(reader.args.includes('--headless') && !reader.args.includes('--isolated'),
+    'reader server is headless without an ephemeral isolated context')
+  assert(reader.args.includes('--user-data-dir')
+    && readerProfileDir.endsWith(path.join('browser-profiles', 'playwright-mcp-interactive'))
+    && readerProfileDir === interactiveProfileDir
+    && reader.persistent === true
+    && reader.catalogVisible === false,
+  'card and window modes share one persistent browser profile while the reader stays hidden')
 
   const privateNetworkServer = createBuiltInPlaywrightServer({
     role: 'interactive',
@@ -291,6 +351,7 @@ try {
 
   const connectedInteractiveClient = [...FakeClient.instances].reverse().find(client => (
     client.transport?.params?.args?.includes('--user-data-dir')
+    && !client.transport?.params?.args?.includes('--headless')
   ))
   connectedInteractiveClient.onclose?.()
   assert(listMcpTools().some(tool => tool.name === 'browser_navigate'),
@@ -312,6 +373,7 @@ try {
   ))
   const latestInteractiveClient = [...FakeClient.instances].reverse().find(client => (
     client.transport?.params?.args?.includes('--user-data-dir')
+    && !client.transport?.params?.args?.includes('--headless')
   ))
   assert(privateResult?.ok === true
     && !latestInteractiveClient?.transport?.params?.args?.includes('--blocked-origins'),
@@ -319,23 +381,193 @@ try {
     JSON.stringify(privateResult))
   config.security.browserPrivateNetwork = false
 
+  const beforeReaderHandoff = FakeClient.calls.length
   const readerResult = parseJson(await executeBuiltInPlaywrightTool(
     'browser_snapshot',
     {},
     { mode: 'reader', mcpDeps: deps },
   ))
   assert(readerResult?.ok === true && readerResult?.server_id === BUILTIN_PLAYWRIGHT_READER_ID,
-    'internal API lazily starts and calls the isolated reader', JSON.stringify(readerResult))
+    'internal API lazily starts and calls the persistent card reader', JSON.stringify(readerResult))
   assert(!listMcpTools().some(tool => tool.serverId === BUILTIN_PLAYWRIGHT_READER_ID),
     'reader tools stay hidden after the reader connects')
+  const readerHandoffCalls = FakeClient.calls.slice(beforeReaderHandoff)
+  assert(readerHandoffCalls[0]?.request?.name === 'browser_close'
+    && !readerHandoffCalls[0]?.args?.includes('--headless')
+    && readerHandoffCalls[1]?.request?.name === 'browser_snapshot'
+    && readerHandoffCalls[1]?.args?.includes('--headless'),
+  'switching to card mode gracefully closes the headed context before opening the shared profile',
+  JSON.stringify(readerHandoffCalls))
 
-  const status = getMcpStatus()
-  assert(status.builtInPlaywright?.interactive?.status === 'connected'
-    && status.builtInPlaywright?.interactive?.headed === true,
-    'status identifies the connected interactive built-in server', JSON.stringify(status))
-  assert(status.builtInPlaywright?.reader?.status === 'connected'
-    && status.builtInPlaywright?.reader?.lazy === true,
-    'status identifies the lazily connected reader server', JSON.stringify(status))
+  const cardResult = parseJson(await executeMcpTool(
+    'browser_navigate',
+    { url: 'https://example.com/search?q=bailongma' },
+    {
+      browserDisplayMode: 'card',
+      mcpDeps: deps,
+      webUrlPolicyOptions: {
+        hostnameResolver: async () => [{ address: '93.184.216.34' }],
+      },
+    },
+  ))
+  assert(cardResult?.ok === true
+    && cardResult?.server_id === BUILTIN_PLAYWRIGHT_READER_ID
+    && cardResult?.browser_preview?.state === 'ready'
+    && cardResult?.browser_preview?.image_url?.startsWith('/browser-preview?file='),
+  'card display routes the native browser action through the headless reader and returns a real preview',
+  JSON.stringify(cardResult))
+  assert(cardResult?.browser_preview?.url === 'https://example.com/search?q=bailongma'
+    && cardResult?.browser_preview?.title === 'Bailongma Search',
+  'card preview carries current page metadata for the compact browser chrome',
+  JSON.stringify(cardResult?.browser_preview))
+  const cardCalls = FakeClient.calls.slice(-2)
+  assert(cardCalls[0]?.request?.name === 'browser_navigate'
+    && cardCalls[1]?.request?.name === 'browser_take_screenshot'
+    && cardCalls.every(call => call.args.includes('--headless')),
+  'card display captures its preview inside the same headless reader session',
+  JSON.stringify(cardCalls))
+
+  const cardStatus = getMcpStatus()
+  assert(cardStatus.builtInPlaywright?.interactive?.status === 'disconnected'
+    && cardStatus.builtInPlaywright?.interactive?.headed === true,
+    'card mode releases the headed process before taking shared-profile ownership',
+    JSON.stringify(cardStatus))
+  assert(cardStatus.builtInPlaywright?.reader?.status === 'connected'
+    && cardStatus.builtInPlaywright?.reader?.lazy === true,
+    'status identifies the lazily connected reader server', JSON.stringify(cardStatus))
+
+  const beforeWindowHandoff = FakeClient.calls.length
+  const windowResult = parseJson(await executeMcpTool(
+    'browser_snapshot',
+    {},
+    { browserDisplayMode: 'window', mcpDeps: deps },
+  ))
+  const windowHandoffCalls = FakeClient.calls.slice(beforeWindowHandoff)
+  const windowStatus = getMcpStatus()
+  const latestReaderClient = [...FakeClient.instances].reverse().find(client => (
+    client.transport?.params?.args?.includes('--headless')
+  ))
+  const resumedInteractiveClient = [...FakeClient.instances].reverse().find(client => (
+    client.transport?.params?.args?.includes('--user-data-dir')
+    && !client.transport?.params?.args?.includes('--headless')
+  ))
+  assert(windowResult?.ok === true
+    && windowStatus.builtInPlaywright?.interactive?.status === 'connected'
+    && windowStatus.builtInPlaywright?.reader?.status === 'disconnected',
+  'switching back to the large window hands the shared profile to the headed process',
+  JSON.stringify(windowStatus))
+  assert(windowHandoffCalls[0]?.request?.name === 'browser_close'
+    && windowHandoffCalls[0]?.args?.includes('--headless')
+    && windowHandoffCalls[1]?.request?.name === 'browser_snapshot'
+    && !windowHandoffCalls[1]?.args?.includes('--headless'),
+  'switching to window mode gracefully closes the card context before opening the shared profile',
+  JSON.stringify(windowHandoffCalls))
+  assert(
+    latestReaderClient?.transport?.params?.args?.[
+      latestReaderClient.transport.params.args.indexOf('--user-data-dir') + 1
+    ] === resumedInteractiveClient?.transport?.params?.args?.[
+      resumedInteractiveClient.transport.params.args.indexOf('--user-data-dir') + 1
+    ],
+    'both runtime modes launch against the exact same persistent user-data-dir',
+  )
+
+  const embeddedTarget = {
+    cdpEndpoint: 'http://127.0.0.1:49200',
+    targetId: 'embedded-target',
+    webContentsId: 42,
+    url: 'https://example.com/',
+  }
+  const embeddedBridge = { async getTarget() { return embeddedTarget } }
+  let embeddedConnectCount = 0
+  let embeddedCloseCount = 0
+  let embeddedConfig
+  const connectEmbeddedPlaywrightFn = async ({ target, mcpConfig }) => {
+    embeddedConnectCount += 1
+    embeddedConfig = mcpConfig
+    const client = new FakeClient()
+    client.transport = { params: { args: ['embedded-webcontentsview'] } }
+    return {
+      client,
+      page: {
+        url: () => 'https://example.com/live-embedded-page',
+        title: async () => 'Live embedded page',
+      },
+      transport: null,
+      target,
+      async close() {
+        embeddedCloseCount += 1
+        await client.close()
+      },
+    }
+  }
+  const embeddedDeps = {
+    ...deps,
+    embeddedBrowserBridge: embeddedBridge,
+    connectEmbeddedPlaywrightFn,
+    resolveEmbeddedBrowserTargetFn: async () => embeddedTarget,
+  }
+  const beforeEmbeddedCalls = FakeClient.calls.length
+  const embeddedCard = parseJson(await executeMcpTool(
+    'browser_navigate',
+    { url: 'https://example.com/native' },
+    {
+      browserDisplayMode: 'card',
+      mcpDeps: embeddedDeps,
+      webUrlPolicyOptions: {
+        hostnameResolver: async () => [{ address: '93.184.216.34' }],
+      },
+    },
+  ))
+  const embeddedCalls = FakeClient.calls.slice(beforeEmbeddedCalls)
+  assert(embeddedCard?.ok === true
+    && embeddedCard?.server_id === BUILTIN_PLAYWRIGHT_INTERACTIVE_ID
+    && embeddedCard?.browser_preview?.mode === 'card'
+    && embeddedCard?.browser_preview?.state === 'ready'
+    && embeddedCard?.browser_preview?.native_view === true
+    && embeddedCard?.browser_preview?.renderer === 'webcontentsview'
+    && embeddedCard?.browser_preview?.web_contents_id === 42
+    && !embeddedCard?.browser_preview?.image_url,
+  'card mode uses the native WebContentsView connection and returns ready metadata without a screenshot',
+  JSON.stringify(embeddedCard))
+  assert(embeddedCalls.at(-1)?.request?.name === 'browser_navigate'
+    && !embeddedCalls.some(call => call.request?.name === 'browser_take_screenshot'),
+  'native browser preview does not take an extra screenshot',
+  JSON.stringify(embeddedCalls))
+  assert(embeddedConfig?.browser?.initPage?.[0]?.endsWith('src/mcp/playwright-page-guard.cjs')
+    && embeddedConfig?.network?.blockedOrigins?.includes('http://127.0.0.1:*'),
+  'embedded MCP retains the page request guard and private-network origin guardrail',
+  JSON.stringify(embeddedConfig))
+
+  const embeddedWindow = parseJson(await executeMcpTool(
+    'browser_snapshot',
+    {},
+    { browserDisplayMode: 'window', mcpDeps: embeddedDeps },
+  ))
+  assert(embeddedWindow?.ok === true
+    && embeddedWindow?.browser_preview?.mode === 'window'
+    && embeddedWindow?.browser_preview?.url === 'https://example.com/live-embedded-page'
+    && embeddedWindow?.browser_preview?.title === 'Live embedded page'
+    && embeddedConnectCount === 1,
+  'card and window modes reuse one embedded connection and read live page metadata',
+  JSON.stringify({ embeddedWindow, embeddedConnectCount }))
+
+  const beforeForbiddenTabCall = FakeClient.calls.length
+  const forbiddenTabClose = parseJson(await executeMcpTool(
+    'browser_tabs',
+    { action: 'close', index: 0 },
+    { browserDisplayMode: 'card', mcpDeps: embeddedDeps },
+  ))
+  assert(forbiddenTabClose?.ok === false
+    && /creating or closing tabs is disabled/.test(forbiddenTabClose?.error || '')
+    && FakeClient.calls.length === beforeForbiddenTabCall,
+  'embedded MCP cannot close the sole Electron-owned page',
+  JSON.stringify(forbiddenTabClose))
+
+  const beforeEmbeddedShutdown = FakeClient.calls.length
+  await shutdownBuiltInPlaywright({ role: 'interactive' })
+  assert(embeddedCloseCount === 1
+    && !FakeClient.calls.slice(beforeEmbeddedShutdown).some(call => call.request?.name === 'browser_close'),
+  'embedded reconcile/shutdown closes only MCP transports, never the Electron page or context')
 
   await shutdownBuiltInPlaywright({ role: 'reader' })
   assert(getMcpStatus().builtInPlaywright?.reader?.status === 'idle',

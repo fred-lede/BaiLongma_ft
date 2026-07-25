@@ -14,6 +14,7 @@ import { createCloudASRSession } from './voice/cloud-asr.js'
 import { jsonResponse } from './api/utils.js'
 import { handleActivationRoutes } from './api/routes/activation.js'
 import { handleAdminRoutes } from './api/routes/admin.js'
+import { handleBrowserPreviewRoutes } from './api/routes/browser-preview.js'
 import { handleEmbeddingRoutes } from './api/routes/embedding.js'
 import { handleEventRoutes } from './api/routes/events.js'
 import { handleMediaRoutes } from './api/routes/media.js'
@@ -151,6 +152,7 @@ function setCorsHeaders(req, res, origin) {
 async function dispatchHttpRoutes(req, res, url, context) {
   if (await handleMessageRoutes(req, res, url)) return true
   if (await handleEventRoutes(req, res, url)) return true
+  if (await handleBrowserPreviewRoutes(req, res, url, context)) return true
   if (await handleMemoryRoutes(req, res, url)) return true
   if (await handlePanelRoutes(req, res, url, context)) return true
   if (await handleMediaRoutes(req, res, url)) return true

@@ -49,9 +49,54 @@ export const BUILTIN_PLAYWRIGHT_BLOCKED_ORIGINS = Object.freeze([
 
 const ALLOWED_TOOL_SET = new Set(BUILTIN_PLAYWRIGHT_ALLOWED_TOOLS)
 const require = createRequire(import.meta.url)
+let officialToolDescriptors = null
+
+function loadOfficialToolDescriptors() {
+  if (officialToolDescriptors) return officialToolDescriptors
+  const descriptors = new Map()
+  try {
+    const browserTools = require('playwright-core/lib/coreBundle')?.tools?.browserTools || []
+    for (const tool of browserTools) {
+      const name = String(tool?.schema?.name || '')
+      if (!ALLOWED_TOOL_SET.has(name) || descriptors.has(name)) continue
+      let inputSchema = { type: 'object', properties: {}, additionalProperties: true }
+      try {
+        inputSchema = tool.schema.inputSchema?.toJSONSchema?.() || inputSchema
+        delete inputSchema.$schema
+      } catch {}
+      const type = String(tool.schema.type || '')
+      descriptors.set(name, Object.freeze({
+        name,
+        title: String(tool.schema.title || name),
+        description: String(tool.schema.description || tool.schema.title || name),
+        inputSchema: Object.freeze(inputSchema),
+        annotations: Object.freeze({
+          readOnlyHint: type === 'readOnly' || type === 'assertion',
+          destructiveHint: type !== 'readOnly' && type !== 'assertion',
+        }),
+      }))
+    }
+  } catch {}
+  officialToolDescriptors = descriptors
+  return officialToolDescriptors
+}
 
 export function isBuiltInPlaywrightToolAllowed(name) {
   return ALLOWED_TOOL_SET.has(String(name || ''))
+}
+
+// The official Playwright package already ships the authoritative schemas.
+// Keep a trusted local copy available before the MCP transport connects so
+// find_tool can make browser tools callable even after a recoverable startup
+// failure. Execution still crosses the fixed allowlist above.
+export function getBuiltInPlaywrightToolDescriptor(name) {
+  const descriptor = loadOfficialToolDescriptors().get(String(name || ''))
+  if (!descriptor) return null
+  return {
+    ...descriptor,
+    inputSchema: structuredClone(descriptor.inputSchema),
+    annotations: { ...descriptor.annotations },
+  }
 }
 
 function resolveInstalledCli() {
@@ -84,6 +129,14 @@ export function resolveBuiltInPlaywrightPageGuard({
 } = {}) {
   if (String(guardPath || '').trim()) return path.resolve(String(guardPath).trim())
   return path.join(resourcesDir, 'src', 'mcp', 'playwright-page-guard.cjs')
+}
+
+export function resolveBuiltInPlaywrightProfileConfig({
+  configPath = process.env.BAILONGMA_PLAYWRIGHT_PROFILE_CONFIG,
+  resourcesDir = paths.resourcesDir,
+} = {}) {
+  if (String(configPath || '').trim()) return path.resolve(String(configPath).trim())
+  return path.join(resourcesDir, 'src', 'mcp', 'playwright-shared-profile.json')
 }
 
 function inheritedPlaywrightEnv(source = process.env) {
@@ -121,14 +174,22 @@ export function createBuiltInPlaywrightServer({
   const isReader = role === 'reader'
   const id = isReader ? BUILTIN_PLAYWRIGHT_READER_ID : BUILTIN_PLAYWRIGHT_INTERACTIVE_ID
   const outputDir = ensureDirectory(path.join(sandboxDir, 'browser-output', role))
-  const profileDir = path.join(userDir, 'browser-profiles', 'playwright-mcp-interactive')
-  if (!isReader) ensureDirectory(profileDir)
+  // Both display modes are two views of the same durable browser identity.
+  // Keep the established interactive path so existing cookies/logins survive
+  // upgrades. client-manager guarantees that only one mode owns this Chromium
+  // profile at a time.
+  const profileDir = ensureDirectory(path.join(
+    userDir,
+    'browser-profiles',
+    'playwright-mcp-interactive',
+  ))
 
   const args = [
     resolveBuiltInPlaywrightCli({ cliPath, resourcesDir }),
     '--block-service-workers',
     '--browser', 'chromium',
     '--codegen', 'none',
+    '--config', resolveBuiltInPlaywrightProfileConfig({ resourcesDir }),
     '--console-level', 'warning',
     '--image-responses', 'omit',
     '--init-page', resolveBuiltInPlaywrightPageGuard({ resourcesDir }),
@@ -147,8 +208,8 @@ export function createBuiltInPlaywrightServer({
   if (!allowPrivateNetwork) {
     args.push('--blocked-origins', BUILTIN_PLAYWRIGHT_BLOCKED_ORIGINS.join(';'))
   }
-  if (isReader) args.push('--headless', '--isolated')
-  else args.push('--user-data-dir', profileDir)
+  if (isReader) args.push('--headless')
+  args.push('--user-data-dir', profileDir)
 
   return {
     id,
@@ -175,9 +236,41 @@ export function createBuiltInPlaywrightServer({
     catalogVisible: !isReader,
     enforceAllowedTools: true,
     lazy: isReader,
-    persistent: !isReader,
+    persistent: true,
     headed: !isReader,
     allowPrivateNetwork,
+  }
+}
+
+export function createBuiltInEmbeddedPlaywrightConfig({
+  resourcesDir = paths.resourcesDir,
+  sandboxDir = paths.sandboxDir,
+  allowPrivateNetwork = config.security?.browserPrivateNetwork === true,
+} = {}) {
+  const outputDir = ensureDirectory(path.join(sandboxDir, 'browser-output', 'interactive'))
+  return {
+    browser: {
+      browserName: 'chromium',
+      // The guard is deliberately page-scoped so an Electron CDP context that
+      // also contains Brain UI cannot receive browser-surface routes.
+      initPage: allowPrivateNetwork
+        ? []
+        : [resolveBuiltInPlaywrightPageGuard({ resourcesDir })],
+    },
+    capabilities: ['core'],
+    codegen: 'none',
+    console: { level: 'warning' },
+    imageResponses: 'omit',
+    network: {
+      blockedOrigins: allowPrivateNetwork ? [] : [...BUILTIN_PLAYWRIGHT_BLOCKED_ORIGINS],
+    },
+    outputDir,
+    outputMaxSize: 50 * 1024 * 1024,
+    snapshot: { mode: 'full' },
+    timeouts: {
+      action: 10_000,
+      navigation: 60_000,
+    },
   }
 }
 

@@ -88,11 +88,21 @@ for (const entry of [
   '/node_modules/playwright-core/lib/utilsBundle.js',
   '/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js',
   '/node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js',
+  '/electron/browser-embed-host.cjs',
   '/electron/playwright-runtime.cjs',
+  '/src/mcp/embedded-playwright-connection.js',
+  '/src/mcp/embedded-playwright-sidecar.js',
   '/src/mcp/playwright-page-guard.cjs',
+  '/src/mcp/playwright-shared-profile.json',
 ]) {
   assert.ok(entries.has(entry), `required production entry is absent from app.asar: ${entry}`)
 }
+
+const sharedProfileConfig = asarJson(path.join('src', 'mcp', 'playwright-shared-profile.json'))
+assert.ok(
+  sharedProfileConfig?.browser?.launchOptions?.args?.includes('--restore-last-session'),
+  'packaged shared-profile config must restore session cookies and tabs across display-mode handoffs',
+)
 
 const mcpPackage = asarJson(path.join('node_modules', '@playwright', 'mcp', 'package.json'))
 const playwrightPackage = asarJson(path.join('node_modules', 'playwright', 'package.json'))

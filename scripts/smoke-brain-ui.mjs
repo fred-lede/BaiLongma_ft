@@ -7,6 +7,13 @@ import { chromium } from 'playwright'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(__dirname, '..')
 const brainUiRoot = path.join(root, 'src', 'ui', 'brain-ui')
+const browserPreviewFixture = process.env.BRAIN_UI_PREVIEW_IMAGE
+  ? path.resolve(process.env.BRAIN_UI_PREVIEW_IMAGE)
+  : path.join(root, 'build', 'icon.png')
+const browserPreviewDelayMs = Math.max(
+  0,
+  Number(process.env.BRAIN_UI_PREVIEW_DELAY_MS || 220) || 0,
+)
 
 function contentTypeFor(filePath) {
   switch (path.extname(filePath).toLowerCase()) {
@@ -69,6 +76,15 @@ function createServer() {
 
     if (url.pathname === '/vendor/d3/d3.min.js') {
       sendFile(res, path.join(root, 'node_modules', 'd3', 'dist', 'd3.min.js'))
+      return
+    }
+
+    if (url.pathname === '/site-assets/browser-preview.png') {
+      if (browserPreviewDelayMs > 0) {
+        setTimeout(() => sendFile(res, browserPreviewFixture), browserPreviewDelayMs)
+      } else {
+        sendFile(res, browserPreviewFixture)
+      }
       return
     }
 
@@ -301,6 +317,11 @@ function createServer() {
       try { client.write(`data: ${JSON.stringify(event)}\n\n`) } catch {}
     }
   }
+  server.emitTransientSse = (event) => {
+    for (const client of sseClients) {
+      try { client.write(`data: ${JSON.stringify(event)}\n\n`) } catch {}
+    }
+  }
   return server
 }
 
@@ -448,7 +469,10 @@ try {
         backdropFilter: left.backdropFilter,
       },
       cards: Array.from(document.querySelectorAll('#panel-l2 .l2-module')).map(element => {
-        const style = getComputedStyle(element)
+        const visibleSurface = element.matches('.action-log-module')
+          ? element.querySelector('.action-log-surface')
+          : element
+        const style = getComputedStyle(visibleSurface)
         return {
           backgroundColor: style.backgroundColor,
           backgroundImage: style.backgroundImage,
@@ -543,12 +567,342 @@ try {
     && document.querySelector('#si-l1')?.textContent.includes('请更新配置文件')
     && document.querySelector('#si-l1')?.textContent.includes('写入文件'))
 
-  server.emitSse({ type: 'tool_preparing', data: { name: 'browser_navigate' }, ts: new Date().toISOString() })
+  // Electron uses a native WebContentsView rather than downloading the preview
+  // screenshot. Keep this as a second page so the regular-browser fallback below
+  // continues to exercise image loading independently.
+  const nativePage = await browser.newPage({ viewport: { width: 1280, height: 840 } })
+  let nativePreviewAssetRequests = 0
+  nativePage.on('request', request => {
+    if (new URL(request.url()).pathname === '/site-assets/browser-preview.png') {
+      nativePreviewAssetRequests += 1
+    }
+  })
+  await nativePage.addInitScript(() => {
+    const calls = []
+    window.__browserEmbedCalls = calls
+    window.bailongma = {
+      isElectron: true,
+      platform: 'darwin',
+      getZoomFactor: () => 1.1,
+      setZoomFactor: () => {},
+      browserEmbed: {
+        update(payload) {
+          calls.push({ method: 'update', payload: structuredClone(payload) })
+          return Promise.resolve({ ok: true })
+        },
+        hide() {
+          calls.push({ method: 'hide' })
+          return Promise.resolve({ ok: true })
+        },
+        getState() {
+          calls.push({ method: 'getState' })
+          return Promise.resolve({ visible: false })
+        },
+      },
+    }
+  })
+  await nativePage.goto(`${baseUrl}/brain-ui`, { waitUntil: 'domcontentloaded' })
+  await nativePage.waitForSelector('#heartbeat-state[data-state="alive"]')
+  await nativePage.waitForFunction(() => (
+    window.__browserEmbedCalls?.some(call => call.method === 'hide')
+    && window.__browserEmbedCalls?.some(call => call.method === 'getState')
+  ))
+
+  server.emitSse({
+    type: 'tool_preparing',
+    data: { name: 'browser_navigate', browser_display_mode: 'card' },
+    ts: new Date().toISOString(),
+  })
   await page.waitForFunction(() =>
     document.querySelector('#si-l1 .line-status')?.textContent === '准备打开网页…')
-  server.emitSse({ type: 'tool_executing', data: { name: 'browser_navigate' }, ts: new Date().toISOString() })
+  await page.waitForFunction(() =>
+    document.querySelector('#browser-preview')?.hidden
+    && !document.querySelector('#action-log')?.hidden
+    && !document.querySelector('.action-log-module')?.dataset.browserActive)
+  await nativePage.waitForFunction(() =>
+    document.querySelector('#browser-preview')?.hidden
+    && !document.querySelector('#action-log')?.hidden
+    && !document.querySelector('.action-log-module')?.dataset.browserActive)
+  server.emitSse({
+    type: 'tool_executing',
+    data: { name: 'browser_navigate', browser_display_mode: 'card' },
+    ts: new Date().toISOString(),
+  })
   await page.waitForFunction(() =>
     document.querySelector('#si-l1 .line-status')?.textContent === '正在打开网页…')
+  await page.waitForFunction(() =>
+    document.querySelector('#browser-preview')?.hidden
+    && !document.querySelector('#action-log')?.hidden
+    && !document.querySelector('.action-log-module')?.dataset.browserActive)
+  await nativePage.waitForFunction(() =>
+    document.querySelector('#browser-preview')?.hidden
+    && !document.querySelector('#action-log')?.hidden
+    && !document.querySelector('.action-log-module')?.dataset.browserActive)
+  server.emitSse({
+    type: 'browser_preview',
+    data: {
+      mode: 'card',
+      state: 'ready',
+      action: 'browser_navigate',
+      image_url: '/site-assets/browser-preview.png',
+      revision: 'smoke-1',
+      url: 'https://example.com/docs',
+      title: 'Example Documentation',
+    },
+    ts: new Date().toISOString(),
+  })
+  await nativePage.waitForFunction(() => (
+    document.querySelector('.action-log-module')?.dataset.browserPhase === 'browser'
+  ))
+  await nativePage.waitForTimeout(70)
+  const browserEntranceMotion = await nativePage.evaluate(() => {
+    const moduleRect = document.querySelector('.action-log-module')?.getBoundingClientRect()
+    const actionRect = document.querySelector('.action-log-surface')?.getBoundingClientRect()
+    const browserRect = document.querySelector('#browser-preview')?.getBoundingClientRect()
+    const nativeXs = (window.__browserEmbedCalls || [])
+      .filter(call => call.method === 'update' && call.payload?.mode === 'card')
+      .map(call => call.payload.bounds?.x)
+      .filter(Number.isFinite)
+    return {
+      moduleRect: moduleRect?.toJSON(),
+      actionRect: actionRect?.toJSON(),
+      browserRect: browserRect?.toJSON(),
+      nativeXs,
+    }
+  })
+  if (
+    !browserEntranceMotion.moduleRect
+    || browserEntranceMotion.actionRect.left >= browserEntranceMotion.moduleRect.left
+    || browserEntranceMotion.browserRect.left <= browserEntranceMotion.moduleRect.left
+    || browserEntranceMotion.nativeXs.length < 2
+    || browserEntranceMotion.nativeXs.at(-1) >= browserEntranceMotion.nativeXs[0]
+  ) {
+    throw new Error(`browser/log entrance is not moving in opposite directions: ${JSON.stringify(browserEntranceMotion)}`)
+  }
+  if (browserPreviewDelayMs > 0) {
+    await page.waitForTimeout(Math.min(100, Math.max(20, browserPreviewDelayMs / 2)))
+    const prematurePreview = await page.evaluate(() => ({
+      hidden: document.querySelector('#browser-preview')?.hidden,
+      actionLogHidden: document.querySelector('#action-log')?.hidden,
+      browserActive: document.querySelector('.action-log-module')?.dataset.browserActive || '',
+    }))
+    if (
+      prematurePreview.hidden !== true
+      || prematurePreview.actionLogHidden !== false
+      || prematurePreview.browserActive
+    ) {
+      throw new Error(
+        'browser preview became visible before its image finished loading: '
+        + JSON.stringify(prematurePreview),
+      )
+    }
+  }
+  await nativePage.waitForFunction(() => (
+    window.__browserEmbedCalls?.some(call => (
+      call.method === 'update'
+      && call.payload?.mode === 'card'
+      && call.payload?.visible === true
+    ))
+  ))
+  await nativePage.waitForFunction(() => (
+    document.querySelector('.action-log-module')?.dataset.browserPhase === 'browser'
+    && document.querySelector('#action-log')?.hidden === true
+  ))
+  const nativeBrowserPreview = await nativePage.evaluate(() => {
+    const calls = window.__browserEmbedCalls || []
+    const updates = calls.filter(call => call.method === 'update' && call.payload?.mode === 'card')
+    const latest = updates.at(-1)?.payload
+    const slot = document.querySelector('#browser-preview-native-slot')
+    const rect = slot?.getBoundingClientRect()
+    const radius = slot ? parseFloat(getComputedStyle(slot).borderTopLeftRadius) : 0
+    const zoom = Number(window.bailongma?.getZoomFactor?.()) || 1
+    return {
+      calls,
+      latest,
+      expected: rect ? {
+        x: Math.round(rect.left * zoom),
+        y: Math.round(rect.top * zoom),
+        width: Math.round(rect.width * zoom),
+        height: Math.round(rect.height * zoom),
+        radius: Math.round(radius * zoom),
+      } : null,
+      previewHidden: document.querySelector('#browser-preview')?.hidden,
+      renderer: document.querySelector('#browser-preview')?.dataset.renderer,
+      actionLogHidden: document.querySelector('#action-log')?.hidden,
+      imageSrc: document.querySelector('#browser-preview-image')?.getAttribute('src'),
+    }
+  })
+  const nativeGeometry = nativeBrowserPreview.latest?.bounds
+  if (
+    nativeBrowserPreview.previewHidden
+    || nativeBrowserPreview.renderer !== 'native'
+    || nativeBrowserPreview.actionLogHidden !== true
+    || nativeBrowserPreview.imageSrc
+    || nativeBrowserPreview.latest?.interactive !== false
+    || nativeBrowserPreview.latest?.url !== 'https://example.com/docs'
+    || nativeBrowserPreview.latest?.radius !== nativeBrowserPreview.expected?.radius
+    || !nativeGeometry
+    || Math.abs(nativeGeometry.x - nativeBrowserPreview.expected.x) > 1
+    || Math.abs(nativeGeometry.y - nativeBrowserPreview.expected.y) > 1
+    || Math.abs(nativeGeometry.width - nativeBrowserPreview.expected.width) > 1
+    || Math.abs(nativeGeometry.height - nativeBrowserPreview.expected.height) > 1
+  ) {
+    throw new Error(`native browser embed geometry/state mismatch: ${JSON.stringify(nativeBrowserPreview)}`)
+  }
+  if (nativePreviewAssetRequests !== 0) {
+    throw new Error(`native browser embed requested ${nativePreviewAssetRequests} screenshot assets`)
+  }
+  const nativeUpdateCountBeforeResize = await nativePage.evaluate(() => (
+    window.__browserEmbedCalls?.filter(call => call.method === 'update' && call.payload?.mode === 'card').length || 0
+  ))
+  await nativePage.setViewportSize({ width: 1180, height: 840 })
+  await nativePage.waitForFunction(previousCount => (
+    (window.__browserEmbedCalls?.filter(call => (
+      call.method === 'update' && call.payload?.mode === 'card'
+    )).length || 0) > previousCount
+  ), nativeUpdateCountBeforeResize)
+  const resizedNativeGeometryMatches = await nativePage.evaluate(() => {
+    const payload = window.__browserEmbedCalls
+      ?.filter(call => call.method === 'update' && call.payload?.mode === 'card')
+      .at(-1)?.payload
+    const rect = document.querySelector('#browser-preview-native-slot')?.getBoundingClientRect()
+    const zoom = Number(window.bailongma?.getZoomFactor?.()) || 1
+    return Boolean(payload && rect)
+      && Math.abs(payload.bounds.x - Math.round(rect.left * zoom)) <= 1
+      && Math.abs(payload.bounds.y - Math.round(rect.top * zoom)) <= 1
+      && Math.abs(payload.bounds.width - Math.round(rect.width * zoom)) <= 1
+      && Math.abs(payload.bounds.height - Math.round(rect.height * zoom)) <= 1
+  })
+  if (!resizedNativeGeometryMatches) {
+    throw new Error('native browser embed bounds did not follow ResizeObserver')
+  }
+  const translatedNativeX = await nativePage.evaluate(() => {
+    const preview = document.querySelector('#browser-preview')
+    if (preview) preview.style.transform = 'translateX(-5px)'
+    const rect = document.querySelector('#browser-preview-native-slot')?.getBoundingClientRect()
+    const zoom = Number(window.bailongma?.getZoomFactor?.()) || 1
+    window.dispatchEvent(new Event('scroll'))
+    return rect ? Math.round(rect.left * zoom) : null
+  })
+  await nativePage.waitForFunction(expectedX => (
+    window.__browserEmbedCalls
+      ?.filter(call => call.method === 'update' && call.payload?.mode === 'card')
+      .at(-1)?.payload?.bounds?.x === expectedX
+  ), translatedNativeX)
+  const restoredNativeX = await nativePage.evaluate(() => {
+    const preview = document.querySelector('#browser-preview')
+    if (preview) preview.style.transform = ''
+    const rect = document.querySelector('#browser-preview-native-slot')?.getBoundingClientRect()
+    const zoom = Number(window.bailongma?.getZoomFactor?.()) || 1
+    window.visualViewport?.dispatchEvent(new Event('scroll'))
+    return rect ? Math.round(rect.left * zoom) : null
+  })
+  await nativePage.waitForFunction(expectedX => (
+    window.__browserEmbedCalls
+      ?.filter(call => call.method === 'update' && call.payload?.mode === 'card')
+      .at(-1)?.payload?.bounds?.x === expectedX
+  ), restoredNativeX)
+  await page.waitForFunction(() => {
+    const preview = document.querySelector('#browser-preview')
+    const image = document.querySelector('#browser-preview-image')
+    return preview
+      && !preview.hidden
+      && preview.dataset.state === 'ready'
+      && image?.complete
+      && image.naturalWidth > 0
+      && document.querySelector('.action-log-module')?.dataset.browserPhase === 'browser'
+      && document.querySelector('#action-log')?.hidden === true
+  })
+  const browserPreviewLayout = await page.evaluate(() => {
+    const preview = document.querySelector('#browser-preview')
+    const image = document.querySelector('#browser-preview-image')
+    const module = document.querySelector('.action-log-module')
+    const actionSurface = module?.querySelector('.action-log-surface')
+    const head = actionSurface?.querySelector(':scope > .l2-module-head')
+    const moduleRect = module?.getBoundingClientRect()
+    const actionSurfaceRect = actionSurface?.getBoundingClientRect()
+    const previewRect = preview?.getBoundingClientRect()
+    const viewport = document.querySelector('.browser-preview-viewport')
+    const viewportRect = viewport?.getBoundingClientRect()
+    const imageRect = image?.getBoundingClientRect()
+    const moduleStyle = getComputedStyle(module)
+    const actionSurfaceStyle = getComputedStyle(actionSurface)
+    const previewStyle = getComputedStyle(preview)
+    const viewportStyle = getComputedStyle(viewport)
+    return {
+      metrics: {
+        moduleBorder: moduleStyle.borderTopWidth,
+        moduleRadius: moduleStyle.borderTopLeftRadius,
+        moduleBackground: moduleStyle.backgroundColor,
+        previewBorder: previewStyle.borderTopWidth,
+        previewRadius: previewStyle.borderTopLeftRadius,
+        viewportRadius: viewportStyle.borderTopLeftRadius,
+        imageObjectFit: getComputedStyle(image).objectFit,
+        imageMaxWidth: getComputedStyle(image).maxWidth,
+        viewportOverflow: viewportStyle.overflow,
+        moduleRect: moduleRect.toJSON(),
+        actionSurfaceRect: actionSurfaceRect.toJSON(),
+        previewRect: previewRect.toJSON(),
+        viewportRect: viewportRect.toJSON(),
+        imageRect: imageRect.toJSON(),
+      },
+      checks: {
+        actionLogHidden: document.querySelector('#action-log')?.hidden === true,
+        moduleActive: module?.dataset.browserActive === 'true',
+        modulePaddingRemoved: moduleStyle.paddingTop === '0px',
+        moduleBorderRemoved: moduleStyle.borderTopWidth === '0px',
+        frameRadiusUnified: moduleStyle.borderTopLeftRadius === previewStyle.borderTopLeftRadius,
+        moduleShellTransparent: moduleStyle.backgroundColor === 'rgba(0, 0, 0, 0)',
+        actionSurfaceExitedLeft: actionSurfaceRect.right <= moduleRect.left + 1
+          && parseFloat(actionSurfaceStyle.opacity) === 0
+          && document.querySelector('#action-log')?.hidden === true,
+        headingRetainedForReverseAnimation: getComputedStyle(head).display === 'flex',
+        synchronizedSurfaceMotion: actionSurfaceStyle.transitionProperty.includes('transform')
+          && previewStyle.transitionProperty.includes('transform')
+          && actionSurfaceStyle.transitionDuration === previewStyle.transitionDuration,
+        noBrowserChrome: !document.querySelector('#browser-preview-address')
+          && !document.querySelector('.browser-preview-caption'),
+        noLoadingUi: !document.querySelector('#browser-preview-placeholder')
+          && !document.querySelector('.browser-preview-orbit')
+          && !document.querySelector('.browser-preview-scanline'),
+        frameUsesBorderBox: previewStyle.boxSizing === 'border-box',
+        frameHasThickBorder: parseFloat(previewStyle.borderTopWidth) >= 8,
+        concentricCorners: Math.abs(
+          parseFloat(previewStyle.borderTopLeftRadius)
+          - parseFloat(previewStyle.borderTopWidth)
+          - parseFloat(viewportStyle.borderTopLeftRadius)
+        ) <= 1,
+        fullImageContained: getComputedStyle(image).objectFit === 'contain'
+          && getComputedStyle(image).maxWidth === '100%',
+        viewportClipsContent: viewportStyle.overflow === 'hidden',
+        viewportInsideFrame: viewportRect.left >= previewRect.left + 8
+          && viewportRect.right <= previewRect.right - 8
+          && viewportRect.top >= previewRect.top + 8
+          && viewportRect.bottom <= previewRect.bottom - 8,
+        imageInsideViewport: imageRect.left >= viewportRect.left
+          && imageRect.right <= viewportRect.right,
+        frameReplacesCard: Math.abs(moduleRect.left - previewRect.left) <= 1
+          && Math.abs(moduleRect.right - previewRect.right) <= 1
+          && Math.abs(moduleRect.top - previewRect.top) <= 1
+          && Math.abs(moduleRect.bottom - previewRect.bottom) <= 1,
+      },
+    }
+  })
+  const failedBrowserPreviewChecks = Object.entries(browserPreviewLayout.checks)
+    .filter(([, passed]) => !passed)
+    .map(([name]) => name)
+  if (failedBrowserPreviewChecks.length > 0) {
+    throw new Error(
+      `browser preview layout failed (${failedBrowserPreviewChecks.join(', ')}): `
+      + JSON.stringify(browserPreviewLayout.metrics),
+    )
+  }
+  if (process.env.BRAIN_UI_PREVIEW_SCREENSHOT) {
+    await page.waitForTimeout(260)
+    const screenshotPath = path.resolve(process.env.BRAIN_UI_PREVIEW_SCREENSHOT)
+    fs.mkdirSync(path.dirname(screenshotPath), { recursive: true })
+    await page.screenshot({ path: screenshotPath, fullPage: true })
+  }
   server.emitSse({
     type: 'tool_call',
     data: {
@@ -556,9 +910,37 @@ try {
       args: { url: 'https://example.com/docs' },
       result: '{"ok":true}',
       ok: true,
+      browser_display_mode: 'card',
     },
     ts: new Date().toISOString(),
   })
+  const nativeHideCountBeforeContinuousAction = await nativePage.evaluate(() => (
+    window.__browserEmbedCalls?.filter(call => call.method === 'hide').length || 0
+  ))
+  server.emitTransientSse({
+    type: 'tool_preparing',
+    data: { name: 'browser_press_key', browser_display_mode: 'card' },
+    ts: new Date().toISOString(),
+  })
+  for (const target of [page, nativePage]) {
+    await target.waitForFunction(() => (
+      !document.querySelector('#browser-preview')?.hidden
+      && document.querySelector('.action-log-module')?.dataset.browserPhase === 'browser'
+      && document.querySelector('#action-log')?.hidden === true
+    ))
+  }
+  server.emitTransientSse({
+    type: 'tool_executing',
+    data: { name: 'browser_press_key', browser_display_mode: 'card' },
+    ts: new Date().toISOString(),
+  })
+  for (const target of [page, nativePage]) {
+    await target.waitForFunction(() => (
+      !document.querySelector('#browser-preview')?.hidden
+      && document.querySelector('.action-log-module')?.dataset.browserPhase === 'browser'
+      && document.querySelector('#action-log')?.hidden === true
+    ))
+  }
   server.emitSse({
     type: 'tool_call',
     data: {
@@ -566,6 +948,7 @@ try {
       args: { key: 'End' },
       result: '{"ok":true}',
       ok: true,
+      browser_display_mode: 'card',
     },
     ts: new Date().toISOString(),
   })
@@ -585,6 +968,152 @@ try {
       && !streamText.includes('browser_press_key')
       && !streamText.includes('工具调用')
   })
+  // A response used to start a 3.5-second auto-dismiss timer. Wait beyond it
+  // and prove the live browser remains visible until the Agent explicitly calls
+  // browser_close. A later user message must not dismiss it either.
+  await page.waitForTimeout(4200)
+  for (const target of [page, nativePage]) {
+    const retained = await target.evaluate(() => ({
+      previewHidden: document.querySelector('#browser-preview')?.hidden,
+      browserPhase: document.querySelector('.action-log-module')?.dataset.browserPhase || '',
+      browserActive: document.querySelector('.action-log-module')?.dataset.browserActive || '',
+      actionLogHidden: document.querySelector('#action-log')?.hidden,
+    }))
+    if (
+      retained.previewHidden !== false
+      || retained.browserPhase !== 'browser'
+      || retained.browserActive !== 'true'
+      || retained.actionLogHidden !== true
+    ) {
+      throw new Error(`browser preview did not persist after response: ${JSON.stringify(retained)}`)
+    }
+  }
+  const nativeHideCountAfterResponse = await nativePage.evaluate(() => (
+    window.__browserEmbedCalls?.filter(call => call.method === 'hide').length || 0
+  ))
+  if (nativeHideCountAfterResponse !== nativeHideCountBeforeContinuousAction) {
+    throw new Error('continuous browser action or response unexpectedly hid the native browser')
+  }
+  server.emitTransientSse({
+    type: 'message_received',
+    data: { input: '继续显示当前页面' },
+    ts: new Date().toISOString(),
+  })
+  await page.waitForTimeout(120)
+  for (const target of [page, nativePage]) {
+    await target.waitForFunction(() => (
+      !document.querySelector('#browser-preview')?.hidden
+      && document.querySelector('.action-log-module')?.dataset.browserPhase === 'browser'
+      && document.querySelector('#action-log')?.hidden === true
+    ))
+  }
+  server.emitTransientSse({
+    type: 'tool_preparing',
+    data: { name: 'browser_close', browser_display_mode: 'card' },
+    ts: new Date().toISOString(),
+  })
+  server.emitTransientSse({
+    type: 'tool_executing',
+    data: { name: 'browser_close', browser_display_mode: 'card' },
+    ts: new Date().toISOString(),
+  })
+  for (const target of [page, nativePage]) {
+    await target.waitForFunction(() => (
+      !document.querySelector('#browser-preview')?.hidden
+      && document.querySelector('.action-log-module')?.dataset.browserPhase === 'browser'
+      && document.querySelector('#action-log')?.hidden === true
+    ))
+  }
+  server.emitTransientSse({
+    type: 'browser_preview',
+    data: {
+      mode: 'card',
+      state: 'closed',
+      action: 'browser_close',
+      native_view: true,
+    },
+    ts: new Date().toISOString(),
+  })
+  server.emitTransientSse({
+    type: 'tool_call',
+    data: {
+      name: 'browser_close',
+      args: {},
+      result: '{"ok":true}',
+      ok: true,
+      browser_display_mode: 'card',
+    },
+    ts: new Date().toISOString(),
+  })
+  await nativePage.waitForFunction(() => (
+    !document.querySelector('#browser-preview')?.hidden
+    && !document.querySelector('.action-log-module')?.dataset.browserPhase
+    && !document.querySelector('#action-log')?.hidden
+  ))
+  await nativePage.waitForTimeout(70)
+  const browserExitMotion = await nativePage.evaluate(() => {
+    const moduleRect = document.querySelector('.action-log-module')?.getBoundingClientRect()
+    const actionRect = document.querySelector('.action-log-surface')?.getBoundingClientRect()
+    const browserRect = document.querySelector('#browser-preview')?.getBoundingClientRect()
+    const nativeXs = (window.__browserEmbedCalls || [])
+      .filter(call => call.method === 'update' && call.payload?.mode === 'card')
+      .map(call => call.payload.bounds?.x)
+      .filter(Number.isFinite)
+    return {
+      moduleRect: moduleRect?.toJSON(),
+      actionRect: actionRect?.toJSON(),
+      browserRect: browserRect?.toJSON(),
+      nativeXs,
+    }
+  })
+  if (
+    !browserExitMotion.moduleRect
+    || browserExitMotion.actionRect.left >= browserExitMotion.moduleRect.left
+    || browserExitMotion.browserRect.left <= browserExitMotion.moduleRect.left
+    || browserExitMotion.nativeXs.length < 2
+    || browserExitMotion.nativeXs.at(-1) <= browserExitMotion.nativeXs.at(-2)
+  ) {
+    throw new Error(`browser/log exit is not reversing the entrance motion: ${JSON.stringify(browserExitMotion)}`)
+  }
+  await page.waitForFunction(() =>
+    document.querySelector('#browser-preview')?.hidden
+    && !document.querySelector('#action-log')?.hidden
+    && !document.querySelector('.action-log-module')?.dataset.browserActive
+    && getComputedStyle(document.querySelector('.action-log-surface > .l2-module-head')).display === 'flex'
+    && document.querySelector('#action-log-title')?.textContent === '行动日志')
+  await nativePage.waitForFunction(() => {
+    const calls = window.__browserEmbedCalls || []
+    const lastCardUpdate = calls.findLastIndex(call => (
+      call.method === 'update' && call.payload?.mode === 'card'
+    ))
+    return lastCardUpdate >= 0
+      && calls.slice(lastCardUpdate + 1).some(call => call.method === 'hide')
+      && document.querySelector('#browser-preview')?.hidden
+      && !document.querySelector('#action-log')?.hidden
+  })
+  server.emitSse({
+    type: 'tool_executing',
+    data: { name: 'browser_navigate', browser_display_mode: 'window' },
+    ts: new Date().toISOString(),
+  })
+  await page.waitForFunction(() =>
+    document.querySelector('#browser-preview')?.hidden
+    && !document.querySelector('#action-log')?.hidden)
+  await nativePage.waitForFunction(() => (
+    window.__browserEmbedCalls?.some(call => (
+      call.method === 'update'
+      && call.payload?.mode === 'window'
+      && call.payload?.visible === true
+      && call.payload?.interactive === true
+      && !call.payload?.bounds
+    ))
+    && document.querySelector('#browser-preview')?.hidden
+    && !document.querySelector('#action-log')?.hidden
+  ))
+  if (nativePreviewAssetRequests !== 0) {
+    throw new Error(`native browser embed requested screenshots after mode switch: ${nativePreviewAssetRequests}`)
+  }
+  await nativePage.close()
 
   server.emitSse({
     type: 'scheduled_task',

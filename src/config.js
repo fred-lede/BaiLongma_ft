@@ -24,7 +24,9 @@ export const DEFAULT_MIMO_MODEL = 'mimo-v2.5-pro'
 
 export const CONTEXT_MESSAGE_LIMIT_MIN = 1
 export const CONTEXT_MESSAGE_LIMIT_MAX = 40
-export const DEFAULT_CONTEXT_MESSAGE_LIMIT = 10
+export const DEFAULT_CONTEXT_MESSAGE_LIMIT = 20
+export const CONTEXT_TOOL_LIMIT_MIN = 0
+export const DEFAULT_CONTEXT_TOOL_LIMIT = 5
 
 const LEGACY_PLAYWRIGHT_BROWSER_TOOLS = Object.freeze([
   'browser_navigate',
@@ -947,7 +949,7 @@ function applyConfig(provider, apiKey, model, customBaseURL) {
 // 跑完写回新版本号。把历史上零散、惰性触发的"一次性迁移"（如 seedance 拆分）收编到这里，
 // 让升级路径确定、可测、可追溯，而不是散落在各 getter 里。
 // 加新迁移：CONFIG_SCHEMA_VERSION 加 1，并在 CONFIG_MIGRATIONS 里补上对应版本号的函数。
-const CONFIG_SCHEMA_VERSION = 3
+const CONFIG_SCHEMA_VERSION = 4
 
 // 每个迁移把传入的 config 对象升一级，返回新对象。允许带幂等副作用（如写独立文件）。
 const CONFIG_MIGRATIONS = {
@@ -982,6 +984,30 @@ const CONFIG_MIGRATIONS = {
   // config.json 不再承载云端 ASR 密钥，只保留其它通用配置。
   3(cfg) {
     return migrateLegacyVoiceConfig(cfg)
+  },
+  // v3 → v4：上下文窗口从“普通对话 / Tick 各一个消息上限”改成
+  // “聊天消息 / 工具调用各一个上限”。两个入口共享同一组预算，工具上限
+  // 必须严格小于聊天消息上限，避免双滑块重叠，也让两类 token 可独立控制。
+  4(cfg) {
+    const legacy = (cfg?.contextWindow && typeof cfg.contextWindow === 'object')
+      ? cfg.contextWindow
+      : {}
+    const legacyChatLimit = Number(legacy.chatMessageLimit ?? legacy.conversationMessageLimit)
+    const chatMessageLimit = Number.isInteger(legacyChatLimit)
+      && legacyChatLimit >= CONTEXT_MESSAGE_LIMIT_MIN
+      && legacyChatLimit <= CONTEXT_MESSAGE_LIMIT_MAX
+      ? legacyChatLimit
+      : DEFAULT_CONTEXT_MESSAGE_LIMIT
+    const savedToolLimit = Number(legacy.toolCallLimit)
+    const toolCallLimit = Number.isInteger(savedToolLimit)
+      && savedToolLimit >= CONTEXT_TOOL_LIMIT_MIN
+      && savedToolLimit < chatMessageLimit
+      ? savedToolLimit
+      : Math.min(DEFAULT_CONTEXT_TOOL_LIMIT, chatMessageLimit - 1)
+    return {
+      ...cfg,
+      contextWindow: { chatMessageLimit, toolCallLimit },
+    }
   },
 }
 
@@ -1026,8 +1052,8 @@ export const config = {
   // 不是 runtime 按难度替模型决定开关 reasoning（那条路 index.js 已注释外掉）。
   thinking: false,
   contextWindow: {
-    conversationMessageLimit: DEFAULT_CONTEXT_MESSAGE_LIMIT,
-    tickMessageLimit: DEFAULT_CONTEXT_MESSAGE_LIMIT,
+    chatMessageLimit: DEFAULT_CONTEXT_MESSAGE_LIMIT,
+    toolCallLimit: DEFAULT_CONTEXT_TOOL_LIMIT,
   },
   security: {
     fileSandbox: true,
@@ -1059,17 +1085,16 @@ if (parsedConfig) {
     config.thinking = parsedConfig.thinking
   }
   if (parsedConfig.contextWindow && typeof parsedConfig.contextWindow === 'object') {
-    const conversationMessageLimit = Number(parsedConfig.contextWindow.conversationMessageLimit)
-    const tickMessageLimit = Number(parsedConfig.contextWindow.tickMessageLimit)
-    if (Number.isInteger(conversationMessageLimit)
-      && conversationMessageLimit >= CONTEXT_MESSAGE_LIMIT_MIN
-      && conversationMessageLimit <= CONTEXT_MESSAGE_LIMIT_MAX) {
-      config.contextWindow.conversationMessageLimit = conversationMessageLimit
-    }
-    if (Number.isInteger(tickMessageLimit)
-      && tickMessageLimit >= CONTEXT_MESSAGE_LIMIT_MIN
-      && tickMessageLimit <= CONTEXT_MESSAGE_LIMIT_MAX) {
-      config.contextWindow.tickMessageLimit = tickMessageLimit
+    const chatMessageLimit = Number(parsedConfig.contextWindow.chatMessageLimit)
+    const toolCallLimit = Number(parsedConfig.contextWindow.toolCallLimit)
+    if (Number.isInteger(chatMessageLimit)
+      && chatMessageLimit >= CONTEXT_MESSAGE_LIMIT_MIN
+      && chatMessageLimit <= CONTEXT_MESSAGE_LIMIT_MAX
+      && Number.isInteger(toolCallLimit)
+      && toolCallLimit >= CONTEXT_TOOL_LIMIT_MIN
+      && toolCallLimit < chatMessageLimit) {
+      config.contextWindow.chatMessageLimit = chatMessageLimit
+      config.contextWindow.toolCallLimit = toolCallLimit
     }
   }
   if (parsedConfig.heartbeat && typeof parsedConfig.heartbeat === 'object') {
@@ -1432,22 +1457,28 @@ export function setThinking(enabled) {
 
 export function getContextWindowConfig() {
   return {
-    conversationMessageLimit: config.contextWindow.conversationMessageLimit,
-    tickMessageLimit: config.contextWindow.tickMessageLimit,
+    chatMessageLimit: config.contextWindow.chatMessageLimit,
+    toolCallLimit: config.contextWindow.toolCallLimit,
   }
 }
 
 export function setContextWindowConfig(updates = {}) {
   const current = getContextWindowConfig()
-  const next = { ...current }
-  for (const key of ['conversationMessageLimit', 'tickMessageLimit']) {
-    if (!Object.prototype.hasOwnProperty.call(updates, key)) continue
-    const value = Number(updates[key])
-    if (!Number.isInteger(value)) throw new Error('上下文消息条数必须是整数')
-    if (value < CONTEXT_MESSAGE_LIMIT_MIN || value > CONTEXT_MESSAGE_LIMIT_MAX) {
-      throw new Error(`上下文消息条数必须在 ${CONTEXT_MESSAGE_LIMIT_MIN} 到 ${CONTEXT_MESSAGE_LIMIT_MAX} 之间`)
-    }
-    next[key] = value
+  const next = {
+    chatMessageLimit: Object.prototype.hasOwnProperty.call(updates, 'chatMessageLimit')
+      ? Number(updates.chatMessageLimit)
+      : current.chatMessageLimit,
+    toolCallLimit: Object.prototype.hasOwnProperty.call(updates, 'toolCallLimit')
+      ? Number(updates.toolCallLimit)
+      : current.toolCallLimit,
+  }
+  if (!Number.isInteger(next.chatMessageLimit)) throw new Error('聊天消息条数必须是整数')
+  if (next.chatMessageLimit < CONTEXT_MESSAGE_LIMIT_MIN || next.chatMessageLimit > CONTEXT_MESSAGE_LIMIT_MAX) {
+    throw new Error(`聊天消息条数必须在 ${CONTEXT_MESSAGE_LIMIT_MIN} 到 ${CONTEXT_MESSAGE_LIMIT_MAX} 之间`)
+  }
+  if (!Number.isInteger(next.toolCallLimit)) throw new Error('工具调用条数必须是整数')
+  if (next.toolCallLimit < CONTEXT_TOOL_LIMIT_MIN || next.toolCallLimit >= next.chatMessageLimit) {
+    throw new Error(`工具调用条数必须在 ${CONTEXT_TOOL_LIMIT_MIN} 到 ${next.chatMessageLimit - 1} 之间`)
   }
   config.contextWindow = next
   patchConfig({ contextWindow: { ...next } })

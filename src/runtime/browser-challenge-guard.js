@@ -37,7 +37,7 @@ function pageUrls(payload, text) {
   const values = []
   if (typeof payload?.browser_preview?.url === 'string') values.push(payload.browser_preview.url)
   if (typeof payload?.url === 'string') values.push(payload.url)
-  for (const match of text.matchAll(/(?:Page URL:\s*|\b)(https?:\/\/[^\s<>"']+)/gi)) {
+  for (const match of text.matchAll(/Page URL:\s*(https?:\/\/[^\s<>"']+)/gi)) {
     values.push(match[1])
     if (values.length >= 12) break
   }

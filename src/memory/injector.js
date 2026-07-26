@@ -74,8 +74,9 @@ function hasRecentApiCapabilitySetupNeed(actionLog = []) {
 // hint：一层思考器的输出文本，用于扩展 L2 的记忆检索范围
 export async function runInjector({ message, state, hint = '', currentChannel = '' }) {
   const injectorStartedAt = Date.now()
-  const lastToolResult = state?.lastToolResult || null
-  if (lastToolResult) state.lastToolResult = null
+  const contextWindow = getContextWindowConfig()
+  const lastToolResult = contextWindow.toolCallLimit > 0 ? (state?.lastToolResult || null) : null
+  if (state && Object.prototype.hasOwnProperty.call(state, 'lastToolResult')) state.lastToolResult = null
 
   const confidenceHint = state?.pendingConfidenceHint || null
   if (state && 'pendingConfidenceHint' in state) state.pendingConfidenceHint = null  // 消费即焚
@@ -89,17 +90,15 @@ export async function runInjector({ message, state, hint = '', currentChannel = 
   let userProfile = null
   let conversationWindow = []
   let senderMemories = []
-  const contextWindow = getContextWindowConfig()
-
   if (senderId) {
     personMemory = getPersonMemory(senderId)
     userProfile = getUserProfile(senderId)
-    conversationWindow = getRecentConversation(senderId, contextWindow.conversationMessageLimit, 24)
+    conversationWindow = getRecentConversation(senderId, contextWindow.chatMessageLimit, 24)
     senderMemories = getMemoriesByEntity(senderId, 10)
   } else if (message && /^TICK\s/i.test(message.trim())) {
     personMemory = getPersonMemory(PRIMARY_USER_ID)
     userProfile = getUserProfile(PRIMARY_USER_ID)
-    conversationWindow = getRecentConversationTimeline(contextWindow.tickMessageLimit, L2_CONTEXT_HOURS)
+    conversationWindow = getRecentConversationTimeline(contextWindow.chatMessageLimit, L2_CONTEXT_HOURS)
     senderMemories = getMemoriesByEntity(PRIMARY_USER_ID, 10)
   }
 
@@ -193,7 +192,9 @@ export async function runInjector({ message, state, hint = '', currentChannel = 
   // 「少即是强」：保留 merged 的相关度序，只给高 salience 锚留窄保留道；
   // 不再用 rerankByImportance 按 salience 整体重排（详见 selectContextMemories 注释）。
   const memories = selectContextMemories(merged, { cap: mergeCap, anchorLane: 2 })
-  const actionLog = getRecentActionLogs(10)
+  const actionLog = contextWindow.toolCallLimit > 0
+    ? getRecentActionLogs(contextWindow.toolCallLimit)
+    : []
   const activePolicies = focusText
     ? selectActivePolicies({
         focusText,
@@ -305,5 +306,6 @@ export async function runInjector({ message, state, hint = '', currentChannel = 
     selfPerception,
     selfSnapshot,
     selfEvolution,
+    toolCallLimit: contextWindow.toolCallLimit,
   }
 }

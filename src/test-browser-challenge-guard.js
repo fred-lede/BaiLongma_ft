@@ -38,11 +38,14 @@ try {
   assert.equal(
     detectBrowserChallenge('browser_snapshot', JSON.stringify({
       ok: true,
-      content: [{ type: 'text', text: 'Article: How CAPTCHA systems work' }],
+      content: [{
+        type: 'text',
+        text: 'Page URL: https://example.com/article\nArticle: How CAPTCHA systems work\n- /url: https://example.com/captcha/demo',
+      }],
       browser_preview: { url: 'https://example.com/article', title: 'Security engineering article' },
     })),
     null,
-    'an ordinary article mentioning CAPTCHA does not trigger the hard stop',
+    'an ordinary article mentioning and linking to CAPTCHA does not trigger the hard stop',
   )
 
   let round = 0

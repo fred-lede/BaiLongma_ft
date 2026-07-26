@@ -4097,10 +4097,11 @@ function initTTSSettings() {
   const tempFeedback    = document.getElementById("settings-temperature-feedback");
   const thinkingToggle  = document.getElementById("settings-thinking");
   const thinkingFeedback = document.getElementById("settings-thinking-feedback");
-  const conversationContextSlider = document.getElementById("settings-conversation-context-limit");
-  const conversationContextVal = document.getElementById("settings-conversation-context-limit-val");
-  const tickContextSlider = document.getElementById("settings-tick-context-limit");
-  const tickContextVal = document.getElementById("settings-tick-context-limit-val");
+  const contextRange = document.getElementById("settings-context-range");
+  const chatContextSlider = document.getElementById("settings-chat-context-limit");
+  const chatContextVal = document.getElementById("settings-chat-context-limit-val");
+  const toolContextSlider = document.getElementById("settings-tool-context-limit");
+  const toolContextVal = document.getElementById("settings-tool-context-limit-val");
   const saveContextWindowBtn = document.getElementById("settings-save-context-window");
   const contextWindowFeedback = document.getElementById("settings-context-window-feedback");
   const minimaxKeyInput = document.getElementById("settings-minimax-key");
@@ -4133,6 +4134,26 @@ function initTTSSettings() {
   if (!settingsBtn || !overlay) return;
 
   let cachedProviders = null;
+
+  function syncContextWindowControls(changed = "load") {
+    let chatMessageLimit = Math.min(40, Math.max(1, Number(chatContextSlider?.value) || 20));
+    let toolCallLimit = Math.min(40, Math.max(0, Number(toolContextSlider?.value) || 0));
+    if (toolCallLimit >= chatMessageLimit) {
+      toolCallLimit = Math.max(0, chatMessageLimit - 1);
+    }
+    if (chatContextSlider) chatContextSlider.value = String(chatMessageLimit);
+    if (toolContextSlider) {
+      toolContextSlider.value = String(toolCallLimit);
+      toolContextSlider.setAttribute("aria-valuemax", String(Math.max(0, chatMessageLimit - 1)));
+    }
+    if (chatContextVal) chatContextVal.textContent = `${chatMessageLimit} 条`;
+    if (toolContextVal) toolContextVal.textContent = `${toolCallLimit} 条`;
+    if (contextRange) {
+      contextRange.style.setProperty("--chat-context-position", `${chatMessageLimit / 40 * 100}%`);
+      contextRange.style.setProperty("--tool-context-position", `${toolCallLimit / 40 * 100}%`);
+      contextRange.dataset.activeHandle = changed;
+    }
+  }
   let cachedLlm = null;
   let llmKeyVisible = false;
   let volcAsrKeyVisible = false;
@@ -4306,12 +4327,13 @@ function initTTSSettings() {
       }
       if (thinkingToggle) thinkingToggle.checked = llm.thinking === true;
       const contextWindow = llm.contextWindow || {};
-      const conversationMessageLimit = Number(contextWindow.conversationMessageLimit) || 10;
-      const tickMessageLimit = Number(contextWindow.tickMessageLimit) || 10;
-      if (conversationContextSlider) conversationContextSlider.value = String(conversationMessageLimit);
-      if (conversationContextVal) conversationContextVal.textContent = `${conversationMessageLimit} 条`;
-      if (tickContextSlider) tickContextSlider.value = String(tickMessageLimit);
-      if (tickContextVal) tickContextVal.textContent = `${tickMessageLimit} 条`;
+      const chatMessageLimit = Number(contextWindow.chatMessageLimit) || 20;
+      const toolCallLimit = Number.isInteger(Number(contextWindow.toolCallLimit))
+        ? Number(contextWindow.toolCallLimit)
+        : 5;
+      if (chatContextSlider) chatContextSlider.value = String(chatMessageLimit);
+      if (toolContextSlider) toolContextSlider.value = String(toolCallLimit);
+      syncContextWindowControls();
     } catch {}
   }
 
@@ -4672,21 +4694,22 @@ function initTTSSettings() {
     }
   });
 
-  if (conversationContextSlider && conversationContextVal) {
-    conversationContextSlider.addEventListener("input", () => {
-      conversationContextVal.textContent = `${conversationContextSlider.value} 条`;
+  if (chatContextSlider) {
+    chatContextSlider.addEventListener("input", () => {
+      syncContextWindowControls("chat");
     });
   }
-  if (tickContextSlider && tickContextVal) {
-    tickContextSlider.addEventListener("input", () => {
-      tickContextVal.textContent = `${tickContextSlider.value} 条`;
+  if (toolContextSlider) {
+    toolContextSlider.addEventListener("input", () => {
+      syncContextWindowControls("tool");
     });
   }
+  syncContextWindowControls();
   if (saveContextWindowBtn) {
     saveContextWindowBtn.addEventListener("click", async () => {
       const body = {
-        conversationMessageLimit: Number(conversationContextSlider?.value || 10),
-        tickMessageLimit: Number(tickContextSlider?.value || 10),
+        chatMessageLimit: Number(chatContextSlider?.value || 20),
+        toolCallLimit: Number(toolContextSlider?.value || 0),
       };
       saveContextWindowBtn.disabled = true;
       try {

@@ -1088,6 +1088,12 @@ async function runTurn(input, label, msg = null) {
     const persona = getConfig('persona') || ''
     const agentName = getConfig('agent_name') || '小白龙'
     const entities = getKnownEntities()
+    const toolContextLimit = Number.isInteger(injection.toolCallLimit)
+      ? injection.toolCallLimit
+      : 5
+    const recentToolActions = toolContextLimit > 0
+      ? (state.recentActions || []).slice(-toolContextLimit)
+      : []
     const hasActiveTask = !!state.task
     const terminalStreamContext = formatTerminalStreamContext()
     const extraContextJoined = [presenceText, runtimeInjection.contextText, terminalStreamContext, prefetchText, injection.uiSignalSummary, formatSceneManifest(sceneStore.manifest()), formatAIVideoPanel(getAIVideoPanelState())].filter(Boolean).join('\n\n')
@@ -1133,7 +1139,7 @@ async function runTurn(input, label, msg = null) {
       hasActiveTask,
       // 编程纪律内化的信号源二/三：task 文本 + 最近动作摘要（TICK 干活轮也能命中）
       currentTaskText: state.task || '',
-      recentActionsSummary: (state.recentActions || []).map(a => a?.summary || '').join(' | '),
+      recentActionsSummary: recentToolActions.map(a => a?.summary || '').join(' | '),
     })
 
     const baseContextArgs = {
@@ -1214,7 +1220,7 @@ async function runTurn(input, label, msg = null) {
       conversationWindow: injection.conversationWindow || [],
       input: semanticInput,
       msg,
-      recentActions: state.recentActions,
+      recentActions: recentToolActions,
       actionLog: injection.actionLog || [],
       lastToolResult: injection.lastToolResult || null,
       taskSteps: state.taskSteps,
@@ -1553,7 +1559,7 @@ async function runTurn(input, label, msg = null) {
     if (toolCallLog.length > 0) {
       const summary = toolCallLog.map(summarizeToolCall).join(', ')
       state.recentActions.push({ ts: nowTimestamp(), summary })
-      if (state.recentActions.length > 5) state.recentActions.shift()
+      if (state.recentActions.length > 40) state.recentActions.shift()
     }
     finishTurn(response)
     return
@@ -1628,11 +1634,11 @@ async function runTurn(input, label, msg = null) {
     taskManager.clearTaskFromMarker()
   }
 
-  // Update recent action log (keep last 5)
+  // 保留最多 40 个工具回合摘要；每轮实际注入多少由上下文设置裁剪。
   if (toolCallLog.length > 0) {
     const summary = toolCallLog.map(summarizeToolCall).join(', ')
     state.recentActions.push({ ts: nowTimestamp(), summary })
-    if (state.recentActions.length > 5) state.recentActions.shift()
+    if (state.recentActions.length > 40) state.recentActions.shift()
 
     // 线索模型（认识论修正）：Agent 干活本身就是注意力事件——行动者直接声明，不经过归属判定。
     // touch 开放承诺的线索（没有就 touch 前台），刷新 lastEventAt。

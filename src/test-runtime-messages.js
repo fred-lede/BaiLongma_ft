@@ -233,6 +233,18 @@ assertEqual(
 
 assertEqual(buildRuntimeContextMessages({}).length, 0, 'empty runtime context emits no messages')
 
+const expandedToolContext = buildRuntimeContextMessages({
+  actionLog: Array.from({ length: 12 }, (_, i) => ({
+    timestamp: `2026-05-25T10:${String(i).padStart(2, '0')}:00+08:00`,
+    tool: `tool_${i}`,
+    summary: `call ${i}`,
+  })),
+})[0]?.content || ''
+assert(expandedToolContext.includes('tool_0 · call 0'),
+  'runtime renders the full tool log selected by the configured limit')
+assert(expandedToolContext.includes('tool_11 · call 11'),
+  'runtime does not silently re-cap configured tool history at 10 calls')
+
 const topicMessages = buildLLMMessages({
   systemPrompt: 'SYS',
   conversationWindow: [

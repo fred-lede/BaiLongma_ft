@@ -26,7 +26,7 @@ export function getParticipantMemoryContext({ senderId = null, isTickMessage = f
     return {
       personMemory: getPersonMemory(senderId),
       userProfile: getUserProfile(senderId),
-      conversationWindow: getRecentConversation(senderId, contextWindow.conversationMessageLimit, 24),
+      conversationWindow: getRecentConversation(senderId, contextWindow.chatMessageLimit, 24),
       senderMemories: getMemoriesByEntity(senderId, 10),
     }
   }
@@ -35,7 +35,7 @@ export function getParticipantMemoryContext({ senderId = null, isTickMessage = f
     return {
       personMemory: getPersonMemory(PRIMARY_USER_ID),
       userProfile: getUserProfile(PRIMARY_USER_ID),
-      conversationWindow: getRecentConversationTimeline(contextWindow.tickMessageLimit, L2_CONTEXT_HOURS),
+      conversationWindow: getRecentConversationTimeline(contextWindow.chatMessageLimit, L2_CONTEXT_HOURS),
       senderMemories: getMemoriesByEntity(PRIMARY_USER_ID, 10),
     }
   }

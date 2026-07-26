@@ -371,17 +371,17 @@ const createSettingsModal = () => `
             </div>
           </div>
           <div class="settings-section">
-            <div class="settings-section-label">上下文消息条数</div>
-            <p class="settings-hint">分别控制普通对话和 Tick 对话每轮注入的最近消息数量。范围 1–40 条，默认均为 10 条，修改后下一轮生效。</p>
-            <div class="settings-row">
-              <label class="settings-label" for="settings-conversation-context-limit">普通对话</label>
-              <input class="settings-range" type="range" id="settings-conversation-context-limit" min="1" max="40" step="1" value="10">
-              <span class="settings-range-value" id="settings-conversation-context-limit-val">10 条</span>
+            <div class="settings-section-label">上下文注入数量</div>
+            <p class="settings-hint">聊天记录与工具调用分开控制。聊天消息范围 1–40 条；工具调用可设为 0，且最多为聊天消息数减 1。普通对话和 Tick 均在下一轮使用这组设置。</p>
+            <div class="settings-context-values" aria-live="polite">
+              <span class="settings-context-value settings-context-value-chat"><i></i>聊天消息 <strong id="settings-chat-context-limit-val">20 条</strong></span>
+              <span class="settings-context-value settings-context-value-tool"><i></i>工具调用 <strong id="settings-tool-context-limit-val">5 条</strong></span>
             </div>
-            <div class="settings-row">
-              <label class="settings-label" for="settings-tick-context-limit">Tick 对话</label>
-              <input class="settings-range" type="range" id="settings-tick-context-limit" min="1" max="40" step="1" value="10">
-              <span class="settings-range-value" id="settings-tick-context-limit-val">10 条</span>
+            <div class="settings-context-range" id="settings-context-range">
+              <span class="settings-context-progress settings-context-progress-chat"></span>
+              <span class="settings-context-progress settings-context-progress-tool"></span>
+              <input type="range" id="settings-chat-context-limit" min="1" max="40" step="1" value="20" aria-label="聊天消息注入条数">
+              <input type="range" id="settings-tool-context-limit" min="0" max="40" step="1" value="5" aria-label="工具调用注入条数">
             </div>
             <div class="settings-row-action">
               <button class="settings-save-btn" id="settings-save-context-window" type="button">保存</button>

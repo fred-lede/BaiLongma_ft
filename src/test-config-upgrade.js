@@ -166,35 +166,45 @@ async function loadFresh(json) {
   assert(getHeartbeatConfig().enabled === true, 'HB: 非法请求不会部分修改运行时心跳状态')
 }
 
-// Context-window message limits default to 10, persist independently, and reject invalid updates atomically.
+// Context-window chat/tool limits persist independently, migrate from the old
+// conversation/Tick split, and enforce toolCallLimit < chatMessageLimit atomically.
 {
   const defaults = await loadFresh({})
-  assert(defaults.getContextWindowConfig().conversationMessageLimit === 10,
-    'CTX: normal conversation context defaults to 10 messages')
-  assert(defaults.getContextWindowConfig().tickMessageLimit === 10,
-    'CTX: Tick context defaults to 10 messages')
+  assert(defaults.getContextWindowConfig().chatMessageLimit === 20,
+    'CTX: chat context defaults to 20 messages')
+  assert(defaults.getContextWindowConfig().toolCallLimit === 5,
+    'CTX: tool context defaults to 5 calls')
 
   const mod = await loadFresh({
+    schemaVersion: 3,
     contextWindow: { conversationMessageLimit: 12, tickMessageLimit: 34 },
   })
-  assert(mod.getContextWindowConfig().conversationMessageLimit === 12,
-    'CTX: saved normal conversation limit loads')
-  assert(mod.getContextWindowConfig().tickMessageLimit === 34,
-    'CTX: saved Tick limit loads')
+  assert(mod.getContextWindowConfig().chatMessageLimit === 12,
+    'CTX: legacy normal-conversation limit migrates to chat messages')
+  assert(mod.getContextWindowConfig().toolCallLimit === 5,
+    'CTX: legacy Tick limit is replaced by the independent tool-call default')
+  const migrated = JSON.parse(fs.readFileSync(configFile, 'utf-8'))
+  assert(migrated.contextWindow.conversationMessageLimit === undefined
+    && migrated.contextWindow.tickMessageLimit === undefined,
+  'CTX: obsolete normal/Tick fields are removed during migration')
 
-  const updated = mod.setContextWindowConfig({ conversationMessageLimit: 7, tickMessageLimit: 31 })
-  assert(updated.conversationMessageLimit === 7 && updated.tickMessageLimit === 31,
+  const updated = mod.setContextWindowConfig({ chatMessageLimit: 30, toolCallLimit: 5 })
+  assert(updated.chatMessageLimit === 30 && updated.toolCallLimit === 5,
     'CTX: both context limits update immediately')
   const stored = JSON.parse(fs.readFileSync(configFile, 'utf-8'))
-  assert(stored.contextWindow.conversationMessageLimit === 7 && stored.contextWindow.tickMessageLimit === 31,
+  assert(stored.contextWindow.chatMessageLimit === 30 && stored.contextWindow.toolCallLimit === 5,
     'CTX: context limits persist to config.json')
 
   let invalidRejected = false
-  try { mod.setContextWindowConfig({ conversationMessageLimit: 8, tickMessageLimit: 41 }) } catch { invalidRejected = true }
-  assert(invalidRejected, 'CTX: limits outside 1 to 40 are rejected')
-  assert(mod.getContextWindowConfig().conversationMessageLimit === 7
-    && mod.getContextWindowConfig().tickMessageLimit === 31,
+  try { mod.setContextWindowConfig({ chatMessageLimit: 5, toolCallLimit: 5 }) } catch { invalidRejected = true }
+  assert(invalidRejected, 'CTX: tool limit equal to chat limit is rejected')
+  assert(mod.getContextWindowConfig().chatMessageLimit === 30
+    && mod.getContextWindowConfig().toolCallLimit === 5,
     'CTX: invalid updates do not partially change settings')
+
+  const disabledTools = mod.setContextWindowConfig({ toolCallLimit: 0 })
+  assert(disabledTools.toolCallLimit === 0,
+    'CTX: zero disables historical tool-call injection')
 }
 
 // ── 场景 E：schema 迁移 v0 → v3，旧版 seedance、LLM 和 voice 块拆到独立文件 ──
@@ -210,7 +220,7 @@ async function loadFresh(json) {
   })
   assert(config.needsActivation === false, 'E: 迁移后 LLM 仍正常激活')
   const after = JSON.parse(fs.readFileSync(configFile, 'utf-8'))
-  assert(after.schemaVersion === 3, 'E: config.json 被打上 schemaVersion=3')
+  assert(after.schemaVersion === 4, 'E: config.json 被打上 schemaVersion=4')
   assert(after.seedance === undefined, 'E: seedance 块已从 config.json 移除')
   assert(after.apiKey === undefined && after.model === undefined && after.baseURL === undefined, 'E: LLM 凭据已从 config.json 移除')
   assert(after.voice === undefined, 'E: voice 块已从 config.json 移除')
@@ -230,17 +240,17 @@ async function loadFresh(json) {
 // ── 场景 F：已是最新 schemaVersion 的文件不被重复迁移 / 改写 ──
 {
   await loadFresh({
-    schemaVersion: 3,
+    schemaVersion: 4,
     provider: 'deepseek',
   })
   const after = JSON.parse(fs.readFileSync(configFile, 'utf-8'))
-  assert(after.schemaVersion === 3, 'F: 最新版本号保持不变')
+  assert(after.schemaVersion === 4, 'F: 最新版本号保持不变')
 }
 
 // 清理
 // Scenario G: MiMo falls back from the v2.5 Pro default to the remaining MiMo models.
 {
-  const { DEFAULT_MIMO_MODEL, MIMO_PROVIDER, getProviderModelFallbacks } = await loadFresh({ schemaVersion: 3 })
+  const { DEFAULT_MIMO_MODEL, MIMO_PROVIDER, getProviderModelFallbacks } = await loadFresh({ schemaVersion: 4 })
   const chain = getProviderModelFallbacks(MIMO_PROVIDER, DEFAULT_MIMO_MODEL)
   assert(chain[0] === 'mimo-v2.5-pro', 'G: MiMo fallback starts with the v2.5 Pro default')
   assert(chain[1] === 'mimo-v2.5', 'G: MiMo fallback tries standard v2.5 next')
@@ -253,7 +263,7 @@ async function loadFresh(json) {
 
 // Scenario H: Zhipu defaults to GLM-5.1 and validates with a lightweight no-thinking ping.
 {
-  const { DEFAULT_ZHIPU_MODEL, ZHIPU_PROVIDER, getProviderModelFallbacks, __internals } = await loadFresh({ schemaVersion: 3 })
+  const { DEFAULT_ZHIPU_MODEL, ZHIPU_PROVIDER, getProviderModelFallbacks, __internals } = await loadFresh({ schemaVersion: 4 })
   assert(DEFAULT_ZHIPU_MODEL === 'glm-5.1', 'H: Zhipu default model is GLM-5.1')
   const zhipuModels = new Set(__internals.ZHIPU_MODELS.map(m => m.id))
   assert(zhipuModels.has('glm-5.1'), 'H: Zhipu model list includes glm-5.1')

@@ -224,7 +224,7 @@ export function buildRuntimeContextMessages({ contextBlock = '', recentActions =
   }
 
   if (actionLog?.length > 0) {
-    const lines = actionLog.slice(-10).map(item => {
+    const lines = actionLog.map(item => {
       const time = formatLocalClock(item.timestamp)
       const detail = item.detail ? `\n  ${item.detail}` : ''
       return `- ${time} ${item.tool || ''} · ${item.summary || ''}${detail}`

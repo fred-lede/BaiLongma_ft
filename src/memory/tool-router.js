@@ -30,6 +30,8 @@
 
 // 已迁能力的工具名 + 工具注入选择器由能力注册表提供（单向依赖：registry 不 import 本文件）。
 import {
+  BROWSER_CAPABILITY_TOOLS,
+  BROWSER_DISPLAY_TOOLS,
   BROWSER_TOOLS,
   capabilityToolsFor,
   isDynamicWebReadIntent,
@@ -38,6 +40,8 @@ import {
   isStatefulBrowserIntent,
   isTerseBrowserFollowup,
 } from '../capabilities/capability-registry.js'
+import { isSystemBrowserIntent } from '../mcp/browser-display.js'
+import { isExplicitAgentBrowserDataDeletionRequest } from '../mcp/browser-data-intent.js'
 import { shouldInjectCapabilityDemo } from '../capability-demo-intent.js'
 
 // ---- 工具分组 ----
@@ -342,8 +346,9 @@ export function selectTools(ctx = {}) {
   } = ctx
 
   const body = (messageBody || '').toLowerCase()
+  const systemBrowserIntent = isSystemBrowserIntent(messageBody)
   const statefulBrowserIntent = isStatefulBrowserIntent(messageBody)
-  const webAccessIntent = (
+  const webAccessIntent = !systemBrowserIntent && (
     statefulBrowserIntent
     || isStatelessWebSearchIntent(messageBody)
     || isStatelessWebReadIntent(messageBody)
@@ -403,7 +408,9 @@ export function selectTools(ctx = {}) {
     // 媒体场景常需要先联网找链接——尤其视频要用 Playwright MCP 搜到可嵌入的 B 站 BV 才能播。
     // 不注入浏览器的话，模型会误以为"没有联网搜索"而直接放弃找视频。
     // （这是"找的视频不能播放/找不到视频"的一个隐藏根因）。音乐用不到也无妨。
-    for (const t of BROWSER_TOOLS) out.add(t)
+    if (!systemBrowserIntent) {
+      for (const t of BROWSER_CAPABILITY_TOOLS) out.add(t)
+    }
   }
   if (hits(body, REMINDER_TRIGGERS)) {
     for (const t of REMINDER_TOOLS) out.add(t)
@@ -467,9 +474,10 @@ export function selectTools(ctx = {}) {
   if (Array.isArray(recentActionLog)) {
     for (const entry of recentActionLog) {
       const name = entry?.tool
+      if (name === 'browser_clear_data' && !isExplicitAgentBrowserDataDeletionRequest(messageBody)) continue
       // Stateful Playwright continuity must restore the complete safe group
       // below, never a single stranded action schema on an unrelated turn.
-      if (typeof name === 'string' && BROWSER_TOOLS.includes(name)) continue
+      if (typeof name === 'string' && (BROWSER_TOOLS.includes(name) || BROWSER_DISPLAY_TOOLS.includes(name))) continue
       if (typeof name === 'string' && name && !suppressed.has(name)) out.add(name)
     }
   }
@@ -489,13 +497,13 @@ export function selectTools(ctx = {}) {
   // allowlist rather than only the one tool found in ActionLog.
   const browserContinuity = terseBrowserFollowup && recentPlaywrightAction
   if (browserContinuity) {
-    for (const name of BROWSER_TOOLS) out.add(name)
+    for (const name of BROWSER_CAPABILITY_TOOLS) out.add(name)
   }
 
   // All current web intents get the complete safe Playwright group. There is no
   // stateless search/read fallback to restore from ActionLog.
   if (webAccessIntent || browserContinuity) {
-    for (const name of BROWSER_TOOLS) out.add(name)
+    for (const name of BROWSER_CAPABILITY_TOOLS) out.add(name)
   }
 
   // —— Fastpath 收紧（可选） ——

@@ -1218,6 +1218,10 @@ let browserEmbedAnimationUntil = 0;
 let browserPreviewTransitionFrame = 0;
 let browserPreviewTransitionTimer = null;
 let lastBrowserEmbedGeometry = "";
+let browserPreviewDisplayMode = "hidden";
+let browserPreviewHostTransitioning = false;
+let browserPreviewHostTransitionTarget = "";
+let browserPreviewHostTransitionToken = 0;
 
 function readHeartbeatStorage(key, fallback) {
   try {
@@ -1308,6 +1312,7 @@ function addActionLogEntry(name, args = {}, result = "", ok = true, ts = Date.no
 
 function isCardBrowserAction(data = {}) {
   return String(data.name || "").startsWith("browser_")
+    && data.name !== "browser_clear_data"
     && data.browser_display_mode === "card";
 }
 
@@ -1329,13 +1334,17 @@ function clearBrowserPreviewTransition() {
 }
 
 function callBrowserEmbed(method, payload) {
-  if (!browserEmbedBridge || typeof browserEmbedBridge[method] !== "function") return;
+  if (!browserEmbedBridge || typeof browserEmbedBridge[method] !== "function") {
+    return Promise.resolve(null);
+  }
   try {
-    Promise.resolve(browserEmbedBridge[method](payload)).catch(error => {
+    return Promise.resolve(browserEmbedBridge[method](payload)).catch(error => {
       console.warn(`[brain-ui] browser embed ${method} failed:`, error?.message || error);
+      return null;
     });
   } catch (error) {
     console.warn(`[brain-ui] browser embed ${method} failed:`, error?.message || error);
+    return Promise.resolve(null);
   }
 }
 
@@ -1389,6 +1398,7 @@ function browserEmbedPayload() {
 
 function syncNativeBrowserEmbed(timestamp = performance.now()) {
   browserEmbedFrameRequest = 0;
+  if (browserPreviewHostTransitioning) return;
   const payload = browserEmbedPayload();
   if (!payload) {
     if (browserPreviewActive) hideNativeBrowserEmbed();
@@ -1430,7 +1440,10 @@ function finalizeBrowserPreviewHidden({
   clearBrowserPreviewTransition();
   browserEmbedAnimationUntil = 0;
   browserPreviewActive = false;
-  browserPreviewNativeUrl = "";
+  if (hideEmbed) {
+    browserPreviewNativeUrl = "";
+    browserPreviewDisplayMode = "hidden";
+  }
   if (!preservePending) {
     browserPreviewPending = false;
   }
@@ -1470,13 +1483,13 @@ function revealBrowserPreviewSurface() {
     if (!browserPreviewActive || browserPreviewEl.hidden) return;
     actionLogModuleEl.dataset.browserPhase = "browser";
     const duration = browserPreviewTransitionDuration();
-    scheduleNativeBrowserEmbedSync(duration);
+    if (!browserPreviewHostTransitioning) scheduleNativeBrowserEmbedSync(duration);
     browserPreviewTransitionTimer = setTimeout(() => {
       browserPreviewTransitionTimer = null;
       if (!browserPreviewActive || actionLogModuleEl.dataset.browserPhase !== "browser") return;
       if (actionLogEl) actionLogEl.hidden = true;
       actionLogSurfaceEl?.setAttribute("aria-hidden", "true");
-      scheduleNativeBrowserEmbedSync();
+      if (!browserPreviewHostTransitioning) scheduleNativeBrowserEmbedSync();
     }, duration + 34);
   });
 }
@@ -1498,7 +1511,7 @@ function concealBrowserPreviewSurface({
   browserPreviewTransitionFrame = requestAnimationFrame(() => {
     browserPreviewTransitionFrame = 0;
     if (actionLogModuleEl) delete actionLogModuleEl.dataset.browserPhase;
-    scheduleNativeBrowserEmbedSync(duration);
+    if (!browserPreviewHostTransitioning) scheduleNativeBrowserEmbedSync(duration);
     browserPreviewTransitionTimer = setTimeout(() => {
       browserPreviewTransitionTimer = null;
       finalizeBrowserPreviewHidden({ hideEmbed, preservePending, clearAsset });
@@ -1515,52 +1528,126 @@ function concealBrowserPreviewForAction({ hideEmbed = true } = {}) {
 }
 
 function hideBrowserPreview({ immediate = false } = {}) {
+  browserPreviewHostTransitionToken += 1;
+  browserPreviewHostTransitioning = false;
+  browserPreviewHostTransitionTarget = "";
+  browserPreviewDisplayMode = "hidden";
   browserPreviewLoadToken += 1;
   browserPreviewPending = false;
   browserPreviewNativeUrl = "";
   concealBrowserPreviewSurface({ immediate });
 }
 
-function prepareBrowserPreview() {
+function prepareBrowserPreview(data = {}) {
   browserPreviewLoadToken += 1;
   browserPreviewPending = true;
+  if (browserEmbedBridge && browserPreviewDisplayMode === "window") {
+    void showNativeBrowserPreview({ ...data, transition: true });
+    return;
+  }
   // Once the live page is visible, keep it on screen while Playwright clicks,
   // types, scrolls, or navigates. Only the very first load waits off-screen;
   // browser_close owns the later decision to dismiss the surface.
   if (!browserPreviewActive) concealBrowserPreviewForAction();
 }
 
-function showNativeBrowserPreview(data = {}) {
+function measureFinalBrowserCardPayload() {
+  if (!actionLogModuleEl) return null;
+  const previousPhase = actionLogModuleEl.dataset.browserPhase;
+  actionLogModuleEl.dataset.browserPhase = "browser";
+  void actionLogModuleEl.offsetWidth;
+  const payload = browserEmbedPayload();
+  if (previousPhase === undefined) delete actionLogModuleEl.dataset.browserPhase;
+  else actionLogModuleEl.dataset.browserPhase = previousPhase;
+  void actionLogModuleEl.offsetWidth;
+  return payload;
+}
+
+async function showNativeBrowserPreview(data = {}) {
+  if (
+    browserPreviewHostTransitioning
+    && browserPreviewHostTransitionTarget === "card"
+  ) return;
+  const switchingFromWindow = browserPreviewDisplayMode === "window";
+  const transitionToken = ++browserPreviewHostTransitionToken;
   browserPreviewLoadToken += 1;
   browserPreviewPending = false;
   browserPreviewActive = true;
-  browserPreviewNativeUrl = String(data.url || "");
+  browserPreviewDisplayMode = "card";
+  if (data.url) browserPreviewNativeUrl = String(data.url);
   if (browserPreviewEl) {
     browserPreviewEl.dataset.renderer = "native";
     browserPreviewEl.dataset.state = "ready";
   }
+  browserPreviewHostTransitioning = switchingFromWindow;
+  browserPreviewHostTransitionTarget = switchingFromWindow ? "card" : "";
   revealBrowserPreviewSurface();
+  if (!switchingFromWindow) return;
+
+  const payload = measureFinalBrowserCardPayload();
+  if (!payload) {
+    browserPreviewHostTransitioning = false;
+    browserPreviewHostTransitionTarget = "";
+    scheduleNativeBrowserEmbedSync(browserPreviewTransitionDuration());
+    return;
+  }
+  lastBrowserEmbedGeometry = JSON.stringify(payload);
+  await callBrowserEmbed("update", {
+    ...payload,
+    transition: {
+      enabled: data.transition !== false,
+      durationMs: browserPreviewTransitionDuration(),
+    },
+  });
+  if (transitionToken !== browserPreviewHostTransitionToken) return;
+  browserPreviewHostTransitioning = false;
+  browserPreviewHostTransitionTarget = "";
+  lastBrowserEmbedGeometry = "";
+  scheduleNativeBrowserEmbedSync();
 }
 
-function showNativeBrowserWindow(data = {}) {
+async function showNativeBrowserWindow(data = {}) {
   if (!browserEmbedBridge) {
     hideBrowserPreview();
     return;
   }
+  if (
+    browserPreviewHostTransitioning
+    && browserPreviewHostTransitionTarget === "window"
+  ) return;
+  const switchingFromCard = browserPreviewDisplayMode === "card"
+    && browserPreviewActive
+    && !browserPreviewEl?.hidden;
+  const transitionToken = ++browserPreviewHostTransitionToken;
+  browserPreviewDisplayMode = "window";
+  browserPreviewHostTransitioning = switchingFromCard;
+  browserPreviewHostTransitionTarget = switchingFromCard ? "window" : "";
   browserPreviewLoadToken += 1;
   browserPreviewPending = false;
-  finalizeBrowserPreviewHidden({ hideEmbed: false });
   if (browserEmbedFrameRequest) {
     cancelAnimationFrame(browserEmbedFrameRequest);
     browserEmbedFrameRequest = 0;
   }
   lastBrowserEmbedGeometry = "";
-  callBrowserEmbed("update", {
+  const hostUpdate = callBrowserEmbed("update", {
     mode: "window",
     visible: true,
     ...(data.url ? { url: String(data.url) } : {}),
     interactive: true,
+    transition: {
+      enabled: switchingFromCard && data.transition !== false,
+      durationMs: browserPreviewTransitionDuration(),
+    },
   });
+  if (switchingFromCard) {
+    concealBrowserPreviewSurface({ hideEmbed: false, clearAsset: false });
+  } else {
+    finalizeBrowserPreviewHidden({ hideEmbed: false, clearAsset: false });
+  }
+  await hostUpdate;
+  if (transitionToken !== browserPreviewHostTransitionToken) return;
+  browserPreviewHostTransitioning = false;
+  browserPreviewHostTransitionTarget = "";
 }
 
 async function loadBrowserPreviewImage(data = {}) {
@@ -1619,7 +1706,7 @@ function handleBrowserPreviewEvent(data = {}) {
     if (data.state === "closed" || data.state === "failed") {
       hideBrowserPreview();
     } else if (data.state === "ready") {
-      showNativeBrowserWindow(data);
+      void showNativeBrowserWindow(data);
     }
     return;
   }
@@ -1634,7 +1721,7 @@ function handleBrowserPreviewEvent(data = {}) {
   }
   if (data.state !== "ready") return;
   if (browserEmbedBridge) {
-    showNativeBrowserPreview(data);
+    void showNativeBrowserPreview(data);
     return;
   }
   void loadBrowserPreviewImage(data);
@@ -2050,12 +2137,13 @@ const AI_TOOL_GROUPS = {
   "改动文件": new Set(["write_file", "make_dir", "delete_file"]),
   "执行命令": new Set(["exec_command", "exec_quick_command", "exec_task_command", "exec_background_command", "download_file", "kill_process", "list_processes"]),
   "上网": new Set([
-    "browser_navigate", "browser_navigate_back", "browser_snapshot", "browser_find",
+    "browser_navigate", "browser_navigate_back", "browser_navigate_forward", "browser_reload", "browser_snapshot", "browser_find",
     "browser_click", "browser_type", "browser_fill_form", "browser_select_option",
     "browser_press_key", "browser_hover", "browser_drag", "browser_wait_for",
     "browser_handle_dialog", "browser_tabs", "browser_take_screenshot",
     "browser_console_messages", "browser_resize", "browser_close",
   ]),
+  "清理浏览器": new Set(["browser_clear_data"]),
   "调取记忆": new Set(["search_memory", "recall_memory", "probe_memory", "upsert_memory", "merge_memories", "downgrade_memory"]),
   "推送界面": new Set(["ui_set", "focus_banner"]),
   "处理多媒体": new Set(["speak", "generate_lyrics", "generate_music", "generate_image", "music", "media_mode"]),
@@ -2418,10 +2506,10 @@ function handle({ type, data = {}, ts = null }) {
       setVoiceThinking(false);
       // 思考动画已停，但动作尚未真正执行 —— 给一个占位状态避免 UI 死寂
       const stream = currentStream();
-      const action = data.name ? stream.toolAction(data.name) : "";
-      if (isCardBrowserAction(data)) prepareBrowserPreview();
+      const action = data.name ? stream.toolAction(data.name, data.args) : "";
+      if (isCardBrowserAction(data)) prepareBrowserPreview(data);
       else if (String(data.name || "").startsWith("browser_") && data.browser_display_mode === "window") {
-        showNativeBrowserWindow(data);
+        void showNativeBrowserWindow(data);
       }
       if (currentPath !== "l1") {
         revealCognitionStream();
@@ -2435,10 +2523,10 @@ function handle({ type, data = {}, ts = null }) {
       // 工具开始执行时给一次小跳；tool_call 是完成事件，不再重复入队。
       triggerHeartbeatPulse(HEARTBEAT_TOOL_STRENGTH, "minor");
       const stream = currentStream();
-      const action = data.name ? stream.toolAction(data.name) : "处理事务";
-      if (isCardBrowserAction(data)) prepareBrowserPreview();
+      const action = data.name ? stream.toolAction(data.name, data.args) : "处理事务";
+      if (isCardBrowserAction(data)) prepareBrowserPreview(data);
       else if (String(data.name || "").startsWith("browser_") && data.browser_display_mode === "window") {
-        showNativeBrowserWindow(data);
+        void showNativeBrowserWindow(data);
       }
       if (currentPath !== "l1") setCognitionState(`进行中 · ${action}`, "tool");
       stream.setTimedStatus(`正在${action}…`, "busy", {
@@ -4397,7 +4485,7 @@ function initTTSSettings() {
   lanAddressSelect?.addEventListener("change", showSelectedLanAccessEntry);
 
   const PLAYWRIGHT_BROWSER_TOOL_NAMES = [
-    "browser_navigate", "browser_navigate_back", "browser_snapshot", "browser_find",
+    "browser_navigate", "browser_navigate_back", "browser_navigate_forward", "browser_reload", "browser_snapshot", "browser_find",
     "browser_click", "browser_type", "browser_fill_form", "browser_select_option",
     "browser_press_key", "browser_hover", "browser_drag", "browser_wait_for",
     "browser_handle_dialog", "browser_tabs", "browser_take_screenshot",

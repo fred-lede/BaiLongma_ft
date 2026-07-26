@@ -1,7 +1,7 @@
 'use strict'
 
 const BROWSER_EMBED_PARTITION = 'persist:bailongma-browser'
-const configuredSessions = new WeakSet()
+const configuredSessions = new WeakMap()
 
 function isAllowedWebUrl(value) {
   if (typeof value !== 'string' || !value.trim()) return false
@@ -39,13 +39,18 @@ function normalizeBounds(value, contentBounds) {
   const contentWidth = finiteNonNegative(contentBounds?.width, 'window width')
   const contentHeight = finiteNonNegative(contentBounds?.height, 'window height')
   const roundingTolerance = 2
+  const horizontalTransitionAllowance = Math.min(
+    contentWidth,
+    Math.max(128, width),
+  )
 
-  // Horizontal card transitions intentionally begin just beyond the right
-  // edge. Electron clips child Views to the BaseWindow, so allow one viewport
-  // of controlled overflow while still rejecting oversized or unbounded IPC
-  // geometry. This lets the live WebContentsView move with its DOM bezel.
+  // Horizontal card transitions intentionally begin beyond the right edge by
+  // one card width plus a small CSS gap. Electron clips child Views to the
+  // BaseWindow, so allow that bounded overflow while still rejecting oversized
+  // or unbounded IPC geometry. This lets the live WebContentsView move with its
+  // DOM bezel instead of failing the first off-screen animation frame.
   if (
-    x > contentWidth + roundingTolerance
+    x > contentWidth + horizontalTransitionAllowance + roundingTolerance
     || y > contentHeight + roundingTolerance
     || width > contentWidth + roundingTolerance
     || height > contentHeight + roundingTolerance
@@ -68,9 +73,22 @@ function normalizeBounds(value, contentBounds) {
   }
 }
 
-function configureIsolatedSession(targetSession) {
-  if (!targetSession || configuredSessions.has(targetSession)) return
-  configuredSessions.add(targetSession)
+function requestPolicyUrl(value) {
+  const parsed = new URL(String(value || ''))
+  if (parsed.protocol === 'ws:') parsed.protocol = 'http:'
+  else if (parsed.protocol === 'wss:') parsed.protocol = 'https:'
+  return parsed.href
+}
+
+function configureIsolatedSession(targetSession, {
+  assertRequestAllowed,
+  installNativeRequestGuard = false,
+  logger = console,
+} = {}) {
+  if (!targetSession) return false
+  if (configuredSessions.has(targetSession)) {
+    return configuredSessions.get(targetSession).nativeRequestGuard
+  }
 
   targetSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false))
   targetSession.setPermissionCheckHandler(() => false)
@@ -78,6 +96,42 @@ function configureIsolatedSession(targetSession) {
     event.preventDefault()
     try { item?.cancel() } catch {}
   })
+
+  let nativeRequestGuard = false
+  if (
+    installNativeRequestGuard
+    && typeof assertRequestAllowed === 'function'
+    && typeof targetSession.webRequest?.onBeforeRequest === 'function'
+  ) {
+    targetSession.webRequest.onBeforeRequest({
+      urls: ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*'],
+    }, (details, callback) => {
+      let completed = false
+      const finish = decision => {
+        if (completed) return
+        completed = true
+        callback(decision)
+      }
+      let policyUrl
+      try {
+        policyUrl = requestPolicyUrl(details?.url)
+      } catch (error) {
+        logger.warn?.('[browser-embed] blocked malformed network request:', error?.message || error)
+        finish({ cancel: true })
+        return
+      }
+      Promise.resolve(assertRequestAllowed(policyUrl)).then(
+        () => finish({ cancel: false }),
+        error => {
+          logger.warn?.('[browser-embed] blocked network request:', error?.message || error)
+          finish({ cancel: true })
+        },
+      )
+    })
+    nativeRequestGuard = true
+  }
+  configuredSessions.set(targetSession, { nativeRequestGuard })
+  return nativeRequestGuard
 }
 
 function navigationUrl(event, legacyUrl) {
@@ -96,8 +150,15 @@ function createBrowserEmbedHost({
   WebContentsView,
   View,
   BaseWindow,
+  getPartition = () => BROWSER_EMBED_PARTITION,
   isAppQuitting = () => false,
+  onNavigation = () => {},
+  assertNavigationAllowed = async url => normalizeWebUrl(url),
+  nativeRequestGuard = false,
+  onDiagnosticInput = () => false,
   logger = console,
+  transitionDurationMs = 480,
+  waitForTransition = ms => new Promise(resolve => setTimeout(resolve, ms)),
 } = {}) {
   if (typeof WebContentsView !== 'function') {
     throw new TypeError('WebContentsView constructor is required')
@@ -107,9 +168,15 @@ function createBrowserEmbedHost({
   let currentParentWindow = null
   let externalWindow = null
   let browserView = null
+  let browserViewPartition = null
+  let browserViewNativeRequestGuard = false
   let inputShield = null
   let rendererReadyPromise = null
   let requestedUrl = null
+  let externalRestingContentBounds = null
+  let transitionSequence = 0
+  let windowOpenSequence = 0
+  let pendingWindowOpenNavigation = null
   const state = {
     available: true,
     attached: false,
@@ -122,6 +189,8 @@ function createBrowserEmbedHost({
     zoomFactor: 1,
     loading: false,
     error: null,
+    transitioning: false,
+    transitionTarget: null,
   }
 
   function snapshot() {
@@ -130,7 +199,7 @@ function createBrowserEmbedHost({
       ...state,
       bounds: state.bounds ? { ...state.bounds } : null,
       webContentsId: contents && !contents.isDestroyed() ? contents.id : null,
-      partition: BROWSER_EMBED_PARTITION,
+      partition: browserViewPartition || String(getPartition() || BROWSER_EMBED_PARTITION),
     }
   }
 
@@ -140,7 +209,11 @@ function createBrowserEmbedHost({
   }
 
   function applyExternalBounds() {
-    if (!externalWindow || externalWindow.isDestroyed() || state.mode !== 'window') return
+    if (
+      !externalWindow
+      || externalWindow.isDestroyed()
+      || currentParentWindow !== externalWindow
+    ) return
     const content = externalWindow.getContentBounds()
     const bounds = { x: 0, y: 0, width: content.width, height: content.height }
     state.bounds = bounds
@@ -152,10 +225,48 @@ function createBrowserEmbedHost({
     }
   }
 
+  function setExternalContentBounds(windowHost, bounds, animate = false) {
+    if (typeof windowHost.setContentBounds === 'function') {
+      windowHost.setContentBounds(bounds, animate)
+      return
+    }
+    windowHost.setBounds(bounds, animate)
+  }
+
+  function cardScreenBounds(targetWindow, bounds) {
+    const owner = targetWindow.getContentBounds()
+    return {
+      x: Math.round(owner.x + bounds.x),
+      y: Math.round(owner.y + bounds.y),
+      width: Math.max(1, Math.round(bounds.width)),
+      height: Math.max(1, Math.round(bounds.height)),
+    }
+  }
+
+  function transitionConfig(value) {
+    const enabled = value === true || (value && typeof value === 'object' && value.enabled !== false)
+    const requestedDuration = value && typeof value === 'object'
+      ? Number(value.durationMs)
+      : Number(transitionDurationMs)
+    return {
+      enabled,
+      durationMs: Number.isFinite(requestedDuration)
+        ? Math.max(0, Math.min(2_000, requestedDuration))
+        : 480,
+    }
+  }
+
+  async function waitForActiveTransition(token, durationMs) {
+    if (durationMs > 0) await waitForTransition(durationMs)
+    return token === transitionSequence
+  }
+
   function createView() {
+    const partition = String(getPartition() || '').trim()
+    if (!partition) throw new TypeError('browser embed partition is required')
     const view = new WebContentsView({
       webPreferences: {
-        partition: BROWSER_EMBED_PARTITION,
+        partition,
         sandbox: true,
         nodeIntegration: false,
         contextIsolation: true,
@@ -166,14 +277,47 @@ function createBrowserEmbedHost({
         plugins: false,
       },
     })
+    browserViewPartition = partition
     const contents = view.webContents
-    configureIsolatedSession(contents.session)
+    browserViewNativeRequestGuard = configureIsolatedSession(contents.session, {
+      assertRequestAllowed: assertNavigationAllowed,
+      installNativeRequestGuard: nativeRequestGuard,
+      logger,
+    })
 
-    contents.setWindowOpenHandler(() => ({ action: 'deny' }))
+    contents.setWindowOpenHandler(details => {
+      const rawUrl = String(details?.url || '')
+      const sequence = ++windowOpenSequence
+      const navigation = Promise.resolve().then(async () => {
+        const normalized = normalizeWebUrl(rawUrl)
+        const allowedUrl = await assertNavigationAllowed(normalized)
+        if (contents.isDestroyed()) throw new Error('browser page was closed before navigation')
+        await contents.loadURL(String(allowedUrl || normalized))
+        const finalUrl = contents.getURL()
+        if (!isAllowedWebUrl(finalUrl)) throw new Error('new-window target did not finish on an HTTP(S) page')
+        return { ok: true, sequence, requestedUrl: normalized, finalUrl }
+      }).catch(error => {
+        logger.warn?.('[browser-embed] blocked new-window navigation:', error?.message || error)
+        return {
+          ok: false,
+          sequence,
+          requestedUrl: isAllowedWebUrl(rawUrl) ? rawUrl : '',
+          error: error?.message || String(error),
+        }
+      })
+      // Deny the popup unconditionally: a validated target is taken over by
+      // this one managed WebContents instead of creating a second tab/window.
+      pendingWindowOpenNavigation = { sequence, consumed: false, navigation }
+      return { action: 'deny' }
+    })
     contents.on('will-frame-navigate', blockUnsafeNavigation)
     contents.on('will-navigate', blockUnsafeNavigation)
     contents.on('will-redirect', blockUnsafeNavigation)
-    contents.on('before-input-event', event => {
+    contents.on('before-input-event', (event, input) => {
+      if (onDiagnosticInput(input, contents) === true) {
+        event.preventDefault()
+        return
+      }
       if (!state.interactive) event.preventDefault()
     })
     contents.on('did-start-loading', () => {
@@ -186,18 +330,35 @@ function createBrowserEmbedHost({
       if (isAllowedWebUrl(currentUrl)) {
         state.url = currentUrl
         requestedUrl = currentUrl
+        try {
+          onNavigation({
+            url: currentUrl,
+            title: typeof contents.getTitle === 'function' ? contents.getTitle() : '',
+            visitedAt: Date.now(),
+          })
+        } catch (error) {
+          logger.warn?.('[browser-embed] unable to record navigation:', error?.message || error)
+        }
       }
     })
     contents.on('did-navigate', (_event, url) => {
       if (isAllowedWebUrl(url)) {
         state.url = url
         requestedUrl = url
+        try { onNavigation({ url, title: '', visitedAt: Date.now() }) } catch {}
       }
     })
     contents.on('did-navigate-in-page', (_event, url) => {
       if (isAllowedWebUrl(url)) {
         state.url = url
         requestedUrl = url
+        try {
+          onNavigation({
+            url,
+            title: typeof contents.getTitle === 'function' ? contents.getTitle() : '',
+            visitedAt: Date.now(),
+          })
+        } catch {}
       }
     })
     contents.on('did-fail-load', (_event, errorCode, errorDescription, validatedUrl, isMainFrame) => {
@@ -242,6 +403,9 @@ function createBrowserEmbedHost({
   }
 
   function detachFromOwner({ closeContents = false } = {}) {
+    transitionSequence += 1
+    state.transitioning = false
+    state.transitionTarget = null
     removeFromCurrentParent()
     state.visible = false
     setViewVisibility(false)
@@ -251,6 +415,7 @@ function createBrowserEmbedHost({
     }
     if (closeContents) {
       browserView = null
+      browserViewNativeRequestGuard = false
       inputShield = null
       rendererReadyPromise = null
       requestedUrl = null
@@ -348,13 +513,25 @@ function createBrowserEmbedHost({
       backgroundColor: '#000000',
     })
     const hostWindow = externalWindow
-    hostWindow.on('resize', applyExternalBounds)
+    externalRestingContentBounds = hostWindow.getContentBounds()
+    const rememberExternalBounds = () => {
+      if (
+        state.transitioning
+        || state.mode !== 'window'
+        || currentParentWindow !== hostWindow
+        || !state.visible
+      ) return
+      externalRestingContentBounds = hostWindow.getContentBounds()
+    }
+    hostWindow.on('resize', () => {
+      applyExternalBounds()
+      rememberExternalBounds()
+    })
+    hostWindow.on('move', rememberExternalBounds)
     hostWindow.on('close', event => {
       if (isAppQuitting()) return
       event.preventDefault()
-      hostWindow.hide()
-      state.visible = false
-      setViewVisibility(false)
+      closePage()
     })
     hostWindow.on('closed', () => {
       if (currentParentWindow === hostWindow) {
@@ -364,6 +541,113 @@ function createBrowserEmbedHost({
       if (externalWindow === hostWindow) externalWindow = null
     })
     return hostWindow
+  }
+
+  function applyCardLayout(targetWindow, { bounds, radius, visible, interactive }) {
+    if (externalWindow && !externalWindow.isDestroyed()) externalWindow.hide()
+    attachTo(targetWindow)
+    state.mode = 'card'
+    state.interactive = interactive
+    state.bounds = bounds
+    state.radius = Math.min(radius, bounds.width / 2, bounds.height / 2)
+    state.zoomFactor = bounds.width > 0 ? Math.min(1, bounds.width / 1280) : 1
+    state.visible = visible && bounds.width > 0 && bounds.height > 0
+    browserView.setBounds(bounds)
+    browserView.setBorderRadius(state.radius)
+    browserView.webContents.setZoomFactor(state.zoomFactor)
+    if (inputShield) {
+      inputShield.setBounds(bounds)
+      inputShield.setBorderRadius(state.radius)
+    }
+    setViewVisibility(state.visible)
+  }
+
+  async function moveToWindow(targetWindow, { visible, interactive, transition }) {
+    const windowHost = ensureExternalWindow()
+    const sourceIsCard = currentParentWindow !== windowHost
+    const sourceWasVisible = state.visible
+    const reversingCardTransition = Boolean(
+      currentParentWindow === windowHost
+      && state.transitioning
+      && state.transitionTarget === 'card',
+    )
+    const startBounds = sourceIsCard && state.bounds
+      ? cardScreenBounds(targetWindow, state.bounds)
+      : null
+    const targetBounds = externalRestingContentBounds || windowHost.getContentBounds()
+    const shouldAnimate = Boolean(
+      transition.enabled
+      && sourceWasVisible
+      && visible
+      && ((sourceIsCard && startBounds) || reversingCardTransition),
+    )
+    const token = ++transitionSequence
+
+    state.mode = 'window'
+    state.interactive = interactive
+    state.radius = 0
+    state.zoomFactor = 1
+    state.transitioning = shouldAnimate
+    state.transitionTarget = shouldAnimate ? 'window' : null
+    browserView.webContents.setZoomFactor(1)
+
+    if (shouldAnimate && startBounds) setExternalContentBounds(windowHost, startBounds, false)
+    attachTo(windowHost)
+    applyExternalBounds()
+    state.visible = visible && state.bounds.width > 0 && state.bounds.height > 0
+    setViewVisibility(state.visible)
+    if (state.visible) windowHost.show()
+    else windowHost.hide()
+
+    if (shouldAnimate) {
+      setExternalContentBounds(windowHost, targetBounds, true)
+      const active = await waitForActiveTransition(token, transition.durationMs)
+      if (!active) return snapshot()
+      applyExternalBounds()
+    } else if (reversingCardTransition) {
+      // A non-animated reversal still has to cancel the native shrink that is
+      // already in flight, otherwise the large host can finish at card size.
+      setExternalContentBounds(windowHost, targetBounds, false)
+      applyExternalBounds()
+    }
+
+    if (token === transitionSequence) {
+      state.transitioning = false
+      state.transitionTarget = null
+      if (state.visible) windowHost.focus()
+    }
+    return snapshot()
+  }
+
+  async function moveToCard(targetWindow, { bounds, radius, visible, interactive, transition }) {
+    const sourceIsWindow = Boolean(
+      externalWindow
+      && !externalWindow.isDestroyed()
+      && currentParentWindow === externalWindow,
+    )
+    const sourceWasVisible = state.visible
+    const shouldAnimate = Boolean(
+      transition.enabled
+      && sourceIsWindow
+      && sourceWasVisible
+      && visible,
+    )
+    const token = ++transitionSequence
+
+    state.transitioning = shouldAnimate
+    state.transitionTarget = shouldAnimate ? 'card' : null
+    if (shouldAnimate) {
+      const targetBounds = cardScreenBounds(targetWindow, bounds)
+      setExternalContentBounds(externalWindow, targetBounds, true)
+      const active = await waitForActiveTransition(token, transition.durationMs)
+      if (!active) return snapshot()
+    }
+
+    if (token !== transitionSequence) return snapshot()
+    applyCardLayout(targetWindow, { bounds, radius, visible, interactive })
+    state.transitioning = false
+    state.transitionTarget = null
+    return snapshot()
   }
 
   async function update(targetWindow, options = {}) {
@@ -386,41 +670,24 @@ function createBrowserEmbedHost({
       : null
     const radius = finiteNonNegative(options.radius ?? 0, 'browser embed radius')
     const nextUrl = options.url == null ? null : normalizeWebUrl(options.url)
+    const transition = transitionConfig(options.transition)
 
     ensureView(targetWindow)
     await ensureRendererReady()
-    state.mode = mode
-    state.interactive = options.interactive === true
     if (mode === 'window') {
-      const windowHost = ensureExternalWindow()
-      attachTo(windowHost)
-      state.radius = 0
-      state.zoomFactor = 1
-      browserView.webContents.setZoomFactor(1)
-      applyExternalBounds()
-      state.visible = options.visible && state.bounds.width > 0 && state.bounds.height > 0
-      setViewVisibility(state.visible)
-      if (state.visible) {
-        windowHost.show()
-        windowHost.focus()
-      } else {
-        windowHost.hide()
-      }
+      await moveToWindow(targetWindow, {
+        visible: options.visible,
+        interactive: options.interactive === true,
+        transition,
+      })
     } else {
-      if (externalWindow && !externalWindow.isDestroyed()) externalWindow.hide()
-      attachTo(targetWindow)
-      state.bounds = bounds
-      state.radius = Math.min(radius, bounds.width / 2, bounds.height / 2)
-      state.zoomFactor = bounds.width > 0 ? Math.min(1, bounds.width / 1280) : 1
-      state.visible = options.visible && bounds.width > 0 && bounds.height > 0
-      browserView.setBounds(bounds)
-      browserView.setBorderRadius(state.radius)
-      browserView.webContents.setZoomFactor(state.zoomFactor)
-      if (inputShield) {
-        inputShield.setBounds(bounds)
-        inputShield.setBorderRadius(state.radius)
-      }
-      setViewVisibility(state.visible)
+      await moveToCard(targetWindow, {
+        bounds,
+        radius,
+        visible: options.visible,
+        interactive: options.interactive === true,
+        transition,
+      })
     }
 
     if (nextUrl && nextUrl !== requestedUrl) {
@@ -448,9 +715,31 @@ function createBrowserEmbedHost({
     if (mainOwnerWindow && mainOwnerWindow !== targetWindow) {
       throw new Error('embedded browser belongs to another window')
     }
+    transitionSequence += 1
     state.visible = false
+    state.transitioning = false
+    state.transitionTarget = null
     setViewVisibility(false)
     if (externalWindow && !externalWindow.isDestroyed()) externalWindow.hide()
+    return snapshot()
+  }
+
+  // Closing a browser page is deliberately different from clearing its
+  // persistent partition. The WebContents and its large-window host are
+  // destroyed, while cookies, login state, site storage, cache, and the
+  // separately persisted visit history remain untouched.
+  function closePage() {
+    pendingWindowOpenNavigation = null
+    detachFromOwner({ closeContents: true })
+    if (externalWindow && !externalWindow.isDestroyed()) {
+      try { externalWindow.destroy() } catch {}
+    }
+    externalWindow = null
+    externalRestingContentBounds = null
+    state.mode = 'card'
+    state.radius = 0
+    state.interactive = false
+    state.zoomFactor = 1
     return snapshot()
   }
 
@@ -467,11 +756,7 @@ function createBrowserEmbedHost({
   }
 
   function destroyAll() {
-    detachFromOwner({ closeContents: true })
-    if (externalWindow && !externalWindow.isDestroyed()) {
-      try { externalWindow.destroy() } catch {}
-    }
-    externalWindow = null
+    closePage()
   }
 
   function getTarget() {
@@ -479,11 +764,26 @@ function createBrowserEmbedHost({
     if (!contents || contents.isDestroyed()) return null
     return Object.freeze({
       webContentsId: contents.id,
-      partition: BROWSER_EMBED_PARTITION,
+      partition: browserViewPartition || String(getPartition() || BROWSER_EMBED_PARTITION),
       url: isAllowedWebUrl(contents.getURL()) ? contents.getURL() : state.url,
       mode: state.mode,
       visible: state.visible,
+      nativeNetworkGuard: browserViewNativeRequestGuard,
     })
+  }
+
+  function getWebContents() {
+    const contents = browserView?.webContents
+    return contents && !contents.isDestroyed() ? contents : null
+  }
+
+  async function consumeWindowOpenNavigation() {
+    const pending = pendingWindowOpenNavigation
+    if (!pending || pending.consumed) return null
+    pending.consumed = true
+    const result = await pending.navigation
+    if (pendingWindowOpenNavigation === pending) pendingWindowOpenNavigation = null
+    return result
   }
 
   return {
@@ -491,15 +791,19 @@ function createBrowserEmbedHost({
     prime,
     transferMainWindow,
     hide,
+    closePage,
+    consumeWindowOpenNavigation,
     getState,
     releaseWindow,
     destroyAll,
     getTarget,
+    getWebContents,
   }
 }
 
 module.exports = {
   BROWSER_EMBED_PARTITION,
+  configureIsolatedSession,
   createBrowserEmbedHost,
   isAllowedWebUrl,
   normalizeBounds,

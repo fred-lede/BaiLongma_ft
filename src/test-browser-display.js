@@ -20,7 +20,11 @@ function assert(condition, label, detail = '') {
 const {
   browserPreviewDirectory,
   createBrowserPreviewFilename,
+  inferBrowserSurface,
   inferBrowserDisplayMode,
+  isExplicitBrowserDisplayModeRequest,
+  isSystemBrowserIntent,
+  isSystemBrowserRequest,
   pruneBrowserPreviewFiles,
   resolveBrowserPreviewFile,
 } = await import('./mcp/browser-display.js')
@@ -67,6 +71,44 @@ try {
     'interactive intent still overrides the informational question pattern')
   assert(inferBrowserDisplayMode('用外部大窗口打开百度') === 'window',
     'an explicit external-window request overrides compact mode')
+  assert(inferBrowserDisplayMode('切换到大浏览器') === 'window',
+    'an explicit large-browser switch selects the external window')
+  assert(inferBrowserDisplayMode('用大的窗口打开') === 'window',
+    'a natural spoken large-window request selects the external window')
+  assert(inferBrowserDisplayMode('请用大一点的窗口打开这个网页') === 'window',
+    'a softened spoken large-window request selects the external window')
+  assert(inferBrowserDisplayMode('用大 窗口 口打') === 'window',
+    'speech-recognition spacing noise still selects the external window')
+  assert(inferBrowserDisplayMode('切换到小浏览器') === 'card',
+    'an explicit compact-browser switch selects the embedded card')
+  assert(inferBrowserDisplayMode('请用小的窗口打开') === 'card',
+    'a natural spoken compact-window request selects the embedded card')
+  assert(inferBrowserSurface('用你的浏览器查一下资料') === 'card',
+    '"你的浏览器" means Bailongma compact card')
+  assert(inferBrowserSurface('用我的浏览器打开这个视频') === 'window',
+    '"我的浏览器" means Bailongma large window')
+  assert(inferBrowserDisplayMode('看视频') === 'window',
+    'video normally prefers the large Bailongma window')
+  assert(inferBrowserDisplayMode('用你的小窗口浏览器看视频') === 'card',
+    'an explicit compact-video request overrides the usual large-window preference')
+  for (const phrase of [
+  '用我电脑上的浏览器打开',
+  '用电脑的浏览器打开',
+  '用电脑上安装的浏览器访问这个网站',
+    '电脑浏览器打开',
+    '用默认浏览器打开',
+  ]) {
+    assert(inferBrowserSurface(phrase) === 'system',
+      `computer-browser ownership selects the installed browser: ${phrase}`)
+    assert(isSystemBrowserIntent(phrase) === true,
+      `computer-browser intent is recognized: ${phrase}`)
+    assert(isSystemBrowserRequest(phrase) === true,
+      `computer-browser action is recognized: ${phrase}`)
+  }
+  assert(isExplicitBrowserDisplayModeRequest('用大的窗口打开') === true,
+    'the real failed spoken phrase requires an observable display switch')
+  assert(isExplicitBrowserDisplayModeRequest('切回你的小窗口浏览器') === true,
+    'returning to the compact browser requires an observable display switch')
   assert(inferBrowserDisplayMode(
     '请只使用行动日志里的小窗口打开 GitHub，等待加载后向下滚动到 README，不要打开外部大窗口',
   ) === 'card',

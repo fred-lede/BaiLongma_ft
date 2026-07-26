@@ -29,6 +29,8 @@ export const DEFAULT_CONTEXT_MESSAGE_LIMIT = 10
 const LEGACY_PLAYWRIGHT_BROWSER_TOOLS = Object.freeze([
   'browser_navigate',
   'browser_navigate_back',
+  'browser_navigate_forward',
+  'browser_reload',
   'browser_snapshot',
   'browser_find',
   'browser_click',

@@ -1,12 +1,15 @@
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { createConnection } from '@playwright/mcp'
 import { chromium } from 'playwright'
+import navigationExposure from './playwright-official-navigation.cjs'
 
 import {
   createSinglePageContextFacade,
   findEmbeddedBrowserPage,
   normalizeEmbeddedBrowserTarget,
 } from './embedded-playwright-connection.js'
+
+const { exposeOfficialNavigationTools } = navigationExposure
 
 function readJsonEnvironment(name) {
   const value = String(process.env[name] || '').trim()
@@ -15,6 +18,7 @@ function readJsonEnvironment(name) {
 }
 
 async function main() {
+  exposeOfficialNavigationTools()
   const target = normalizeEmbeddedBrowserTarget(
     readJsonEnvironment('BAILONGMA_EMBEDDED_PLAYWRIGHT_TARGET'),
   )

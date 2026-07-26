@@ -92,6 +92,8 @@ for (const entry of [
   '/electron/playwright-runtime.cjs',
   '/src/mcp/embedded-playwright-connection.js',
   '/src/mcp/embedded-playwright-sidecar.js',
+  '/src/mcp/playwright-cli-entry.cjs',
+  '/src/mcp/playwright-official-navigation.cjs',
   '/src/mcp/playwright-page-guard.cjs',
   '/src/mcp/playwright-shared-profile.json',
 ]) {
@@ -155,7 +157,7 @@ for (const [name, entry] of Object.entries({ mcpPackagePath, playwrightEntry, pl
   assert.ok(entry.includes('app.asar'), name + ' resolved outside app.asar: ' + entry)
 }
 const mcpPackage = requireFromAsar('@playwright/mcp/package.json')
-const mcpCli = path.join(path.dirname(mcpPackagePath), typeof mcpPackage.bin === 'string' ? mcpPackage.bin : mcpPackage.bin['playwright-mcp'])
+const mcpCli = requireFromAsar.resolve('./src/mcp/playwright-cli-entry.cjs')
 assert.ok(fs.statSync(mcpCli).isFile(), 'packaged Playwright MCP CLI is missing: ' + mcpCli)
 
 const packagedRuntime = requireFromAsar('./electron/playwright-runtime.cjs')
@@ -225,7 +227,19 @@ const automaticSnapshot = result => {
   const responseText = textResult(result)
   const linked = responseText.match(/\[Snapshot\]\(([^)\r\n]+)\)/)?.[1]
   assert.ok(linked, 'Playwright action result did not include an automatic snapshot artifact link:\n' + responseText)
-  const snapshotPath = path.resolve(outputDir, decodeURI(linked))
+  const rawPath = decodeURI(linked)
+  const candidates = path.isAbsolute(rawPath)
+    ? [path.normalize(rawPath)]
+    : [path.resolve(outputDir, rawPath), ...(path.sep === '/' && rawPath.includes('/') ? [path.normalize('/' + rawPath)] : [])]
+  const realOutputDir = fs.realpathSync(outputDir)
+  const snapshotPath = candidates.find(candidate => {
+    try {
+      const realCandidate = fs.realpathSync(candidate)
+      const relative = path.relative(realOutputDir, realCandidate)
+      return relative && !relative.startsWith('..') && !path.isAbsolute(relative)
+    } catch { return false }
+  })
+  assert.ok(snapshotPath, 'automatic snapshot could not be resolved inside output directory: ' + rawPath)
   const relative = path.relative(outputDir, snapshotPath)
   assert.ok(relative && !relative.startsWith('..') && !path.isAbsolute(relative),
     'automatic snapshot escaped the configured output directory: ' + snapshotPath)
@@ -243,7 +257,7 @@ try {
   connected = true
   const listed = await client.listTools()
   const toolNames = new Set((listed.tools || []).map(tool => tool.name))
-  for (const name of ['browser_navigate', 'browser_snapshot', 'browser_click', 'browser_take_screenshot', 'browser_close']) {
+  for (const name of ['browser_navigate', 'browser_navigate_back', 'browser_navigate_forward', 'browser_reload', 'browser_snapshot', 'browser_click', 'browser_take_screenshot', 'browser_close']) {
     assert.ok(toolNames.has(name), 'packaged MCP omitted required tool: ' + name)
   }
 
@@ -279,6 +293,17 @@ try {
   const changedSnapshot = automaticSnapshot(clicked)
   const snapshotText = changedSnapshot.text
   assert.match(snapshotText, /MCP packaging works/)
+
+  const secondNavigation = await call('browser_navigate', { url: pageUrl + '?history=second' })
+  assert.notEqual(secondNavigation.isError, true, textResult(secondNavigation))
+  const backed = await call('browser_navigate_back')
+  assert.notEqual(backed.isError, true, textResult(backed))
+  const forwarded = await call('browser_navigate_forward')
+  assert.notEqual(forwarded.isError, true, textResult(forwarded))
+  assert.match(textResult(forwarded), /history=second/)
+  const reloaded = await call('browser_reload')
+  assert.notEqual(reloaded.isError, true, textResult(reloaded))
+  assert.match(textResult(reloaded), /history=second/)
 
   const screenshot = await call('browser_take_screenshot', { filename: 'mcp-smoke.png' })
   assert.notEqual(screenshot.isError, true, textResult(screenshot))

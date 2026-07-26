@@ -30,6 +30,9 @@ export function summarizeToolExecution(name, args = {}) {
       return `web_search(${String(args.query || args.q || args.keyword || '?').slice(0, 120)})`
     case 'browser_navigate':
       return `browser_navigate(${String(args.url || '?').slice(0, 120)})`
+    case 'browser_navigate_forward':
+    case 'browser_reload':
+      return `${name}()`
     case 'browser_tabs':
       return `browser_tabs(action=${String(args.action || '?').slice(0, 30)})`
     case 'browser_type':
@@ -40,6 +43,12 @@ export function summarizeToolExecution(name, args = {}) {
       return `browser_find(${String(args.text || args.regex || '?').slice(0, 100)})`
     case 'browser_take_screenshot':
       return `browser_take_screenshot(${String(args.filename || '?').slice(0, 120)})`
+    case 'browser_set_display_mode':
+      return `browser_set_display_mode(${args.mode === 'window' ? 'window' : 'card'})`
+    case 'browser_clear_data':
+      return `browser_clear_data(${(Array.isArray(args.data_types) ? args.data_types : []).join('+') || '?'}, ${args.time_range || '?'})`
+    case 'system_browser_open':
+      return `system_browser_open(${String(args.url || '?').slice(0, 120)})`
     case 'send_message':
     case 'express':
       return `${name} -> ${args.target_id || '(unknown)'}`
@@ -82,7 +91,10 @@ function sanitizeBrowserAuditUrl(value) {
 export function sanitizeToolAuditArgs(name, args = {}) {
   const redacted = redactAuditValue(args)
   if (!redacted || typeof redacted !== 'object') return redacted
-  if (name.startsWith('browser_') && Object.prototype.hasOwnProperty.call(redacted, 'url')) {
+  if (
+    (name.startsWith('browser_') || name === 'system_browser_open')
+    && Object.prototype.hasOwnProperty.call(redacted, 'url')
+  ) {
     redacted.url = sanitizeBrowserAuditUrl(redacted.url)
   }
   const safe = { ...redacted }

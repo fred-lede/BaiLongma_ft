@@ -33,6 +33,8 @@ function assert(cond, label) {
 const EXPECTED_BROWSER_TOOLS = [
   'browser_navigate',
   'browser_navigate_back',
+  'browser_navigate_forward',
+  'browser_reload',
   'browser_snapshot',
   'browser_find',
   'browser_click',

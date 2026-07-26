@@ -72,6 +72,12 @@ function getSafeStorage() {
   return null
 }
 
+function approveSafeStorageAccess(purpose = 'saved-secrets') {
+  const request = globalThis.bailongmaRequestSafeStorageAccessSync
+  if (typeof request !== 'function') return true
+  try { return request(purpose) === true } catch { return false }
+}
+
 function readFallbackMasterKey() {
   try {
     const raw = fs.readFileSync(paths.apiCapabilitySecretKeyFile, 'utf-8').trim()
@@ -89,7 +95,7 @@ function readFallbackMasterKey() {
 function encryptSecret(value) {
   const text = String(value || '')
   const safeStorage = getSafeStorage()
-  if (safeStorage) {
+  if (safeStorage && approveSafeStorageAccess('saved-secrets')) {
     return {
       scheme: SAFE_STORAGE_SCHEME,
       value: safeStorage.encryptString(text).toString('base64'),
@@ -112,6 +118,7 @@ function decryptSecret(record) {
   if (!record || typeof record !== 'object') return ''
   try {
     if (record.scheme === SAFE_STORAGE_SCHEME) {
+      if (!approveSafeStorageAccess('saved-secrets')) return ''
       const safeStorage = getSafeStorage()
       if (!safeStorage) return ''
       return safeStorage.decryptString(Buffer.from(String(record.value || ''), 'base64'))
@@ -154,7 +161,13 @@ export function getSecret(ref) {
 }
 
 export function hasSecret(ref) {
-  return !!getSecret(ref)
+  const key = String(ref || '').trim()
+  if (!key) return false
+  const store = readJsonFile(paths.apiCapabilitySecretsFile, null)
+  const record = store?.version === STORE_VERSION && store?.secrets?.[key]
+  // Configuration/status checks must not decrypt a value: they run during
+  // startup and must never trigger a macOS Keychain password prompt.
+  return Boolean(record && typeof record === 'object' && String(record.value || ''))
 }
 
 export function deleteSecret(ref) {

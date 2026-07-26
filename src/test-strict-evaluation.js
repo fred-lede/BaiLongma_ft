@@ -53,6 +53,18 @@ try {
   assert(!normalFactoryMode.forbiddenTools.includes('browser_navigate'), 'do-not-overwrite browser_navigate does not forbid calling browser_navigate')
   assert(normalFactoryMode.forbiddenTools.includes('install_tool'), 'direct install_tool can be forbidden without blocking managed factory')
 
+  const wrappedRefPrompt = [
+    '关键规则：绝对不要传 ref=e36，也不要把 ref 当 CSS selector engine。',
+    '请先调用 browser_snapshot，找到输入框后调用 browser_type；随后依次调用 browser_navigate_forward 和 browser_reload。',
+    '最后不要 browser_close，页面要留给用户查看。',
+  ].join('\n')
+  const wrappedRefMode = resolveStrictEvaluationMode(wrappedRefPrompt)
+  assert.deepEqual(
+    wrappedRefMode.forbiddenTools,
+    ['browser_close'],
+    'a prohibition on wrapped ref syntax does not leak across nearby allowed browser tool names',
+  )
+
   let round = 0
   const schemaNamesByRound = []
   const executedTools = []

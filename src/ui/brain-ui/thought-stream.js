@@ -19,6 +19,8 @@ const TOOL_ZH = {
   browser_read: "浏览器读取网页",
   browser_navigate: "打开网页",
   browser_navigate_back: "返回上一页",
+  browser_navigate_forward: "前进到下一页",
+  browser_reload: "重新加载网页",
   browser_snapshot: "查看页面内容",
   browser_find: "查找页面内容",
   browser_click: "点击页面元素",
@@ -35,6 +37,9 @@ const TOOL_ZH = {
   browser_console_messages: "检查网页日志",
   browser_resize: "调整浏览器窗口",
   browser_close: "关闭网页",
+  browser_clear_data: "清理浏览器数据",
+  browser_set_display_mode: "切换浏览器大小",
+  system_browser_open: "用电脑浏览器打开",
   search_memory: "检索记忆",
   probe_memory: "探测记忆",
   upsert_memory: "写入记忆",
@@ -92,6 +97,8 @@ const TOOL_ICON = {
   browser_read: "🧭",
   browser_navigate: "🌐",
   browser_navigate_back: "↩️",
+  browser_navigate_forward: "↪️",
+  browser_reload: "🔄",
   browser_snapshot: "👀",
   browser_find: "🔎",
   browser_click: "👆",
@@ -108,6 +115,9 @@ const TOOL_ICON = {
   browser_console_messages: "🧪",
   browser_resize: "↔️",
   browser_close: "✕",
+  browser_clear_data: "⌫",
+  browser_set_display_mode: "↗️",
+  system_browser_open: "🧭",
   search_memory: "🔍",
   probe_memory: "🩺",
   upsert_memory: "🧠",
@@ -171,6 +181,11 @@ export function friendlyToolName(name, args = {}) {
     if (args?.action === "select") return "切换标签页";
     if (args?.action === "close") return "关闭标签页";
     if (args?.action === "list") return "查看标签页";
+  }
+  if (normalized === "browser_set_display_mode") {
+    if (args?.mode === "window") return "切换到大浏览器";
+    if (args?.mode === "card") return "切换到小浏览器";
+    return "切换浏览器显示";
   }
   return TOOL_ZH[normalized] || "处理事务";
 }
@@ -412,7 +427,7 @@ export class ThoughtStream {
     const host = this.hostFromUrl(payload.final_url || payload.url);
     if (payload.ok === false) {
       if (payload.error === "no readable content rendered") {
-        return `浏览器已打开页面${host ? `（${host}）` : ""}，但仍未读到正文；可能需要登录、验证码或阻止自动化访问。建议换来源。`;
+        return `浏览器已打开页面${host ? `（${host}）` : ""}，但仍未读到正文；可能需要登录、验证码或阻止自动化访问。遇到验证时应保留页面并让用户亲自处理。`;
       }
       return `浏览器读取失败${host ? `（${host}）` : ""}：${this.compactText(payload.error || "页面无法渲染", 120)}`;
     }
@@ -488,6 +503,20 @@ export class ThoughtStream {
         return a.index != null ? `第 ${Number(a.index) + 1} 个标签页` : "";
       case "browser_take_screenshot":
         return this.shortPath(a.filename || "", 48);
+      case "browser_set_display_mode":
+        if (a.mode === "window") return "大窗口";
+        if (a.mode === "card") return "小卡片";
+        return "";
+      case "browser_clear_data": {
+        const types = Array.isArray(a.data_types) ? a.data_types.length : 0;
+        return types ? `${types} 类 · ${a.time_range || ""}` : this.compactText(a.time_range || "", 24);
+      }
+      case "system_browser_open":
+        try {
+          return new URL(a.url || "").hostname;
+        } catch {
+          return this.compactText(a.url || "", 48);
+        }
       case "browser_console_messages":
         return this.compactText(a.level || "", 20);
       case "browser_resize":

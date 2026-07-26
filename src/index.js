@@ -1276,8 +1276,17 @@ async function runTurn(input, label, msg = null) {
     const browserDisplayMode = inferBrowserDisplayMode(semanticInput || '', {
       autonomous: isTick || isScheduledTask,
     })
+    const browserDisplayState = { mode: browserDisplayMode }
     toolContext.browserDisplayMode = browserDisplayMode
+    toolContext.browserDisplayState = browserDisplayState
     toolContext.playwrightRole = browserDisplayMode === 'card' ? 'reader' : 'interactive'
+    const browserModeForEvent = (name, args = {}) => {
+      if (name === 'browser_set_display_mode') {
+        const requested = String(args?.mode || '').trim().toLowerCase()
+        if (requested === 'card' || requested === 'window') return requested
+      }
+      return browserDisplayState.mode === 'window' ? 'window' : 'card'
+    }
     // A reply being delivered is not evidence that a requested side effect
     // happened.  Keep a narrow action contract for clear imperative requests;
     // callLLM uses it to require a successful matching tool result before it
@@ -1411,7 +1420,9 @@ async function runTurn(input, label, msg = null) {
           args: cleanArgs,
           result: resultForEvent,
           ok,
-          ...(String(name || '').startsWith('browser_') ? { browser_display_mode: browserDisplayMode } : {}),
+          ...(String(name || '').startsWith('browser_') && name !== 'browser_clear_data'
+            ? { browser_display_mode: browserModeForEvent(name, cleanArgs) }
+            : {}),
         })
         const recognizerResultLimit = ok ? 500 : 1200
         toolCallLog.push({ name, args: cleanArgs, result: resultText.slice(0, recognizerResultLimit), ok, fallback: isFallbackDelivery, ack: isAckDelivery })
@@ -1422,10 +1433,14 @@ async function runTurn(input, label, msg = null) {
       onRetry: ({ attempt, nextAttempt, maxAttempts, delayMs, error }) => {
         emitEvent('llm_retry', { attempt, nextAttempt, maxAttempts, delayMs, error })
       },
-      onToolExecute: (name) => {
+      onToolExecute: (name, args = {}) => {
+        const eventBrowserMode = String(name || '').startsWith('browser_') && name !== 'browser_clear_data'
+          ? browserModeForEvent(name, args)
+          : null
         emitEvent('tool_executing', {
           name,
-          ...(String(name || '').startsWith('browser_') ? { browser_display_mode: browserDisplayMode } : {}),
+          ...(eventBrowserMode ? { browser_display_mode: eventBrowserMode } : {}),
+          ...(name === 'browser_set_display_mode' ? { args: { mode: eventBrowserMode } } : {}),
         })
       },
       onStream: ({ event, mode, text, name }) => {
@@ -1472,9 +1487,18 @@ async function runTurn(input, label, msg = null) {
           })
         }
         else if (event === 'tool_preparing') {
+          // Streaming announces the tool name before arguments are available.
+          // Do not guess a display-mode target here: doing so can briefly run
+          // the opposite animation before onToolExecute receives the real mode.
+          const isDisplayModeSwitch = name === 'browser_set_display_mode'
+          const eventBrowserMode = !isDisplayModeSwitch
+            && name !== 'browser_clear_data'
+            && String(name || '').startsWith('browser_')
+            ? browserModeForEvent(name)
+            : null
           emitEvent('tool_preparing', {
             name,
-            ...(String(name || '').startsWith('browser_') ? { browser_display_mode: browserDisplayMode } : {}),
+            ...(eventBrowserMode ? { browser_display_mode: eventBrowserMode } : {}),
           })
         }
       },

@@ -34,11 +34,12 @@ function hasNoRepairMarker(text) {
 
 function hasForbidNearTool(text, toolName) {
   const name = escapeRegExp(toolName)
-  const forbid = String.raw`(?:不要|别|禁止|不得|不允许|严禁|do\s+not|don't|never|must\s+not|forbid|forbidden)`
-  const action = String.raw`(?:调用|使用|执行|走|用|call|use|invoke|run)`
-  return new RegExp(`${forbid}[\\s\\S]{0,40}${action}[\\s\\S]{0,30}\\b${name}\\b`, 'i').test(text)
-    || new RegExp(`\\b${name}\\b[\\s\\S]{0,40}(?:is\\s+)?(?:forbidden|not\\s+allowed|禁止|禁用|不可用)`, 'i').test(text)
-    || new RegExp(`(?:禁止|禁用)[\\s\\S]{0,30}\\b${name}\\b`, 'i').test(text)
+  const chinesePrefix = String.raw`(?:不要|别|禁止|不得|不允许|严禁)\s*(?:再|再次|重新|直接|自行)?\s*(?:调用|使用|执行|走|用)?\s*(?:工具\s*)?["'\x60]?\b${name}\b`
+  const englishPrefix = String.raw`(?:do\s+not|don't|never|must\s+not|forbid)\s+(?:(?:call|use|invoke|run)\s+)?(?:(?:direct(?:ly)?|again)\s+)?(?:the\s+)?["'\x60]?\b${name}\b`
+  const suffix = String.raw`\b${name}\b\s*(?:工具\s*)?(?:(?:is|are)\s+)?(?:forbidden|not\s+allowed|禁止|禁用|不可用)`
+  return new RegExp(chinesePrefix, 'i').test(text)
+    || new RegExp(englishPrefix, 'i').test(text)
+    || new RegExp(suffix, 'i').test(text)
 }
 
 export function resolveStrictEvaluationMode(message = '', options = {}) {

@@ -2,6 +2,87 @@
 // person_card_mode / focus_banner
 // （声明式 Scene 的 ui_set 在 schemas/scene.js）
 export const uiSchemas = {
+  browser_clear_data: {
+    type: 'function',
+    function: {
+      name: 'browser_clear_data',
+      description: 'Destructively clear selected persistent data from Bailongma\'s own built-in browser (the shared compact/large browser profile). This tool is forbidden unless the CURRENT user message explicitly asks to delete/clear Bailongma\'s, the Agent\'s, or "your" browser data. Never call it when closing the browser, switching sizes, recovering from an error, signing out of a website, or doing routine cleanup. browser_close already destroys the live page without deleting profile data. History supports exact time ranges; Electron only supports all-time deletion for cookies, login/site data, and cache. Ask a clarifying question when the requested data types or time range are ambiguous.',
+      parameters: {
+        type: 'object',
+        properties: {
+          data_types: {
+            type: 'array',
+            minItems: 1,
+            uniqueItems: true,
+            items: { type: 'string', enum: ['history', 'cookies', 'site_data', 'cache'] },
+            description: 'Data to delete. Login state usually requires both cookies and site_data. No type is selected implicitly.',
+          },
+          time_range: {
+            type: 'string',
+            enum: ['last_hour', 'last_day', 'last_7_days', 'last_30_days', 'all_time', 'custom'],
+            description: 'Exact range for history. cookies/site_data/cache require all_time because Electron has no reliable per-creation-time deletion API.',
+          },
+          since: {
+            type: 'string',
+            description: 'ISO-8601 start timestamp; required only when time_range=custom.',
+          },
+          before: {
+            type: 'string',
+            description: 'Optional exclusive ISO-8601 end timestamp for a custom history range; defaults to now.',
+          },
+          origins: {
+            type: 'array',
+            uniqueItems: true,
+            items: { type: 'string' },
+            description: 'Optional HTTP(S) origins such as https://example.com. Omit to apply to all sites.',
+          },
+        },
+        required: ['data_types', 'time_range'],
+      },
+    },
+  },
+
+  system_browser_open: {
+    type: 'function',
+    function: {
+      name: 'system_browser_open',
+      description: 'Open an HTTP(S) URL in the browser installed on the user\'s computer (the macOS/Windows/Linux default browser). This is the third, user-owned browser surface and is completely separate from Bailongma\'s compact card ("你的浏览器") and large window ("我的浏览器"). Use it only when the user explicitly says "用我电脑上的浏览器", "电脑浏览器", "系统/默认浏览器", or an equivalent phrase. Bailongma cannot inspect, click, or continue controlling that external browser after opening it, and its cookies/history are not shared with the Bailongma browser. Do not use browser_navigate or browser_set_display_mode as a substitute for this explicit request.',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: {
+            type: 'string',
+            description: 'Complete http:// or https:// URL to open in the computer\'s default installed browser.',
+          },
+        },
+        required: ['url'],
+      },
+    },
+  },
+
+  browser_set_display_mode: {
+    type: 'function',
+    function: {
+      name: 'browser_set_display_mode',
+      description: 'Switch Bailongma\'s existing live browser between the compact Brain UI card ("你的浏览器", small browser) and the large interactive window ("我的浏览器", large browser) without navigating, reloading, closing, or losing page state. These two modes share one page/profile. They are not the browser installed on the computer; an explicit "电脑浏览器" request must use system_browser_open instead. You MUST call this tool whenever the user explicitly asks for the Bailongma large/big/small/compact browser or window, even if it already appears to be in that mode. You may also switch to window for user takeover, QR login, CAPTCHA, video, or careful interaction, and use card for lightweight observation/research. Honor an explicit request to keep video or another task in the compact card. Do not bounce modes unnecessarily.',
+      parameters: {
+        type: 'object',
+        properties: {
+          mode: {
+            type: 'string',
+            enum: ['card', 'window'],
+            description: 'card shows the compact browser inside the Brain UI action-log card; window shows the same live page in the large external browser window.',
+          },
+          reason: {
+            type: 'string',
+            description: 'Optional short reason for switching presentation mode.',
+          },
+        },
+        required: ['mode'],
+      },
+    },
+  },
+
   capability_demo: {
     type: 'function',
     function: {

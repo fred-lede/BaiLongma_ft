@@ -15,7 +15,7 @@ if (IS_WIN) {
   } catch (_) {}
 }
 
-const { app, BaseWindow, BrowserWindow, WebContentsView, View, webContents, shell, dialog, Menu, ipcMain, Tray, nativeImage, clipboard, systemPreferences } = require('electron')
+const { app, BaseWindow, BrowserWindow, WebContentsView, View, webContents, session, safeStorage, shell, dialog, Menu, ipcMain, Tray, nativeImage, clipboard, systemPreferences } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const net = require('net')
@@ -27,7 +27,11 @@ const { autoUpdater } = require('electron-updater')
 const wakeWord = require('./wake-word.cjs')
 const devLight = require('./dev-board-light.cjs')
 const { configurePackagedPlaywright } = require('./playwright-runtime.cjs')
-const { createBrowserEmbedHost } = require('./browser-embed-host.cjs')
+const { BROWSER_EMBED_PARTITION, createBrowserEmbedHost } = require('./browser-embed-host.cjs')
+const { createBrowserDataStore } = require('./browser-data.cjs')
+const { createBrowserSessionCookieStore } = require('./browser-session-cookies.cjs')
+const { createSafeStorageNotice } = require('./safe-storage-notice.cjs')
+const { createNetworkDiagnostics } = require('./network-diagnostics.cjs')
 
 // The ESM backend is imported into this Electron main process. Expose the
 // main-process-only permission API without requiring ESM modules to import the
@@ -35,6 +39,7 @@ const { createBrowserEmbedHost } = require('./browser-embed-host.cjs')
 globalThis.bailongmaSystemPreferences = systemPreferences
 
 const IS_DEV = !app.isPackaged
+const NETWORK_DIAGNOSTICS_ENABLED = IS_DEV || process.env.BAILONGMA_NETWORK_DIAGNOSTICS === '1'
 configurePackagedPlaywright({ isPackaged: !IS_DEV })
 const WINDOWS_APP_USER_MODEL_ID = 'com.xiaoyuanda.bailongma'
 const WINDOWS_TITLE_BAR_HEIGHT = 38
@@ -379,11 +384,119 @@ function applyGpuPreference() {
 applyGpuPreference()
 
 let mainWindow = null
+const TEMPORARY_BROWSER_PARTITION = `bailongma-browser-temporary-${process.pid}`
+let browserStorageMode = 'unselected'
+const activeBrowserPartition = () => (
+  browserStorageMode === 'secure'
+    ? BROWSER_EMBED_PARTITION
+    : TEMPORARY_BROWSER_PARTITION
+)
+const embeddedBrowserSession = () => session.fromPartition(activeBrowserPartition())
+const browserSessionCookieStore = createBrowserSessionCookieStore({
+  backupFile: path.join(USER_DIR, 'browser', 'session-cookies.safe'),
+  getSession: embeddedBrowserSession,
+  safeStorage,
+})
+const safeStorageNotice = createSafeStorageNotice({
+  dialog,
+  platform: PLATFORM,
+  consentFile: path.join(USER_DIR, 'safe-storage-consent.json'),
+  parentWindow: () => (
+    mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
+  ),
+})
+globalThis.bailongmaRequestSafeStorageAccessSync = purpose => (
+  safeStorageNotice.requestSync(purpose)
+)
+let browserSessionCookieStoreReady = false
+let browserSessionCookieStoreStarting = null
+
+async function ensureBrowserSecureStorageReady() {
+  if (browserStorageMode !== 'unselected') return true
+  if (browserSessionCookieStoreStarting) return browserSessionCookieStoreStarting
+  browserSessionCookieStoreStarting = Promise.resolve().then(async () => {
+    const approved = await safeStorageNotice.request('browser-profile')
+    if (!approved) {
+      browserStorageMode = 'temporary'
+      return true
+    }
+    browserStorageMode = 'secure'
+    try {
+      await browserSessionCookieStore.restore()
+    } catch (error) {
+      // Rejecting the following macOS password dialog must not prevent basic
+      // browsing. The secure session-cookie backup simply stays unavailable.
+      console.warn('[browser-profile] unable to restore encrypted session cookies:', error?.message || error)
+    }
+    browserSessionCookieStore.start()
+    browserSessionCookieStoreReady = true
+    return true
+  }).finally(() => {
+    browserSessionCookieStoreStarting = null
+  })
+  return browserSessionCookieStoreStarting
+}
+const browserDataStore = createBrowserDataStore({
+  historyFile: path.join(USER_DIR, 'browser', 'history.json'),
+  getSession: embeddedBrowserSession,
+})
+let networkDiagnostics = null
+
+function handleNetworkDiagnosticShortcut(input) {
+  if (input?.type !== 'keyDown' || input.key !== 'F12' || input.shift !== true) return false
+  if (!NETWORK_DIAGNOSTICS_ENABLED) {
+    console.warn('[network-diagnostics] disabled; set BAILONGMA_NETWORK_DIAGNOSTICS=1 before launch')
+    return true
+  }
+  const operation = (input.control || input.meta)
+    ? networkDiagnostics?.toggle()
+    : networkDiagnostics?.openDevTools()
+  Promise.resolve(operation)
+    .then(result => {
+      if (!result?.path || !mainWindow || mainWindow.isDestroyed()) return
+      dialog.showMessageBox(mainWindow, {
+        type: 'info',
+        title: '网络诊断记录已保存',
+        message: '脱敏后的网络记录已保存。',
+        detail: result.path,
+        buttons: ['在文件夹中显示', '关闭'],
+        defaultId: 1,
+        cancelId: 1,
+        noLink: true,
+      }).then(({ response }) => {
+        if (response === 0) shell.showItemInFolder(result.path)
+      }).catch(() => {})
+    })
+    .catch(error => {
+      console.warn('[network-diagnostics]', error?.message || error)
+    })
+  return true
+}
+
+async function assertEmbeddedBrowserNavigationAllowed(url) {
+  const [{ assertWebUrlAllowed }, { config: runtimeConfig }] = await Promise.all([
+    import(pathToFileURL(path.join(CODE_ROOT, 'src', 'capabilities', 'tools', 'web', 'url-policy.js')).href),
+    import(pathToFileURL(path.join(CODE_ROOT, 'src', 'config.js')).href),
+  ])
+  return assertWebUrlAllowed(url, {
+    allowPrivateNetwork: () => runtimeConfig.security?.browserPrivateNetwork === true,
+  })
+}
 const browserEmbedHost = createBrowserEmbedHost({
   WebContentsView,
   View,
   BaseWindow,
+  getPartition: activeBrowserPartition,
   isAppQuitting: () => app.isQuiting === true,
+  onNavigation: entry => browserDataStore.recordVisit(entry),
+  assertNavigationAllowed: assertEmbeddedBrowserNavigationAllowed,
+  nativeRequestGuard: true,
+  onDiagnosticInput: handleNetworkDiagnosticShortcut,
+})
+networkDiagnostics = createNetworkDiagnostics({
+  enabled: NETWORK_DIAGNOSTICS_ENABLED,
+  getWebContents: () => browserEmbedHost.getWebContents(),
+  outputDir: path.join(USER_DIR, 'network-audits'),
 })
 let backendPort = 0
 let tray = null
@@ -461,7 +574,30 @@ const terminalStreamBridge = new EventEmitter()
 global.terminalStreamBridge = terminalStreamBridge
 global.getBailongmaWindowLayoutSnapshot = getBailongmaWindowLayoutSnapshot
 globalThis.bailongmaBrowserEmbedBridge = Object.freeze({
-  getTarget: () => resolveBrowserEmbedCdpTarget(),
+  // Target resolution is lazy after browser_close. A fresh WebContents uses
+  // the same persistent partition, so closing really ends the live page while
+  // the next browser action still receives the user's cookies and login state.
+  getTarget: async () => {
+    if (!browserEmbedHost.getTarget() && mainWindow && !mainWindow.isDestroyed()) {
+      await ensureBrowserSecureStorageReady()
+      await browserEmbedHost.prime(mainWindow)
+    }
+    return resolveBrowserEmbedCdpTarget()
+  },
+  peekTarget: () => browserEmbedHost.getTarget(),
+  closePage: () => browserEmbedHost.closePage(),
+  consumeWindowOpenNavigation: () => browserEmbedHost.consumeWindowOpenNavigation(),
+  clearData: async options => {
+    const result = await browserDataStore.clearData(options)
+    if (
+      browserSessionCookieStoreReady
+      && Array.isArray(options?.dataTypes)
+      && options.dataTypes.includes('cookies')
+    ) {
+      await browserSessionCookieStore.flush()
+    }
+    return result
+  },
 })
 global.bailongmaAppControl = {
   restart() {
@@ -662,11 +798,17 @@ async function createWindow({ loadStartup = true, show = true, assignAsMain = tr
   })
 
   // 窗口级快捷键（不用 globalShortcut，避免劫持其他应用的 F11/Ctrl+R 等）
-  //   F12      → 切换 DevTools
+  //   F12                → 切换主界面 DevTools
+  //   Shift+F12          → 打开嵌入网页 detached DevTools（仅开发/显式诊断模式）
+  //   Ctrl/Cmd+Shift+F12 → 开始/停止嵌入网页脱敏网络记录（同上）
   //   F11      → 切换全屏
   //   Ctrl+R   → reload（仅 dev）
   window.webContents.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown') return
+    if (handleNetworkDiagnosticShortcut(input)) {
+      event.preventDefault()
+      return
+    }
     if (input.key === 'F12') {
       window.webContents.toggleDevTools()
       event.preventDefault()
@@ -725,7 +867,6 @@ async function createWindow({ loadStartup = true, show = true, assignAsMain = tr
     }
   })
 
-  if (assignAsMain) await browserEmbedHost.prime(window)
   return window
 }
 
@@ -1608,6 +1749,8 @@ app.on('before-quit', (event) => {
   }
   const shutdowns = [
     globalThis.shutdownBailongmaMcpClients,
+    networkDiagnostics?.isRecording() ? () => networkDiagnostics.dispose() : null,
+    browserSessionCookieStoreReady ? () => browserSessionCookieStore.flush() : null,
   ].filter(shutdown => typeof shutdown === 'function')
   if (shutdowns.length === 0) {
     browserShutdownComplete = true

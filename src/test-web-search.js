@@ -4,6 +4,7 @@
 
 import assert from 'node:assert/strict'
 import {
+  BROWSER_CAPABILITY_TOOLS,
   BROWSER_TOOLS,
   capabilityContextBlocks,
   capabilityToolsFor,
@@ -35,7 +36,7 @@ function assertBrowserOnly(tools, label) {
     `${label}: removed web tools stay absent (${tools.join(',')})`)
 }
 
-assert.equal(BROWSER_TOOLS.length, 18, 'browser-only web access exposes the fixed 18-tool allowlist')
+assert.equal(BROWSER_TOOLS.length, 20, 'browser-only web access exposes the fixed 20-tool allowlist')
 assert.ok(!listCapabilities().some(capability => capability.id === 'web'),
   'legacy standalone web capability is removed')
 
@@ -57,8 +58,8 @@ for (const messageBody of [
 
 const discovered = findCapabilitiesByQuery('上网搜索').find(capability => capability.id === 'interactive-browser')
 assert.ok(discovered, 'find_tool discovery resolves web search to the interactive-browser capability')
-assert.deepEqual(discovered.tools, BROWSER_TOOLS,
-  'discovery returns only the fixed native Playwright allowlist')
+assert.deepEqual(discovered.tools, BROWSER_CAPABILITY_TOOLS,
+  'discovery returns the fixed native Playwright allowlist plus display-mode switching')
 
 const context = capabilityContextBlocks(capabilityContext('帮我上网搜索 Playwright MCP'))
   .join('\n')
@@ -69,7 +70,10 @@ assert.match(context, /browser_click/)
 assert.match(context, /automatically return a fresh accessibility snapshot/)
 assert.match(context, /instead of routinely calling browser_snapshot/)
 assert.match(context, /CAPTCHA\/challenge page/)
-assert.match(context, /Try at most one different search provider/)
+assert.match(context, /hard stop for automated web access in the current user turn/)
+assert.match(context, /Do not navigate to another provider/)
+assert.match(context, /Continue only in a new user turn after the user confirms/)
+assert.match(context, /pass the raw target value "e36"/)
 assert.match(context, /share the same persistent browser profile/)
 assert.match(context, /do not replace it with model memory for current\/latest\/recent facts/)
 assert.match(context, /Count and name only sources that actually loaded/)

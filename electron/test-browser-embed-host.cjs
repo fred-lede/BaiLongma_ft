@@ -10,6 +10,15 @@ const {
 } = require('./browser-embed-host.cjs')
 
 class FakeSession extends EventEmitter {
+  constructor() {
+    super()
+    this.webRequest = {
+      onBeforeRequest: (filter, handler) => {
+        this.beforeRequestFilter = filter
+        this.beforeRequestHandler = handler
+      },
+    }
+  }
   setPermissionRequestHandler(handler) { this.permissionRequestHandler = handler }
   setPermissionCheckHandler(handler) { this.permissionCheckHandler = handler }
 }
@@ -27,6 +36,7 @@ class FakeWebContents extends EventEmitter {
   setWindowOpenHandler(handler) { this.windowOpenHandler = handler }
   isDestroyed() { return this.destroyed }
   getURL() { return this.url }
+  getTitle() { return this.title || '' }
   async loadURL(url) {
     this.loadCalls.push(url)
     this.url = url
@@ -73,15 +83,24 @@ class FakeContentView {
 }
 
 class FakeWindow extends EventEmitter {
-  constructor({ width = 1000, height = 700, show = false } = {}) {
+  constructor({ x = 0, y = 0, width = 1000, height = 700, show = false } = {}) {
     super()
     this.contentView = new FakeContentView()
-    this.contentBounds = { x: 0, y: 0, width, height }
+    this.contentBounds = { x, y, width, height }
+    this.contentBoundsCalls = []
     this.visible = show
     this.destroyed = false
   }
 
   getContentBounds() { return { ...this.contentBounds } }
+  setContentBounds(value, animate = false) {
+    const previous = this.contentBounds
+    this.contentBounds = { ...value }
+    this.contentBoundsCalls.push({ bounds: { ...value }, animate })
+    if (previous.x !== value.x || previous.y !== value.y) this.emit('move')
+    if (previous.width !== value.width || previous.height !== value.height) this.emit('resize')
+  }
+  setBounds(value, animate = false) { this.setContentBounds(value, animate) }
   isDestroyed() { return this.destroyed }
   show() { this.visible = true }
   hide() { this.visible = false }
@@ -102,6 +121,18 @@ class FakeBaseWindow extends FakeWindow {
   }
 }
 
+async function waitUntil(predicate, message) {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (predicate()) return
+    await new Promise(resolve => setImmediate(resolve))
+  }
+  throw new Error(message)
+}
+
+function requestDecision(targetSession, url) {
+  return new Promise(resolve => targetSession.beforeRequestHandler({ url }, resolve))
+}
+
 async function run() {
   assert.equal(isAllowedWebUrl('https://example.com/path'), true)
   assert.equal(isAllowedWebUrl('http://127.0.0.1:3721/'), true)
@@ -116,8 +147,13 @@ async function run() {
     { x: 900, y: 0, width: 103, height: 100 },
     'a card transition may move a bounded native view beyond the right edge',
   )
+  assert.deepEqual(
+    normalizeBounds({ x: 1024, y: 0, width: 500, height: 300 }, { width: 1000, height: 700 }),
+    { x: 1024, y: 0, width: 500, height: 300 },
+    'the first off-screen card animation frame stays inside its bounded horizontal budget',
+  )
   assert.throws(
-    () => normalizeBounds({ x: 1003, y: 0, width: 100, height: 100 }, { width: 1000, height: 700 }),
+    () => normalizeBounds({ x: 1131, y: 0, width: 100, height: 100 }, { width: 1000, height: 700 }),
     /transition budget/,
   )
   assert.deepEqual(
@@ -127,13 +163,30 @@ async function run() {
   )
 
   const warnings = []
+  const navigations = []
+  const diagnosticInputs = []
   const host = createBrowserEmbedHost({
     WebContentsView: FakeWebContentsView,
     View: FakeView,
     BaseWindow: FakeBaseWindow,
     logger: { warn: (...args) => warnings.push(args) },
+    onNavigation: entry => navigations.push(entry),
+    nativeRequestGuard: true,
+    onDiagnosticInput: input => {
+      diagnosticInputs.push(input)
+      return input?.key === 'F12' && input?.shift === true
+    },
+    assertNavigationAllowed: async url => {
+      const parsed = new URL(url)
+      if (['localhost', '127.0.0.1', '::1'].includes(parsed.hostname)) {
+        throw new Error('private or local network target is disabled')
+      }
+      return parsed.href
+    },
+    transitionDurationMs: 480,
+    waitForTransition: async () => {},
   })
-  const mainWindow = new FakeWindow()
+  const mainWindow = new FakeWindow({ x: 100, y: 80 })
   const primedState = await host.prime(mainWindow)
   assert.equal(primedState.visible, false)
   assert.equal(primedState.webContentsId, 42)
@@ -169,7 +222,16 @@ async function run() {
   assert.equal(mainWindow.contentView.children[0], view)
   assert.equal(mainWindow.contentView.children[1].visible, true)
 
-  assert.deepEqual(view.webContents.windowOpenHandler({ url: 'https://example.org' }), { action: 'deny' })
+  let diagnosticShortcutPrevented = false
+  view.webContents.emit(
+    'before-input-event',
+    { preventDefault: () => { diagnosticShortcutPrevented = true } },
+    { type: 'keyDown', key: 'F12', shift: true },
+  )
+  assert.equal(diagnosticShortcutPrevented, true, 'embedded-page diagnostic shortcuts are handled before the input shield')
+  assert.equal(diagnosticInputs.length, 1)
+
+  assert.equal(typeof view.webContents.windowOpenHandler, 'function')
   assert.equal(view.webContents.session.permissionCheckHandler(), false)
   let permissionResult = true
   view.webContents.session.permissionRequestHandler(null, 'geolocation', result => { permissionResult = result })
@@ -183,6 +245,27 @@ async function run() {
   )
   assert.equal(downloadPrevented, true)
   assert.equal(downloadCancelled, true)
+  assert.deepEqual(view.webContents.session.beforeRequestFilter.urls, [
+    'http://*/*',
+    'https://*/*',
+    'ws://*/*',
+    'wss://*/*',
+  ])
+  assert.deepEqual(
+    await requestDecision(view.webContents.session, 'https://example.com/public.js'),
+    { cancel: false },
+    'native Electron request guard allows a public subresource without Playwright routing',
+  )
+  assert.deepEqual(
+    await requestDecision(view.webContents.session, 'http://127.0.0.1/private'),
+    { cancel: true },
+    'native Electron request guard blocks a private HTTP subresource or redirect',
+  )
+  assert.deepEqual(
+    await requestDecision(view.webContents.session, 'ws://127.0.0.1/events'),
+    { cancel: true },
+    'native Electron request guard also blocks a private WebSocket',
+  )
   let navigationPrevented = false
   view.webContents.emit('will-navigate', {
     url: 'file:///etc/passwd',
@@ -197,6 +280,7 @@ async function run() {
     url: 'https://example.com/',
     mode: 'card',
     visible: true,
+    nativeNetworkGuard: true,
   })
 
   await host.update(mainWindow, {
@@ -221,12 +305,38 @@ async function run() {
     interactive: true,
   })
   assert.equal(view.webContents.loadCalls.length, 2, 'Playwright navigation must not be loaded a second time')
+  assert.ok(navigations.some(entry => entry.url === 'https://example.org/after-playwright'),
+    'an ordinary same-page navigation remains in the one managed WebContents and is recorded')
+
+  const popupDecision = view.webContents.windowOpenHandler({
+    url: 'https://example.net/target-blank-destination',
+    disposition: 'foreground-tab',
+  })
+  assert.deepEqual(popupDecision, { action: 'deny' }, 'target=_blank never creates a second WebContents')
+  const popupTakeover = await host.consumeWindowOpenNavigation()
+  assert.equal(popupTakeover.ok, true)
+  assert.equal(popupTakeover.finalUrl, 'https://example.net/target-blank-destination')
+  assert.equal(view.webContents.getURL(), popupTakeover.finalUrl,
+    'a safe target=_blank URL navigates the current managed page in place')
+
+  for (const dangerousUrl of [
+    'javascript:alert(1)',
+    'file:///etc/passwd',
+    'http://127.0.0.1:3721/private',
+  ]) {
+    assert.deepEqual(view.webContents.windowOpenHandler({ url: dangerousUrl }), { action: 'deny' })
+    const blockedTakeover = await host.consumeWindowOpenNavigation()
+    assert.equal(blockedTakeover.ok, false, `${dangerousUrl} is rejected instead of navigating`)
+    assert.equal(view.webContents.getURL(), popupTakeover.finalUrl,
+      'a rejected popup target leaves the controlled page unchanged')
+  }
 
   const windowState = await host.update(mainWindow, {
     mode: 'window',
     visible: true,
     radius: 99,
     interactive: true,
+    transition: true,
   })
   assert.equal(FakeWebContentsView.instances.length, 1, 'large mode must reuse the same WebContentsView')
   assert.equal(FakeBaseWindow.instances.length, 1)
@@ -237,6 +347,20 @@ async function run() {
   assert.equal(windowState.radius, 0)
   assert.equal(windowState.zoomFactor, 1)
   assert.equal(view.webContents.zoomFactor, 1)
+  assert.equal(windowState.transitioning, false)
+  assert.deepEqual(FakeBaseWindow.instances[0].contentBoundsCalls.slice(0, 2), [
+    {
+      bounds: { x: 125, y: 115, width: 600, height: 340 },
+      animate: false,
+    },
+    {
+      bounds: { x: 0, y: 0, width: 1280, height: 840 },
+      animate: true,
+    },
+  ], 'card-to-window transition starts at the card screen rectangle and expands natively')
+  assert.equal(view.webContents.loadCalls.length, 3, 'switching hosts must not reload the page')
+
+  FakeBaseWindow.instances[0].setContentBounds({ x: 70, y: 55, width: 1080, height: 720 })
 
   await host.update(mainWindow, {
     mode: 'card',
@@ -244,11 +368,36 @@ async function run() {
     bounds: { x: 0, y: 0, width: 500, height: 300 },
     radius: 16,
     interactive: false,
+    transition: true,
   })
   assert.equal(FakeWebContentsView.instances.length, 1)
   assert.equal(mainWindow.contentView.children[0], view)
   assert.equal(FakeBaseWindow.instances[0].visible, false)
   assert.equal(view.webContents.zoomFactor, 500 / 1280)
+  assert.deepEqual(FakeBaseWindow.instances[0].contentBoundsCalls.at(-1), {
+    bounds: { x: 100, y: 80, width: 500, height: 300 },
+    animate: true,
+  }, 'window-to-card transition shrinks to the final card screen rectangle')
+  assert.equal(view.webContents.loadCalls.length, 3, 'reverse host switching also preserves the page')
+
+  await host.update(mainWindow, {
+    mode: 'window',
+    visible: true,
+    interactive: true,
+    transition: true,
+  })
+  assert.deepEqual(FakeBaseWindow.instances[0].contentBoundsCalls.at(-1), {
+    bounds: { x: 70, y: 55, width: 1080, height: 720 },
+    animate: true,
+  }, 'returning to the large browser restores the user-adjusted large-window bounds')
+  await host.update(mainWindow, {
+    mode: 'card',
+    visible: true,
+    bounds: { x: 0, y: 0, width: 500, height: 300 },
+    radius: 16,
+    interactive: false,
+    transition: true,
+  })
 
   const replacementWindow = new FakeWindow()
   assert.equal(host.transferMainWindow(mainWindow, replacementWindow), true)
@@ -285,10 +434,99 @@ async function run() {
   assert.equal(FakeWebContentsView.instances.length, 1, 'reopening must reattach the existing WebContentsView')
   assert.equal(reopenedWindow.contentView.children[0], view)
 
-  host.destroyAll()
-  assert.equal(view.webContents.destroyed, true)
+  const closedState = host.closePage()
+  assert.equal(view.webContents.destroyed, true, 'browser close must destroy the live WebContents')
+  assert.equal(closedState.webContentsId, null)
   assert.equal(host.getTarget(), null)
-  assert.equal(warnings.length, 0)
+
+  const afterCloseWindow = new FakeWindow()
+  const afterCloseState = await host.prime(afterCloseWindow)
+  assert.equal(FakeWebContentsView.instances.length, 2, 'a later browser action creates a fresh WebContentsView')
+  assert.equal(afterCloseState.partition, BROWSER_EMBED_PARTITION,
+    'the fresh page continues using the same persistent profile partition')
+
+  host.destroyAll()
+  assert.equal(FakeWebContentsView.instances[1].webContents.destroyed, true)
+  assert.equal(host.getTarget(), null)
+  assert.equal(warnings.length, 5, 'native request and popup policy blocks are observable')
+  assert.equal(
+    warnings.filter(args => String(args[0]).includes('blocked new-window navigation')).length,
+    3,
+  )
+  assert.equal(
+    warnings.filter(args => String(args[0]).includes('blocked network request')).length,
+    2,
+  )
+
+  const transitionResolvers = []
+  const interruptHost = createBrowserEmbedHost({
+    WebContentsView: FakeWebContentsView,
+    View: FakeView,
+    BaseWindow: FakeBaseWindow,
+    waitForTransition: () => new Promise(resolve => transitionResolvers.push(resolve)),
+  })
+  const interruptMainWindow = new FakeWindow({ x: 40, y: 30 })
+  await interruptHost.prime(interruptMainWindow)
+  await interruptHost.update(interruptMainWindow, {
+    mode: 'card',
+    visible: true,
+    bounds: { x: 10, y: 15, width: 500, height: 300 },
+    interactive: false,
+  })
+  await interruptHost.update(interruptMainWindow, {
+    mode: 'window',
+    visible: true,
+    interactive: true,
+  })
+  const interruptedView = FakeWebContentsView.instances.at(-1)
+  const interruptWindow = FakeBaseWindow.instances.at(-1)
+  const shrinkPromise = interruptHost.update(interruptMainWindow, {
+    mode: 'card',
+    visible: true,
+    bounds: { x: 10, y: 15, width: 500, height: 300 },
+    interactive: false,
+    transition: true,
+  })
+  await waitUntil(
+    () => transitionResolvers.length === 1,
+    'window-to-card transition did not start',
+  )
+  const expandAgainPromise = interruptHost.update(interruptMainWindow, {
+    mode: 'window',
+    visible: true,
+    interactive: true,
+    transition: true,
+  })
+  await waitUntil(
+    () => transitionResolvers.length === 2,
+    'a reversed card transition did not start the return animation',
+  )
+  assert.deepEqual(interruptWindow.contentBoundsCalls.at(-1), {
+    bounds: { x: 0, y: 0, width: 1280, height: 840 },
+    animate: true,
+  }, 'interrupting a shrink restores the remembered large-window target')
+  transitionResolvers.splice(0).forEach(resolve => resolve())
+  await Promise.all([shrinkPromise, expandAgainPromise])
+  const interruptedState = interruptHost.getState(interruptMainWindow)
+  assert.equal(interruptedState.mode, 'window')
+  assert.equal(interruptedState.transitioning, false)
+  assert.equal(interruptWindow.contentView.children[0], interruptedView)
+  assert.equal(interruptedView.webContents.loadCalls.length, 1, 'an interrupted reversal must not reload the page')
+  interruptHost.destroyAll()
+
+  const temporaryPartition = 'bailongma-browser-temporary-test'
+  const temporaryHost = createBrowserEmbedHost({
+    WebContentsView: FakeWebContentsView,
+    View: FakeView,
+    BaseWindow: FakeBaseWindow,
+    getPartition: () => temporaryPartition,
+  })
+  const temporaryWindow = new FakeWindow()
+  const temporaryState = await temporaryHost.prime(temporaryWindow)
+  assert.equal(temporaryState.partition, temporaryPartition)
+  assert.equal(FakeWebContentsView.instances.at(-1).options.webPreferences.partition, temporaryPartition,
+    'declining secure storage can use an in-memory browser partition')
+  temporaryHost.destroyAll()
 
   console.log('browser embed host tests passed')
 }

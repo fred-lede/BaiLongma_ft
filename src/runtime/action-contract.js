@@ -4,9 +4,62 @@
 // annoying tool loop.  Add a contract only when the wording clearly asks the
 // agent to change state or retrieve fresh external/local evidence.
 
+import {
+  inferBrowserDisplayMode,
+  isExplicitBrowserDisplayModeRequest,
+  isSystemBrowserRequest,
+} from '../mcp/browser-display.js'
+import { explicitlyKeepsBrowserOpen } from './browser-intent-guards.js'
+
 const META_QUESTION_RE = /(?:你(?:有|会|能).{0,18}(?:工具|能力)|(?:多少|哪些|什么).{0,12}(?:工具|命令|能力)|工具.{0,12}(?:多少|哪些|什么)|怎么(?:调用|使用).{0,12}(?:工具|命令))/i
+const BROWSER_NAVIGATION_URL_RE = /(?:https?:\/\/|www\.|(?:[\w-]+\.)+(?:com|cn|org|net|io)\b)/i
+const BROWSER_INFORMATION_ACTION_RE = /(?:搜索|查询|查找|浏览(?!器)|阅读|播放|观看)|(?:search|browse|read|play|watch)\b/i
+const BROWSER_OPEN_TARGET_RE = /(?:打开|访问|进入|前往|加载)\s*(?:一下\s*)?(?!这个(?:网页|页面)|当前(?:网页|页面)|刚才(?:的)?(?:网页|页面)|$)[\p{L}\p{N}]/iu
+const BROWSER_OPEN_TARGET_EN_RE = /(?:open|visit|go\s+to|navigate\s+to|load)\s+(?!(?:this|the current|the previous)\s+(?:page|webpage)\b)[a-z0-9]/i
+const BROWSER_CLOSE_RE = /(?:(?:关闭|关掉|退出).{0,12}(?:你的浏览器|白龙马浏览器|agent\s*浏览器|小窗口浏览器|大窗口浏览器|小浏览器|大浏览器|当前网页|当前页面|浏览器|网页|页面)|(?:close|quit|exit)\s+(?:your|the\s+bailongma|the\s+agent|the\s+current)?\s*(?:browser|webpage|page)\b)/i
+
+function isExplicitBrowserNavigationRequest(text = '') {
+  const value = String(text || '').trim()
+  return isExplicitBrowserDisplayModeRequest(value) && (
+    BROWSER_NAVIGATION_URL_RE.test(value)
+    || BROWSER_INFORMATION_ACTION_RE.test(value)
+    || BROWSER_OPEN_TARGET_RE.test(value)
+    || BROWSER_OPEN_TARGET_EN_RE.test(value)
+  )
+}
 
 const CONTRACTS = [
+  {
+    id: 'system_browser_open',
+    label: '使用电脑浏览器打开网页',
+    tools: ['system_browser_open'],
+    match: isSystemBrowserRequest,
+  },
+  {
+    id: 'browser_open_in_display_mode',
+    label: '使用指定的白龙马浏览器打开网页',
+    // Navigation already runs through the display mode selected
+    // deterministically for this turn. Its browser_preview.mode is observable
+    // evidence that both the requested presentation and navigation happened;
+    // demanding an extra display-only call makes combined requests brittle.
+    tools: ['browser_navigate'],
+    match: isExplicitBrowserNavigationRequest,
+    resolve: (text) => ({
+      expectedBrowserDisplayMode: inferBrowserDisplayMode(text),
+    }),
+  },
+  {
+    id: 'browser_close',
+    label: '真正关闭白龙马浏览器页面',
+    tools: ['browser_close'],
+    match: text => !explicitlyKeepsBrowserOpen(text) && BROWSER_CLOSE_RE.test(text),
+  },
+  {
+    id: 'browser_display_mode',
+    label: '切换浏览器显示大小',
+    tools: ['browser_set_display_mode'],
+    match: isExplicitBrowserDisplayModeRequest,
+  },
   {
     id: 'directory_create',
     label: '创建目录',
@@ -72,7 +125,11 @@ export function classifyActionContract(message = '') {
   // “怎么/如何做” requests an explanation, not the side effect itself.
   if (/^(?:请问[，,：:]?\s*)?(?:怎么|如何|怎样|能否|可否|what\b|how\b)/i.test(text)) return null
 
-  const match = CONTRACTS.find(contract => contract.pattern.test(text))
+  const match = CONTRACTS.find(contract => (
+    typeof contract.match === 'function'
+      ? contract.match(text)
+      : contract.pattern.test(text)
+  ))
   if (!match) return null
   if (match.id === 'software_install' && /(?:工具|插件|plugin|npm|依赖|扩展)/i.test(text)) return null
   if (match.id === 'memory_write' && /(?:你|能).{0,12}记住.*[？?]$/i.test(text)) return null
@@ -81,6 +138,7 @@ export function classifyActionContract(message = '') {
     id: match.id,
     label: match.label,
     requiredTools: [...match.tools],
+    ...(typeof match.resolve === 'function' ? match.resolve(text) : {}),
   }
 }
 
@@ -90,10 +148,39 @@ export function actionContractToolSucceeded(contract, toolName, result) {
   if (!text) return true
   try {
     const parsed = JSON.parse(text)
-    return parsed?.ok !== false && !parsed?.error
+    if (parsed?.ok === false || parsed?.error) return false
+    if (contract.id === 'browser_open_in_display_mode') {
+      return parsed?.browser_preview?.mode === contract.expectedBrowserDisplayMode
+    }
+    return true
   } catch {
     return !/^(?:错误|请求失败|执行失败|命令超时|命令执行失败|error|failed|execution failed|command timed out)/i.test(text)
   }
+}
+
+export function actionContractCompletionIssue(contract, text = '') {
+  if (contract?.id !== 'system_browser_open') return ''
+  const value = String(text || '').trim()
+  if (!value) return ''
+  if (/(?:\b(?:safari|chrome|edge|firefox|arc|opera|brave)\b|谷歌浏览器|苹果浏览器)/i.test(value)) {
+    return 'The tool verified only the computer default browser, not the browser application name.'
+  }
+  if (/(?:三个|三种).{0,16}浏览器.{0,20}(?:各自|彼此|互相|完全)?.{0,10}(?:独立|不共享|互不影响)/i.test(value)
+      || /(?:你的浏览器).{0,30}(?:我的浏览器).{0,30}(?:各自独立|彼此独立|互不影响|不共享)/i.test(value)) {
+    return 'Bailongma compact and large modes share one live page/profile; only the computer browser is separate.'
+  }
+  return ''
+}
+
+export function verifiedActionContractReply(contract, evidence = {}) {
+  if (contract?.id !== 'system_browser_open') return ''
+  let url = String(evidence?.args?.url || '').trim()
+  try {
+    const parsed = JSON.parse(String(evidence?.result || '{}'))
+    if (parsed?.url) url = String(parsed.url)
+  } catch {}
+  const target = url ? `链接 \`${url}\`` : '链接'
+  return `已将${target}交给电脑的系统默认浏览器打开。白龙马的“小窗口浏览器”和“大窗口浏览器”是同一个实时页面的两种显示形态；电脑浏览器与它们独立。`
 }
 
 export function containsUnsupportedCompletionClaim(text = '') {

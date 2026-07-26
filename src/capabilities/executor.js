@@ -34,6 +34,10 @@ import { execManageReminder } from './tools/reminders.js'
 import { execGenerateImage, execGenerateLyrics, execGenerateMusic, execMediaMode, execMusic, execSpeak } from './tools/media.js'
 import { execAnalyzeImage, execManageApiCapability, execRunApiCapability } from './tools/api-capability.js'
 import { execManageRule } from './tools/rules.js'
+import { execBrowserSetDisplayMode } from './tools/browser-display.js'
+import { execBrowserClearData } from './tools/browser-data.js'
+import { execSystemBrowserOpen } from './tools/system-browser.js'
+import { isExplicitAgentBrowserDataDeletionRequest } from '../mcp/browser-data-intent.js'
 import { runWorkReview } from '../review/reviewer.js'
 import { CAPABILITY_DEMO_INTRO, runCapabilityDemo } from '../capability-demo.js'
 import { deliverMessage } from '../runtime/delivery.js'
@@ -300,6 +304,12 @@ async function executeToolUnchecked(name, args, context = {}) {
         return execManageRule(args)
       case 'ui_set':
         return execUISet(args)
+      case 'browser_set_display_mode':
+        return execBrowserSetDisplayMode(args, context)
+      case 'browser_clear_data':
+        return await execBrowserClearData(args, context)
+      case 'system_browser_open':
+        return await execSystemBrowserOpen(args, context)
       case 'capability_demo':
         return execCapabilityDemo(args, context)
       case 'focus_banner':
@@ -346,7 +356,7 @@ async function executeToolUnchecked(name, args, context = {}) {
       case 'manage_api_capability':
         return execManageApiCapability(args)
       case 'find_tool':
-        return execFindTool(args)
+        return execFindTool(args, context)
       case 'connect_wechat':
         return execConnectWechat()
       case 'connect_feishu':
@@ -466,7 +476,7 @@ function execListTools() {
 //   ① 中文意图——复用 tool-router 的 TOOL_GROUPS 触发词（和按轮注入同一数据源，零漂移）；
 //   ② 英文字面——query 词命中工具 name / description。
 // 已安装的扩展工具也一并参与英文字面匹配。
-function execFindTool({ query } = {}) {
+function execFindTool({ query } = {}, context = {}) {
   const q = String(query || '').toLowerCase().trim()
   if (!q) return toolJson({ ok: false, tool: 'find_tool', error: 'query 不能为空：用一句话描述你需要做什么。' })
   const terms = q.split(/[\s,，、。.；;]+/).map(t => t.trim()).filter(Boolean)
@@ -502,6 +512,9 @@ function execFindTool({ query } = {}) {
     if (terms.some(t => t.length >= 2 && hay.includes(t))) matched.add(name)
   }
   for (const tool of searchMcpTools(q)) matched.add(tool.name)
+  if (!isExplicitAgentBrowserDataDeletionRequest(context.currentUserMessage || '')) {
+    matched.delete('browser_clear_data')
+  }
 
   // 能力工作流摘要：命中的能力把 context 压成一句话回给 Agent（自感知按需激活的「怎么用」半）。
   const capabilities = capHits.map(cap => ({

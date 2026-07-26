@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict'
 import {
+  BROWSER_CAPABILITY_TOOLS,
+  BROWSER_DATA_TOOLS,
+  BROWSER_DISPLAY_TOOLS,
   BROWSER_TOOLS,
+  SYSTEM_BROWSER_TOOLS,
   capabilityContextBlocks,
   findCapabilitiesByQuery,
 } from './capabilities/capability-registry.js'
@@ -14,10 +18,16 @@ import {
 } from './capabilities/tool-audit.js'
 import { TOOL_SCHEMAS } from './capabilities/builtin-tools.js'
 import { getToolSchemas } from './capabilities/schemas.js'
+import { execBrowserSetDisplayMode } from './capabilities/tools/browser-display.js'
+import { execBrowserClearData } from './capabilities/tools/browser-data.js'
+import { execSystemBrowserOpen } from './capabilities/tools/system-browser.js'
+import { isExplicitAgentBrowserDataDeletionRequest } from './mcp/browser-data-intent.js'
 
 const EXPECTED_BROWSER_TOOLS = [
   'browser_navigate',
   'browser_navigate_back',
+  'browser_navigate_forward',
+  'browser_reload',
   'browser_snapshot',
   'browser_find',
   'browser_click',
@@ -48,6 +58,8 @@ const FORBIDDEN_BROWSER_TOOLS = [
 const MUTATING_BROWSER_TOOLS = [
   'browser_navigate',
   'browser_navigate_back',
+  'browser_navigate_forward',
+  'browser_reload',
   'browser_click',
   'browser_type',
   'browser_fill_form',
@@ -81,8 +93,43 @@ assert.ok(REMOVED_WEB_AND_BROWSER_TOOLS.every(name => TOOL_SCHEMAS[name] === und
   'removed web and self-built browser tools have no built-in model schema')
 assert.deepEqual(getToolSchemas(REMOVED_WEB_AND_BROWSER_TOOLS), [],
   'schema lookup cannot expose removed web or self-built browser tools')
-assert.deepEqual(findCapabilitiesByQuery('fill form')[0]?.tools, BROWSER_TOOLS,
-  'find_tool discovery loads the same official safe allowlist')
+assert.deepEqual(BROWSER_DISPLAY_TOOLS, ['browser_set_display_mode'])
+assert.ok(TOOL_SCHEMAS.browser_set_display_mode,
+  'the presentation-only browser mode tool has a built-in schema')
+assert.deepEqual(SYSTEM_BROWSER_TOOLS, ['system_browser_open'])
+assert.ok(TOOL_SCHEMAS.system_browser_open,
+  'the installed computer browser has a dedicated built-in schema')
+assert.deepEqual(BROWSER_DATA_TOOLS, ['browser_clear_data'])
+assert.ok(TOOL_SCHEMAS.browser_clear_data,
+  'persistent browser data deletion has a separate high-risk built-in schema')
+assert.deepEqual(findCapabilitiesByQuery('fill form')[0]?.tools, BROWSER_CAPABILITY_TOOLS,
+  'find_tool discovery loads Playwright plus the presentation-only display switch')
+
+for (const messageBody of [
+  '切换到小浏览器', '切换到大浏览器', '换成浏览器卡片', '改成外部浏览器',
+  '用大的窗口打开', '请用大一点的窗口打开', '用大 窗口 口打', '用小的窗口打开',
+  'switch browser to compact card', 'change browser to large window',
+]) {
+  const routed = selectTools({ messageBody, isTick: false })
+  assert.ok(BROWSER_CAPABILITY_TOOLS.every(name => routed.includes(name)),
+    `browser size switch injects the complete browser capability: ${messageBody}`)
+}
+
+assert.equal(findCapabilitiesByQuery('用大的窗口打开')[0]?.tools[0], 'browser_set_display_mode',
+  'find_tool prioritizes the display switch for a spoken size request')
+
+for (const messageBody of [
+  '用我电脑上的浏览器打开 https://example.com',
+  '用电脑的浏览器打开 https://example.com',
+  '电脑浏览器打开这个网站',
+  '用默认浏览器打开视频',
+]) {
+  const routed = selectTools({ messageBody, isTick: false })
+  assert.ok(routed.includes('system_browser_open'),
+    `computer browser request injects its dedicated tool: ${messageBody}`)
+  assert.ok(BROWSER_CAPABILITY_TOOLS.every(name => !routed.includes(name)),
+    `computer browser request does not inject Bailongma Playwright tools: ${messageBody}`)
+}
 
 for (const messageBody of [
   '打开浏览器', '打开网页', '继续刚才页面', '当前页面', '浏览器是否开着', '关闭浏览器',
@@ -171,19 +218,34 @@ const browserContext = capabilityContextBlocks({
 }).find(block => block.includes('Microsoft Playwright MCP Only')) || ''
 assert.match(browserContext, /browser_navigate[\s\S]*automatically return a fresh accessibility snapshot/)
 assert.match(browserContext, /instead of routinely calling browser_snapshot/)
+assert.match(browserContext, /browser_navigate_forward[\s\S]*browser_reload/)
+assert.match(browserContext, /Never reopen the current URL with browser_navigate[\s\S]*"forward" or "reload"/)
+assert.match(browserContext, /click completes navigation only when its result shows a changed final URL or a meaningful changed page state/)
+assert.match(browserContext, /Match search results against the user's full meaning/)
+assert.match(browserContext, /remote GitHub page[\s\S]*Do not switch to read_file, list_dir, find_tool for local files/)
+assert.match(browserContext, /Final replies should report only the key result and real failures/)
 assert.match(browserContext, /browser_find/)
 assert.match(browserContext, /relative filename/)
 assert.match(browserContext, /browser_snapshot rather than a screenshot/)
+assert.match(browserContext, /CAPTCHA\/challenge page is a hard stop[\s\S]*Do not navigate to another provider/)
+assert.match(browserContext, /snapshot shows \[ref=e36\][\s\S]*raw target value "e36"/)
 assert.match(browserContext, /no automatic timeout[\s\S]*stays visible after the response and across later turns/)
 assert.match(browserContext, /asks to open, show, browse, watch, or keep a page[\s\S]*do not call browser_close/)
 assert.match(browserContext, /one-shot lookup or extraction[\s\S]*call browser_close[\s\S]*only when the page is no longer useful/)
 assert.match(browserContext, /intent is ambiguous, prefer leaving the page visible/)
-assert.match(browserContext, /browser_close only hides the browser surface[\s\S]*in-page history[\s\S]*sign-in state/)
+assert.match(browserContext, /browser_close really closes and destroys the live browser page/)
+assert.match(browserContext, /Closing a page never deletes browser data[\s\S]*durable visit history/)
+assert.match(browserContext, /browser_clear_data is the only operation allowed[\s\S]*current user message explicitly asks/)
+assert.match(browserContext, /browser_set_display_mode[\s\S]*mode="card"[\s\S]*mode="window"/)
+assert.match(browserContext, /must not navigate or reload/)
 for (const name of ['browser_run_code_unsafe', 'browser_evaluate', 'browser_file_upload', 'browser_drop']) {
   assert.match(browserContext, new RegExp(name), `${name} is explicitly unavailable in the workflow`)
 }
-for (const legacyTerm of ['browser_sessions', 'browser_open', 'session_id', 'page_id', 'ref epoch', 'persistent profile']) {
-  assert.equal(browserContext.includes(legacyTerm), false, `legacy prompt term removed: ${legacyTerm}`)
+for (const legacyTerm of ['browser_sessions', 'browser_open', 'session_id', 'page_id', 'ref epoch']) {
+  const isPresent = legacyTerm === 'browser_open'
+    ? /(^|[^A-Za-z0-9_])browser_open([^A-Za-z0-9_]|$)/.test(browserContext)
+    : browserContext.includes(legacyTerm)
+  assert.equal(isPresent, false, `legacy prompt term removed: ${legacyTerm}`)
 }
 
 for (const name of MUTATING_BROWSER_TOOLS) {
@@ -195,6 +257,145 @@ for (const name of MUTATING_BROWSER_TOOLS) {
 for (const name of READ_ONLY_BROWSER_TOOLS) {
   assert.equal(classifyTool(name), 'low', `${name} has a read-only fallback risk classification`)
 }
+assert.equal(classifyTool('browser_set_display_mode'), 'low')
+assert.equal(evaluateToolPolicy('browser_set_display_mode', {}, { autonomous: true }).allowed, true,
+  'presentation-only mode switching is reversible and available to autonomous Agent judgment')
+assert.equal(classifyTool('system_browser_open'), 'medium')
+assert.equal(evaluateToolPolicy('system_browser_open', {}, { autonomous: true }).allowed, false,
+  'an autonomous Tick cannot open a user-owned desktop browser')
+
+for (const currentUserMessage of [
+  '不要关闭浏览器',
+  '保持浏览器打开',
+  '别关当前网页',
+  '切回你的小窗口浏览器，最后停留在小窗口，不要关闭浏览器',
+]) {
+  const policy = evaluateToolPolicy('browser_close', {}, { currentUserMessage })
+  assert.equal(policy.allowed, false, `runtime rejects browser_close for: ${currentUserMessage}`)
+  assert.match(policy.reason, /keep.*open|rejected closing/i)
+}
+for (const currentUserMessage of ['现在真正关掉你的浏览器', '关闭当前网页']) {
+  assert.equal(evaluateToolPolicy('browser_close', {}, { currentUserMessage }).allowed, true,
+    `runtime permits explicit browser close for: ${currentUserMessage}`)
+}
+
+const remoteGithubOnly = '只在 GitHub 远端页面查找 browser-data.cjs，不要切换成本地文件搜索'
+for (const name of ['read_file', 'list_dir']) {
+  const policy = evaluateToolPolicy(name, { path: '.' }, { currentUserMessage: remoteGithubOnly })
+  assert.equal(policy.allowed, false, `${name} is blocked for a browser-only remote task`)
+  assert.match(policy.reason, /local filesystem fallback/i)
+}
+assert.equal(evaluateToolPolicy('find_tool', { query: 'find local file browser-data.cjs' }, {
+  currentUserMessage: remoteGithubOnly,
+}).allowed, false, 'find_tool cannot discover a local-file fallback for a browser-only task')
+assert.equal(evaluateToolPolicy('find_tool', { query: 'browser click link' }, {
+  currentUserMessage: remoteGithubOnly,
+}).allowed, true, 'browser capability discovery remains available')
+assert.equal(evaluateToolPolicy('read_file', { path: 'browser-data.cjs' }, {
+  currentUserMessage: '请在 GitHub 远端页面查找 browser-data.cjs',
+}).allowed, false, 'a clearly remote-only GitHub task cannot silently downgrade to local files')
+const combinedWebLocal = '请同时检查 GitHub 远端页面和本地项目里的 browser-data.cjs'
+assert.equal(evaluateToolPolicy('read_file', { path: 'browser-data.cjs' }, {
+  currentUserMessage: combinedWebLocal,
+}).allowed, true, 'an explicit combined web-and-local task may use local files')
+assert.equal(evaluateToolPolicy('find_tool', { query: 'find local file' }, {
+  currentUserMessage: combinedWebLocal,
+}).allowed, true, 'combined scope may discover local file tools')
+
+for (const text of [
+  '删除agent自带的浏览器数据',
+  '清除你的浏览器 Cookie 和登录数据',
+  '删除我的浏览器历史数据',
+  '把白龙马浏览器最近一小时的历史记录删掉',
+  'clear Bailongma browser data',
+]) {
+  assert.equal(isExplicitAgentBrowserDataDeletionRequest(text), true, `explicit Agent browser deletion recognized: ${text}`)
+  assert.ok(selectTools({ messageBody: text, isTick: false }).includes('browser_clear_data'),
+    `explicit Agent browser deletion injects only-authorized clear tool: ${text}`)
+}
+for (const text of [
+  '关闭你的浏览器',
+  '清除浏览器数据',
+  '不要删除你的浏览器数据',
+  '退出这个网站的登录',
+  '清除我电脑浏览器的 Cookie',
+]) {
+  assert.equal(isExplicitAgentBrowserDataDeletionRequest(text), false, `ambiguous/out-of-scope deletion rejected: ${text}`)
+  assert.equal(selectTools({ messageBody: text, isTick: false }).includes('browser_clear_data'), false,
+    `clear tool stays absent without explicit Agent-browser deletion authority: ${text}`)
+}
+assert.equal(selectTools({
+  messageBody: '今天天气怎么样',
+  isTick: false,
+  recentActionLog: [{ tool: 'browser_clear_data' }],
+}).includes('browser_clear_data'), false,
+'a prior authorized deletion never carries browser_clear_data authority into a later turn')
+assert.equal(classifyTool('browser_clear_data'), 'high')
+assert.equal(evaluateToolPolicy('browser_clear_data', {
+  data_types: ['history'], time_range: 'last_hour',
+}, { currentUserMessage: '删除agent自带浏览器最近一小时的历史数据' }).allowed, true)
+assert.equal(evaluateToolPolicy('browser_clear_data', {
+  data_types: ['history'], time_range: 'last_hour',
+}, { currentUserMessage: '清理一下' }).allowed, false)
+assert.equal(evaluateToolPolicy('browser_clear_data', {
+  data_types: ['history'], time_range: 'last_hour',
+}, { currentUserMessage: '删除agent自带浏览器最近一小时的历史数据', autonomous: true }).allowed, false)
+
+const clearCalls = []
+const shutdownRoles = []
+const clearResult = JSON.parse(await execBrowserClearData(
+  { data_types: ['history'], time_range: 'last_hour' },
+  {
+    currentUserMessage: '删除agent自带浏览器最近一小时的历史数据',
+    shutdownBuiltInPlaywrightFn: async ({ role }) => shutdownRoles.push(role),
+    browserDataBridge: {
+      closePage: async () => clearCalls.push({ action: 'closePage' }),
+      clearData: async request => {
+        clearCalls.push(request)
+        return { historyEntriesRemoved: 3, profileDataCleared: [] }
+      },
+    },
+  },
+))
+assert.equal(clearResult.ok, true)
+assert.deepEqual(shutdownRoles, ['interactive', 'reader'])
+assert.deepEqual(clearCalls, [
+  { action: 'closePage' },
+  { dataTypes: ['history'], timeRange: 'last_hour' },
+])
+assert.equal(JSON.parse(await execBrowserClearData(
+  { data_types: ['history'], time_range: 'all_time' },
+  { currentUserMessage: '关闭你的浏览器' },
+)).code, 'EXPLICIT_USER_REQUEST_REQUIRED')
+assert.equal(JSON.parse(await execBrowserClearData(
+  { data_types: ['cookies'], time_range: 'last_hour' },
+  { currentUserMessage: '清除你的浏览器最近一小时的 Cookie' },
+)).code, 'PROFILE_TIME_RANGE_UNSUPPORTED')
+
+const displayState = { mode: 'card' }
+const switchResult = JSON.parse(execBrowserSetDisplayMode(
+  { mode: 'window', reason: 'user takeover' },
+  { browserDisplayState: displayState },
+))
+assert.equal(switchResult.ok, true)
+assert.equal(switchResult.browser_preview.mode, 'window')
+assert.equal(switchResult.browser_preview.transition, true)
+assert.equal(displayState.mode, 'window', 'mode switching updates the shared per-turn browser state')
+
+const systemLaunches = []
+const systemBrowserResult = JSON.parse(await execSystemBrowserOpen(
+  { url: 'https://example.com/path?query=1' },
+  {
+    platform: 'darwin',
+    openSystemBrowser: async (command, args) => systemLaunches.push({ command, args }),
+  },
+))
+assert.equal(systemBrowserResult.ok, true)
+assert.equal(systemBrowserResult.surface, 'system')
+assert.equal(systemBrowserResult.controllable, false)
+assert.deepEqual(systemLaunches, [{ command: 'open', args: ['https://example.com/path?query=1'] }])
+assert.equal(JSON.parse(await execSystemBrowserOpen({ url: 'file:///tmp/private' })).ok, false,
+  'computer browser tool accepts HTTP(S) only')
 
 const urlSecret = `AUDIT_URL_SECRET_${Date.now()}_${Math.random()}`
 for (const name of ['browser_navigate', 'browser_tabs']) {

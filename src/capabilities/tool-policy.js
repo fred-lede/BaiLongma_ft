@@ -1,5 +1,10 @@
 import { config } from '../config.js'
 import { getMcpToolMetadata, isMcpTool } from '../mcp/client-manager.js'
+import { isExplicitAgentBrowserDataDeletionRequest } from '../mcp/browser-data-intent.js'
+import {
+  explicitlyKeepsBrowserOpen,
+  isLocalFileToolCallBlocked,
+} from '../runtime/browser-intent-guards.js'
 
 const TOOL_RISK = {
   read_file: 'low',
@@ -52,6 +57,8 @@ const TOOL_RISK = {
   browser_read: 'high',
   browser_navigate: 'medium',
   browser_navigate_back: 'medium',
+  browser_navigate_forward: 'medium',
+  browser_reload: 'medium',
   browser_snapshot: 'low',
   browser_find: 'low',
   browser_click: 'high',
@@ -68,6 +75,9 @@ const TOOL_RISK = {
   browser_console_messages: 'low',
   browser_resize: 'medium',
   browser_close: 'medium',
+  browser_clear_data: 'high',
+  browser_set_display_mode: 'low',
+  system_browser_open: 'medium',
   speak: 'high',
   generate_lyrics: 'high',
   generate_music: 'high',
@@ -85,6 +95,8 @@ const TOOL_RISK = {
 const BROWSER_MUTATING_TOOLS = [
   'browser_navigate',
   'browser_navigate_back',
+  'browser_navigate_forward',
+  'browser_reload',
   'browser_click',
   'browser_type',
   'browser_fill_form',
@@ -131,6 +143,8 @@ const AUTONOMOUS_USER_AUTH_REQUIRED = new Set([
   'run_capability',
   'run_api_capability',
   'analyze_image',
+  'system_browser_open',
+  'browser_clear_data',
   ...BROWSER_MUTATING_TOOLS,
 ])
 export function classifyTool(name) {
@@ -158,10 +172,35 @@ export function isDangerousShellCommand(command) {
 
 export function evaluateToolPolicy(name, args = {}, context = {}) {
   const risk = classifyTool(name)
+  const currentUserMessage = context.currentUserMessage || ''
   const blockedTools = config.security?.blockedTools || []
   const canonicalName = ['fetch_url', 'browser_read'].includes(name) ? 'web_read' : name
   if (blockedTools.includes(canonicalName)) {
     return { allowed: false, risk, reason: `工具 "${name}" 已被安全策略禁用` }
+  }
+  if (name === 'browser_close' && explicitlyKeepsBrowserOpen(currentUserMessage)) {
+    return {
+      allowed: false,
+      risk,
+      reason: 'the current user explicitly asked to keep the browser/page open or explicitly rejected closing it',
+    }
+  }
+  if (isLocalFileToolCallBlocked(name, args, currentUserMessage)) {
+    return {
+      allowed: false,
+      risk,
+      reason: 'this turn is explicitly limited to browser/remote-web evidence; local filesystem fallback is not authorized',
+    }
+  }
+  if (
+    name === 'browser_clear_data'
+    && !isExplicitAgentBrowserDataDeletionRequest(currentUserMessage)
+  ) {
+    return {
+      allowed: false,
+      risk,
+      reason: 'clearing persistent browser data requires an explicit current user request naming Bailongma/Agent built-in browser data',
+    }
   }
   const startupBrowserCheck = context.autonomous
     && context.startupSelfCheck?.active === true

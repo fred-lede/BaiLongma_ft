@@ -909,8 +909,7 @@ body {
   border-radius: var(--browser-frame-radius);
   background: #020305;
   box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.08),
-    0 0 0 1px rgba(255, 255, 255, 0.055),
+    0 0 0 1px color-mix(in srgb, var(--line-strong) 78%, transparent),
     0 8px 22px rgba(0, 0, 0, 0.28);
   transform: translate3d(calc(100% + 24px), 0, 0);
   opacity: 0;
@@ -935,11 +934,13 @@ body {
   background:
     radial-gradient(circle at 50% 42%, color-mix(in srgb, var(--warm) 7%, transparent), transparent 55%),
     #101318;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+  box-shadow: none;
 }
 
 .browser-preview[data-renderer="native"] .browser-preview-viewport {
-  background: #fff;
+  /* A sub-pixel native/DIP rounding difference can expose the DOM slot by a
+     fraction of a pixel. Match it to the black bezel so no white seam appears. */
+  background: #020305;
 }
 
 .browser-preview-image {

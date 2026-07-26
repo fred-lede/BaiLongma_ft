@@ -714,7 +714,9 @@ try {
     const latest = updates.at(-1)?.payload
     const slot = document.querySelector('#browser-preview-native-slot')
     const rect = slot?.getBoundingClientRect()
-    const radius = slot ? parseFloat(getComputedStyle(slot).borderTopLeftRadius) : 0
+    const slotStyle = slot ? getComputedStyle(slot) : null
+    const previewStyle = getComputedStyle(document.querySelector('#browser-preview'))
+    const radius = slotStyle ? parseFloat(slotStyle.borderTopLeftRadius) : 0
     const zoom = Number(window.bailongma?.getZoomFactor?.()) || 1
     return {
       calls,
@@ -730,6 +732,9 @@ try {
       renderer: document.querySelector('#browser-preview')?.dataset.renderer,
       actionLogHidden: document.querySelector('#action-log')?.hidden,
       imageSrc: document.querySelector('#browser-preview-image')?.getAttribute('src'),
+      slotBackground: slotStyle?.backgroundColor,
+      slotBoxShadow: slotStyle?.boxShadow,
+      bezelColor: previewStyle.borderTopColor,
     }
   })
   const nativeGeometry = nativeBrowserPreview.latest?.bounds
@@ -740,6 +745,8 @@ try {
     || nativeBrowserPreview.imageSrc
     || nativeBrowserPreview.latest?.interactive !== false
     || nativeBrowserPreview.latest?.url !== 'https://example.com/docs'
+    || nativeBrowserPreview.slotBoxShadow !== 'none'
+    || nativeBrowserPreview.slotBackground !== nativeBrowserPreview.bezelColor
     || nativeBrowserPreview.latest?.radius !== nativeBrowserPreview.expected?.radius
     || !nativeGeometry
     || Math.abs(nativeGeometry.x - nativeBrowserPreview.expected.x) > 1
@@ -836,7 +843,10 @@ try {
         moduleBackground: moduleStyle.backgroundColor,
         previewBorder: previewStyle.borderTopWidth,
         previewRadius: previewStyle.borderTopLeftRadius,
+        previewShadow: previewStyle.boxShadow,
+        cardBorderColor: actionSurfaceStyle.borderTopColor,
         viewportRadius: viewportStyle.borderTopLeftRadius,
+        viewportShadow: viewportStyle.boxShadow,
         imageObjectFit: getComputedStyle(image).objectFit,
         imageMaxWidth: getComputedStyle(image).maxWidth,
         viewportOverflow: viewportStyle.overflow,
@@ -867,6 +877,8 @@ try {
           && !document.querySelector('.browser-preview-scanline'),
         frameUsesBorderBox: previewStyle.boxSizing === 'border-box',
         frameHasThickBorder: parseFloat(previewStyle.borderTopWidth) >= 8,
+        frameOutlineMatchesCard: previewStyle.boxShadow.includes(actionSurfaceStyle.borderTopColor),
+        noInnerHighlightSeam: viewportStyle.boxShadow === 'none',
         concentricCorners: Math.abs(
           parseFloat(previewStyle.borderTopLeftRadius)
           - parseFloat(previewStyle.borderTopWidth)
@@ -1006,6 +1018,88 @@ try {
       && document.querySelector('.action-log-module')?.dataset.browserPhase === 'browser'
       && document.querySelector('#action-log')?.hidden === true
     ))
+  }
+  const nativeHideCountBeforeModeSwitch = await nativePage.evaluate(() => (
+    window.__browserEmbedCalls?.filter(call => call.method === 'hide').length || 0
+  ))
+  server.emitTransientSse({
+    type: 'tool_executing',
+    data: {
+      name: 'browser_set_display_mode',
+      args: { mode: 'window' },
+      browser_display_mode: 'window',
+    },
+    ts: new Date().toISOString(),
+  })
+  await nativePage.waitForFunction(() => (
+    window.__browserEmbedCalls?.some(call => (
+      call.method === 'update'
+      && call.payload?.mode === 'window'
+      && call.payload?.visible === true
+      && call.payload?.interactive === true
+      && call.payload?.transition?.enabled === true
+      && call.payload?.transition?.durationMs === 480
+    ))
+  ))
+  for (const target of [page, nativePage]) {
+    await target.waitForFunction(() => (
+      document.querySelector('#browser-preview')?.hidden
+      && !document.querySelector('#action-log')?.hidden
+      && !document.querySelector('.action-log-module')?.dataset.browserActive
+    ))
+  }
+  server.emitTransientSse({
+    type: 'tool_executing',
+    data: {
+      name: 'browser_set_display_mode',
+      args: { mode: 'card' },
+      browser_display_mode: 'card',
+    },
+    ts: new Date().toISOString(),
+  })
+  server.emitTransientSse({
+    type: 'browser_preview',
+    data: {
+      mode: 'card',
+      state: 'ready',
+      action: 'browser_set_display_mode',
+      native_view: true,
+      transition: true,
+      image_url: '/site-assets/browser-preview.png',
+      revision: 'smoke-mode-switch',
+      url: 'https://example.com/docs',
+      title: 'Example Documentation',
+    },
+    ts: new Date().toISOString(),
+  })
+  await nativePage.waitForFunction(() => (
+    window.__browserEmbedCalls?.some(call => (
+      call.method === 'update'
+      && call.payload?.mode === 'card'
+      && call.payload?.visible === true
+      && call.payload?.transition?.enabled === true
+      && call.payload?.transition?.durationMs === 480
+    ))
+  ))
+  for (const target of [page, nativePage]) {
+    await target.waitForFunction(() => (
+      !document.querySelector('#browser-preview')?.hidden
+      && document.querySelector('.action-log-module')?.dataset.browserPhase === 'browser'
+      && document.querySelector('#action-log')?.hidden === true
+    ))
+  }
+  const modeSwitchState = await nativePage.evaluate(() => ({
+    hideCount: window.__browserEmbedCalls?.filter(call => call.method === 'hide').length || 0,
+    streamText: document.querySelector('#si-l1')?.textContent || '',
+  }))
+  if (modeSwitchState.hideCount !== nativeHideCountBeforeModeSwitch) {
+    throw new Error('switching browser size must reparent the live view without hiding it')
+  }
+  if (
+    !modeSwitchState.streamText.includes('切换到小浏览器')
+    || modeSwitchState.streamText.includes('browser_set_display_mode')
+  ) {
+    throw new Error(`browser size switch is not user-friendly in Brain UI: ${modeSwitchState.streamText}`)
   }
   server.emitTransientSse({
     type: 'tool_preparing',

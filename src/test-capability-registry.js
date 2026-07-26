@@ -22,6 +22,8 @@ const none = (arr, xs) => xs.every(x => !arr.includes(x))
 const EXPECTED_BROWSER_TOOLS = [
   'browser_navigate',
   'browser_navigate_back',
+  'browser_navigate_forward',
+  'browser_reload',
   'browser_snapshot',
   'browser_find',
   'browser_click',
@@ -63,7 +65,7 @@ function ctx(rawText, isTick = false) {
 {
   const caps = listCapabilities()
   const ids = caps.map(c => c.id)
-  assert(['interactive-browser', 'weather', 'hotspot', 'worldcup', 'typhoon', 'software-install'].every(id => ids.includes(id))
+  assert(['system-browser', 'interactive-browser', 'weather', 'hotspot', 'worldcup', 'typhoon', 'software-install'].every(id => ids.includes(id))
     && !ids.includes('web'),
     `1) listCapabilities 含台风在内的 v1 能力 (got: ${ids.join(',')})`)
   assert(caps.every(c => c.label && c.summary), '1) 每个能力都有 label + summary（自感知用）')
@@ -71,6 +73,11 @@ function ctx(rawText, isTick = false) {
     `1b) 浏览器能力只暴露官方 MCP 安全白名单 (got: ${BROWSER_TOOLS.join(',')})`)
   assert(none(BROWSER_TOOLS, FORBIDDEN_BROWSER_TOOLS),
     '1c) 自研会话工具、任意 JS 与文件入口不在浏览器白名单')
+}
+{
+  const systemBrowser = capabilityToolsFor(ctx('用我电脑上的浏览器打开 https://example.com'))
+  assert(has(systemBrowser, 'system_browser_open') && none(systemBrowser, BROWSER_TOOLS),
+    `1d) 电脑浏览器与白龙马 Playwright 工具严格分离 (got: ${systemBrowser.join(',')})`)
 }
 
 // ===== 2) tool 注入门解耦 =====
@@ -154,7 +161,8 @@ function ctx(rawText, isTick = false) {
     && browserContext.includes('instead of routinely calling browser_snapshot')
     && browserContext.includes('relative filename') && browserContext.includes('browser_run_code_unsafe'),
   '3e) 浏览器工作流说明官方自动 snapshot、显式兜底、安全截图和禁用工具')
-  assert(['browser_sessions', 'session_id', 'page_id', 'ref epoch', 'browser_open'].every(term => !browserContext.includes(term)),
+  assert(['browser_sessions', 'session_id', 'page_id', 'ref epoch'].every(term => !browserContext.includes(term))
+    && !/(^|[^A-Za-z0-9_])browser_open([^A-Za-z0-9_]|$)/.test(browserContext),
     '3f) 浏览器工作流不再提示自研会话/profile/epoch 模型')
   assert(capabilityContextBlocks(ctx('随便聊两句')).length === 0,
     '3g) 中性消息 → 无能力工作流块')
@@ -173,6 +181,9 @@ function ctx(rawText, isTick = false) {
   assert(findCapabilitiesByQuery('看热点').some(c => c.id === 'hotspot'), '4b) "看热点" → 发现 hotspot')
   assert(findCapabilitiesByQuery('天气').some(c => c.id === 'weather'), '4c) "天气" → 发现 weather')
   assert(findCapabilitiesByQuery('台风路径').some(c => c.id === 'typhoon'), '4c2) "台风路径" → 发现 typhoon')
+  assert(findCapabilitiesByQuery('用我电脑上的浏览器').some(c => (
+    c.id === 'system-browser' && c.tools.includes('system_browser_open')
+  )), '4c3) “电脑浏览器” → 发现独立系统浏览器能力')
   assert(findCapabilitiesByQuery('上网搜索').some(c => c.id === 'interactive-browser'),
     '4d) "上网搜索" → 发现统一 Playwright 网页能力')
   for (const query of ['上网搜索', '读取网页正文', '读取 JS 动态网页正文']) {

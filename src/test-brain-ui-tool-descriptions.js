@@ -10,9 +10,13 @@ for (const toolName of BUILTIN_PLAYWRIGHT_ALLOWED_TOOLS) {
 }
 
 assert.equal(friendlyToolName('browser_navigate'), '打开网页')
+assert.equal(friendlyToolName('browser_navigate_forward'), '前进到下一页')
+assert.equal(friendlyToolName('browser_reload'), '重新加载网页')
 assert.equal(friendlyToolName('browser_fill_form'), '填写表单')
 assert.equal(friendlyToolName('browser_press_key', { key: 'End' }), '滚动页面')
 assert.equal(friendlyToolName('browser_tabs', { action: 'select' }), '切换标签页')
+assert.equal(friendlyToolName('system_browser_open'), '用电脑浏览器打开')
+assert.notEqual(friendlyToolIcon('system_browser_open'), '⚙️')
 assert.equal(
   friendlyToolName('mcp__custom_playwright__browser_navigate'),
   '打开网页',

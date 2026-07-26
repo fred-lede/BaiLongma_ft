@@ -5,6 +5,9 @@ import { createConnection } from '@playwright/mcp'
 import { chromium } from 'playwright'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import navigationExposure from './playwright-official-navigation.cjs'
+
+const { exposeOfficialNavigationTools } = navigationExposure
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]'])
 const TARGET_ID_RE = /^[A-Za-z0-9._:-]{1,160}$/
@@ -165,6 +168,7 @@ export async function connectEmbeddedPlaywrightInProcess({
   chromiumApi = chromium,
   createTransportPair = () => InMemoryTransport.createLinkedPair(),
 } = {}) {
+  exposeOfficialNavigationTools()
   const safeTarget = normalizeEmbeddedBrowserTarget(target)
   const browser = await attachBrowser(safeTarget.cdpEndpoint, chromiumApi)
   const { context, page } = await findEmbeddedBrowserPage(browser, safeTarget.targetId)

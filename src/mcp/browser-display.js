@@ -5,10 +5,14 @@ import { paths } from '../paths.js'
 export const BROWSER_DISPLAY_CARD = 'card'
 export const BROWSER_DISPLAY_WINDOW = 'window'
 
-const EXPLICIT_CARD_MODE_RE = /(?:小窗口|小卡片|卡片模式|缩略(?:卡片|窗口|模式)?|行动日志.{0,8}(?:窗口|卡片)|后台浏览|静默浏览|不打开窗口|不(?:要|用|使用|打开).{0,10}(?:大窗口|外部窗口|外部大窗口))/i
+const EXPLICIT_CARD_MODE_RE = /(?:你的浏览器|小\s*(?:一\s*点\s*)?(?:的\s*)?(?:浏览器|窗口|卡片)|卡片浏览器|浏览器卡片|卡片模式|缩略(?:卡片|窗口|模式)?|行动日志.{0,8}(?:窗口|卡片)|后台浏览|静默浏览|不打开窗口|不(?:要|用|使用|打开).{0,10}(?:大\s*(?:一\s*点\s*)?(?:的\s*)?(?:浏览器|窗口)|外部窗口|外部大窗口)|compact\s+browser|small\s+browser|browser\s+card)/i
 const CARD_MODE_RE = /^(?:帮我|请)?(?:搜|搜索|查|查询|检索|看看)|(?:上网|网上|联网).{0,8}(?:搜|搜索|查|查询|看看)|(?:搜|搜索|查|查询|检索|了解|看看|读取|阅读|总结|概括|摘要).{0,18}(?:网页|网站|网上|互联网|资料|信息|内容|文章|新闻|结果|官网|文档|天气|价格|汇率|赛程|比分)|(?:百度|谷歌|bing|google).{0,12}(?:搜|搜索|查)|(?:web\s*search|search|look\s*up|find|read|summari[sz]e).{0,20}(?:web|online|internet|website|webpage|page|article|news|docs?)/i
 const FACT_LOOKUP_RE = /(?:谁是|是谁|是什么(?:人|公司|组织|项目|产品|软件|东西)?|是做什么的|做什么的|(?:人物|公司|产品|项目)?(?:简介|资料|背景|经历|生平|履历))|^(?:请)?(?:介绍|讲讲|科普|了解)(?:一下|下)?[\s“"'‘’]*[\p{L}\p{N}]/iu
-const WINDOW_MODE_RE = /(?:大窗口|外部窗口|完整浏览器|可见浏览器|我来操作|我自己操作|让我操作|手动操作|展示给我|(?:打开|切到|显示|展示).{0,12}(?:给我看|让我看))|(?:登录|登入|注册|填写|填入|输入框|点击|点一下|回复|发表评论|评论一下|写评论|发帖|发布|提交|上传|下载|拖动|悬停|验证码|支付|购买|下单).{0,18}(?:网页|网站|页面|按钮|链接|菜单|标签|表单|账号|内容|评论|帖子)?|(?:browser\s+window|visible\s+browser|log\s*in|sign\s*in|fill\s+(?:in\s+)?(?:a\s+)?form|click|reply|(?:write|leave|post)\s+(?:a\s+)?comment|post|publish|submit|upload|download|drag|hover|captcha|checkout)/i
+const WINDOW_MODE_RE = /(?:我的浏览器|大\s*(?:一\s*点\s*)?(?:的\s*)?(?:浏览器|窗口)|外部(?:大\s*(?:一\s*点\s*)?(?:的\s*)?)?(?:浏览器|窗口)|完整浏览器|可见浏览器|我来操作|我自己操作|让我操作|手动操作|展示给我|(?:打开|切到|显示|展示).{0,12}(?:给我看|让我看))|(?:登录|登入|注册|扫码|填写|填入|输入框|点击|点一下|回复|发表评论|评论一下|写评论|发帖|发布|提交|上传|下载|拖动|悬停|验证码|支付|购买|下单|看视频|观看视频|播放视频).{0,18}(?:网页|网站|页面|按钮|链接|菜单|标签|表单|账号|内容|评论|帖子)?|(?:browser\s+window|visible\s+browser|log\s*in|sign\s*in|fill\s+(?:in\s+)?(?:a\s+)?form|click|reply|(?:write|leave|post)\s+(?:a\s+)?comment|post|publish|submit|upload|download|drag|hover|captcha|checkout)/i
+const EXPLICIT_WINDOW_MODE_RE = /(?:我的浏览器|大\s*(?:一\s*点\s*)?(?:的\s*)?(?:浏览器|窗口)|外部(?:大\s*(?:一\s*点\s*)?(?:的\s*)?)?(?:浏览器|窗口)|完整浏览器|可见浏览器|browser\s+window|visible\s+browser|large\s+(?:browser|window))/i
+const DISPLAY_MODE_REQUEST_RE = /(?:(?:切换|切到|切回|换成|改成|调成|显示为|变成|放到|回到|使用|用|打开).{0,16}(?:你的浏览器|我的浏览器|小\s*(?:一\s*点\s*)?(?:的\s*)?(?:浏览器|窗口|卡片)|大\s*(?:一\s*点\s*)?(?:的\s*)?(?:浏览器|窗口)|浏览器卡片|卡片浏览器|外部浏览器|外部窗口)|(?:你的浏览器|我的浏览器|小\s*(?:一\s*点\s*)?(?:的\s*)?(?:浏览器|窗口|卡片)|大\s*(?:一\s*点\s*)?(?:的\s*)?(?:浏览器|窗口)|浏览器卡片|卡片浏览器|外部浏览器|外部窗口).{0,12}(?:打开|显示|切换|模式|一下|吧))|(?:(?:switch|change|use|open).{0,16}(?:browser|webpage).{0,12}(?:card|compact|small|window|large))/i
+const SYSTEM_BROWSER_INTENT_RE = /(?:(?:我(?:的)?\s*)?电脑\s*(?:上|里)?\s*(?:安装\s*)?(?:的\s*)?浏览器|电脑浏览器|系统\s*(?:默认\s*)?浏览器|默认浏览器|system\s+browser|default\s+browser)/i
+const SYSTEM_BROWSER_REQUEST_RE = /(?:(?:使用|用|打开|交给|放到).{0,18}(?:(?:我(?:的)?\s*)?电脑\s*(?:上|里)?\s*(?:安装\s*)?(?:的\s*)?浏览器|电脑浏览器|系统\s*(?:默认\s*)?浏览器|默认浏览器)|(?:(?:我(?:的)?\s*)?电脑\s*(?:上|里)?\s*(?:安装\s*)?(?:的\s*)?浏览器|电脑浏览器|系统\s*(?:默认\s*)?浏览器|默认浏览器).{0,12}(?:打开|访问|搜索|看|播放))|(?:(?:use|open\s+in).{0,16}(?:the\s+)?(?:system|default)\s+browser)/i
 const BROWSER_PREVIEW_FILE_RE = /^brain-ui-preview-\d{13}-\d+\.png$/
 let previewSequence = 0
 
@@ -28,6 +32,29 @@ export function inferBrowserDisplayMode(text = '', { autonomous = false } = {}) 
   if (WINDOW_MODE_RE.test(value)) return BROWSER_DISPLAY_WINDOW
   if (autonomous || CARD_MODE_RE.test(value) || FACT_LOOKUP_RE.test(value)) return BROWSER_DISPLAY_CARD
   return BROWSER_DISPLAY_CARD
+}
+
+export function isExplicitBrowserDisplayModeIntent(text = '') {
+  const value = normalizeBrowserIntentText(text)
+  return EXPLICIT_CARD_MODE_RE.test(value) || EXPLICIT_WINDOW_MODE_RE.test(value)
+}
+
+export function isExplicitBrowserDisplayModeRequest(text = '') {
+  const value = normalizeBrowserIntentText(text)
+  return DISPLAY_MODE_REQUEST_RE.test(value)
+}
+
+export function isSystemBrowserIntent(text = '') {
+  return SYSTEM_BROWSER_INTENT_RE.test(normalizeBrowserIntentText(text))
+}
+
+export function isSystemBrowserRequest(text = '') {
+  return SYSTEM_BROWSER_REQUEST_RE.test(normalizeBrowserIntentText(text))
+}
+
+export function inferBrowserSurface(text = '', options = {}) {
+  if (isSystemBrowserIntent(text)) return 'system'
+  return inferBrowserDisplayMode(text, options)
 }
 
 export function isCardBrowserDisplayMode(value) {
@@ -76,8 +103,12 @@ export function pruneBrowserPreviewFiles({ keep = 6 } = {}) {
 export const __internal = {
   BROWSER_PREVIEW_FILE_RE,
   CARD_MODE_RE,
+  DISPLAY_MODE_REQUEST_RE,
   EXPLICIT_CARD_MODE_RE,
+  EXPLICIT_WINDOW_MODE_RE,
   FACT_LOOKUP_RE,
   WINDOW_MODE_RE,
+  SYSTEM_BROWSER_INTENT_RE,
+  SYSTEM_BROWSER_REQUEST_RE,
   normalizeBrowserIntentText,
 }

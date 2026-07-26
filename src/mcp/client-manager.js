@@ -38,6 +38,8 @@ const PLAYWRIGHT_SNAPSHOT_FILE_RE = /^page-[A-Za-z0-9_.:-]+\.ya?ml$/i
 const PLAYWRIGHT_PREVIEW_ACTIONS = new Set([
   'browser_navigate',
   'browser_navigate_back',
+  'browser_navigate_forward',
+  'browser_reload',
   'browser_snapshot',
   'browser_find',
   'browser_click',
@@ -322,6 +324,7 @@ async function connectEmbeddedServer(server, deps = {}) {
       resourcesDir: builtInOptions.resourcesDir,
       sandboxDir: builtInOptions.sandboxDir,
       allowPrivateNetwork: server.allowPrivateNetwork === true,
+      nativeNetworkGuard: target.nativeNetworkGuard === true,
     })
     // Keep automatic snapshot artifacts under the same trusted output root
     // used by the built-in interactive server/result hydrator.
@@ -430,7 +433,16 @@ export async function reconcileMcpClients(servers = getRuntimeMcpServers(), deps
     }
   }
   await Promise.allSettled(closing)
-  await Promise.all([...desired.values()].map(server => connectServerOnce(server, deps)))
+  // Built-in Playwright schemas are trusted and exposed from the fixed
+  // descriptors below, so merely loading the tool catalog must not start a
+  // browser. This is especially important on macOS: creating the persistent
+  // browser profile can ask for Keychain access. Connect built-ins lazily only
+  // when executeBuiltInPlaywrightTool handles a real tool call.
+  const eagerServers = [...desired.values()].filter(server => ![
+    BUILTIN_PLAYWRIGHT_INTERACTIVE_ID,
+    BUILTIN_PLAYWRIGHT_READER_ID,
+  ].includes(server.id))
+  await Promise.all(eagerServers.map(server => connectServerOnce(server, deps)))
   rebuildToolCatalog()
   return getMcpStatus()
 }
@@ -569,10 +581,29 @@ function readPlaywrightSnapshotFile(snapshotRoot, linkedPath) {
     const root = fs.realpathSync(String(snapshotRoot || ''))
     const raw = decodeURI(String(linkedPath || '').trim().replace(/^<|>$/g, ''))
     if (!raw || raw.includes('\0')) return null
-    const candidate = path.resolve(root, raw)
-    if (!PLAYWRIGHT_SNAPSHOT_FILE_RE.test(path.basename(candidate))) return null
-    const resolved = fs.realpathSync(candidate)
-    if (!pathIsWithin(root, resolved)) return null
+    const candidates = path.isAbsolute(raw)
+      ? [path.normalize(raw)]
+      : [
+          path.resolve(root, raw),
+          // Playwright MCP 0.0.78 can emit macOS absolute paths without the
+          // first slash. Trying that spelling is safe because the realpath
+          // containment check below is identical for every candidate.
+          ...(path.sep === '/' && raw.includes(path.sep)
+            ? [path.normalize(`${path.sep}${raw}`)]
+            : []),
+        ]
+    let resolved = ''
+    for (const candidate of candidates) {
+      if (!PLAYWRIGHT_SNAPSHOT_FILE_RE.test(path.basename(candidate))) continue
+      try {
+        const realCandidate = fs.realpathSync(candidate)
+        if (pathIsWithin(root, realCandidate)) {
+          resolved = realCandidate
+          break
+        }
+      } catch {}
+    }
+    if (!resolved) return null
     const stat = fs.statSync(resolved)
     if (!stat.isFile()) return null
     const bytesToRead = Math.min(stat.size, MAX_AUTO_SNAPSHOT_BYTES)
@@ -604,7 +635,11 @@ function inlinePlaywrightSnapshotLinks(text, snapshotRoot) {
   })
 }
 
-function formatMcpToolResult(tool, result, { serverConfig = null, browserPreview = null } = {}) {
+function formatMcpToolResult(tool, result, {
+  serverConfig = null,
+  browserPreview = null,
+  browserLifecycle = null,
+} = {}) {
   const isBuiltInPlaywright = serverConfig?.builtIn === true && !!serverConfig?.playwrightRole
   const rawContent = Array.isArray(result?.content) ? result.content : []
   const hydratedContent = isBuiltInPlaywright
@@ -626,6 +661,7 @@ function formatMcpToolResult(tool, result, { serverConfig = null, browserPreview
   if (result?.structuredContent !== undefined) payload.structured_content = result.structuredContent
   if (result?.isError === true) payload.error = 'MCP tool returned isError=true'
   if (browserPreview) payload.browser_preview = browserPreview
+  if (browserLifecycle) Object.assign(payload, browserLifecycle)
   const serialized = JSON.stringify(payload, null, 2)
   if (serialized.length <= MAX_TOOL_RESULT_CHARS) return serialized
   const compact = {
@@ -650,6 +686,22 @@ function formatMcpToolResult(tool, result, { serverConfig = null, browserPreview
   }, null, 2)
 }
 
+async function finalizeEmbeddedBrowserClose(connection, tool, context = {}) {
+  const bridge = embeddedBridgeForDeps(context.mcpDeps || {})
+  if (!bridge || typeof bridge.closePage !== 'function') {
+    throw new Error('embedded browser host does not provide a real close operation')
+  }
+  if (connections.get(tool.serverId) === connection) connections.delete(tool.serverId)
+  await closeConnection(connection)
+  rebuildToolCatalog()
+  const state = await bridge.closePage()
+  return {
+    page_destroyed: true,
+    profile_data_preserved: true,
+    persistent_partition: state?.partition || connection.embeddedTarget?.partition || '',
+  }
+}
+
 function extractPlaywrightPageMetadata(result = {}) {
   const text = (Array.isArray(result?.content) ? result.content : [])
     .filter(item => item?.type === 'text')
@@ -661,9 +713,21 @@ function extractPlaywrightPageMetadata(result = {}) {
   }
 }
 
+function browserDisplayModeForContext(context = {}) {
+  const liveMode = context.browserDisplayState?.mode
+  return isCardBrowserDisplayMode(liveMode ?? context.browserDisplayMode) ? 'card' : 'window'
+}
+
+function playwrightRoleForContext(context = {}) {
+  if (context.browserDisplayState && typeof context.browserDisplayState === 'object') {
+    return browserDisplayModeForContext(context) === 'card' ? 'reader' : 'interactive'
+  }
+  return String(context.playwrightRole || context.mode || 'interactive').trim().toLowerCase()
+}
+
 async function capturePlaywrightBrowserPreview(connection, tool, primaryResult, context = {}) {
   if (connection?.embedded === true) {
-    const mode = isCardBrowserDisplayMode(context.browserDisplayMode) ? 'card' : 'window'
+    const mode = browserDisplayModeForContext(context)
     const target = connection.embeddedTarget || {}
     if (tool.remoteName === 'browser_close') {
       return {
@@ -704,7 +768,7 @@ async function capturePlaywrightBrowserPreview(connection, tool, primaryResult, 
   }
 
   if (
-    !isCardBrowserDisplayMode(context.browserDisplayMode)
+    browserDisplayModeForContext(context) !== 'card'
     || connection?.config?.playwrightRole !== 'reader'
   ) return null
 
@@ -752,6 +816,61 @@ async function capturePlaywrightBrowserPreview(connection, tool, primaryResult, 
   }
 }
 
+async function reconcileEmbeddedWindowOpenNavigation(connection, tool, result, context = {}) {
+  if (connection?.embedded !== true || tool.remoteName !== 'browser_click') return result
+  const bridge = embeddedBridgeForDeps(context.mcpDeps || {})
+  if (!bridge || typeof bridge.consumeWindowOpenNavigation !== 'function') return result
+  const takeover = await bridge.consumeWindowOpenNavigation()
+  if (!takeover) return result
+
+  if (takeover.ok !== true) {
+    return {
+      ...result,
+      isError: true,
+      content: [
+        ...(Array.isArray(result?.content) ? result.content : []),
+        {
+          type: 'text',
+          text: `New-window navigation was blocked by Bailongma URL policy: ${takeover.error || 'unsafe target'}`,
+        },
+      ],
+      structuredContent: {
+        ...(result?.structuredContent && typeof result.structuredContent === 'object'
+          ? result.structuredContent
+          : {}),
+        window_open_takeover: takeover,
+      },
+    }
+  }
+
+  // The popup itself was denied and its validated target finished loading in
+  // the one managed page. Ask the official MCP server for the semantic state
+  // now, so browser_click returns the real final URL and fresh refs instead of
+  // a premature "click succeeded" snapshot from before the takeover.
+  const snapshot = await connection.client.callTool(
+    { name: 'browser_snapshot', arguments: {} },
+    undefined,
+    { timeout: tool.timeoutMs, signal: context.signal },
+  )
+  return {
+    ...result,
+    isError: snapshot?.isError === true,
+    content: [
+      {
+        type: 'text',
+        text: `New-window target was safely opened in the current managed page.\n- Page URL: ${takeover.finalUrl}`,
+      },
+      ...(Array.isArray(snapshot?.content) ? snapshot.content : []),
+    ],
+    structuredContent: {
+      ...(snapshot?.structuredContent && typeof snapshot.structuredContent === 'object'
+        ? snapshot.structuredContent
+        : {}),
+      window_open_takeover: takeover,
+    },
+  }
+}
+
 async function callMcpTool(tool, args = {}, context = {}) {
   const connection = connections.get(tool.serverId)
   if (!connection || connection.status !== 'connected') {
@@ -766,10 +885,16 @@ async function callMcpTool(tool, args = {}, context = {}) {
       throw new Error('embedded browser owns one persistent tab; creating or closing tabs is disabled')
     }
     const invoke = async () => {
-      const result = await connection.client.callTool(
+      const primaryResult = await connection.client.callTool(
         { name: tool.remoteName, arguments: args || {} },
         undefined,
         { timeout: tool.timeoutMs, signal: context.signal },
+      )
+      const result = await reconcileEmbeddedWindowOpenNavigation(
+        connection,
+        tool,
+        primaryResult,
+        context,
       )
       const browserPreview = await capturePlaywrightBrowserPreview(connection, tool, result, context)
       return { result, browserPreview }
@@ -777,12 +902,48 @@ async function callMcpTool(tool, args = {}, context = {}) {
     const resultPromise = connection.callQueue.catch(() => {}).then(invoke)
     connection.callQueue = resultPromise.then(() => undefined, () => undefined)
     const { result, browserPreview } = await resultPromise
+    const browserLifecycle = connection.embedded === true && tool.remoteName === 'browser_close'
+      ? await finalizeEmbeddedBrowserClose(connection, tool, context)
+      : null
+    if (browserLifecycle && browserPreview) Object.assign(browserPreview, browserLifecycle)
     return formatMcpToolResult(tool, result, {
       serverConfig: connection.config,
       browserPreview,
+      browserLifecycle,
     })
   } catch (err) {
     if (err?.name === 'AbortError') throw err
+    if (connection.embedded === true && tool.remoteName === 'browser_close') {
+      try {
+        const browserLifecycle = await finalizeEmbeddedBrowserClose(connection, tool, context)
+        return JSON.stringify({
+          ok: true,
+          source: 'mcp',
+          server_id: tool.serverId,
+          tool: tool.alias,
+          remote_tool: tool.remoteName,
+          content: [],
+          browser_preview: {
+            mode: browserDisplayModeForContext(context),
+            state: 'closed',
+            action: tool.remoteName,
+            native_view: true,
+            ...browserLifecycle,
+          },
+          ...browserLifecycle,
+          upstream_warning: err?.message || String(err),
+        }, null, 2)
+      } catch (closeError) {
+        return JSON.stringify({
+          ok: false,
+          source: 'mcp',
+          server_id: tool.serverId,
+          tool: tool.alias,
+          remote_tool: tool.remoteName,
+          error: closeError?.message || String(closeError),
+        }, null, 2)
+      }
+    }
     return JSON.stringify({
       ok: false,
       source: 'mcp',
@@ -794,14 +955,49 @@ async function callMcpTool(tool, args = {}, context = {}) {
   }
 }
 
+const PLAYWRIGHT_TARGET_ARG_KEYS = new Set([
+  'target',
+  'ref',
+  'startTarget',
+  'endTarget',
+  'startRef',
+  'endRef',
+])
+
+function unwrapPlaywrightSnapshotRef(value) {
+  if (typeof value !== 'string') return value
+  const trimmed = value.trim()
+  const wrapped = trimmed.match(/^ref\s*=\s*([a-z][a-z0-9_-]{0,127})$/i)
+    || trimmed.match(/^\[\s*ref\s*=\s*([a-z][a-z0-9_-]{0,127})\s*\]$/i)
+  return wrapped ? wrapped[1] : value
+}
+
+function normalizePlaywrightTargetTree(value) {
+  if (Array.isArray(value)) return value.map(item => normalizePlaywrightTargetTree(item))
+  if (!value || typeof value !== 'object') return value
+  const normalized = {}
+  for (const [key, item] of Object.entries(value)) {
+    normalized[key] = PLAYWRIGHT_TARGET_ARG_KEYS.has(key)
+      ? unwrapPlaywrightSnapshotRef(item)
+      : normalizePlaywrightTargetTree(item)
+  }
+  return normalized
+}
+
+function normalizeBuiltInPlaywrightArgs(remoteName, args = {}) {
+  if (!isBuiltInPlaywrightToolAllowed(remoteName)) return args
+  return normalizePlaywrightTargetTree(args || {})
+}
+
 async function validateBuiltInPlaywrightArgs(remoteName, args = {}, context = {}) {
-  if (remoteName !== 'browser_navigate') return { ok: true, args }
+  const normalizedArgs = normalizeBuiltInPlaywrightArgs(remoteName, args)
+  if (remoteName !== 'browser_navigate') return { ok: true, args: normalizedArgs }
   try {
-    const url = await assertWebUrlAllowed(args?.url, {
+    const url = await assertWebUrlAllowed(normalizedArgs?.url, {
       allowPrivateNetwork: () => config.security?.browserPrivateNetwork === true,
       ...(context.webUrlPolicyOptions || {}),
     })
-    return { ok: true, args: { ...(args || {}), url } }
+    return { ok: true, args: { ...normalizedArgs, url } }
   } catch (error) {
     return {
       ok: false,
@@ -831,7 +1027,7 @@ export async function executeMcpTool(name, args = {}, context = {}) {
     const useEmbedded = Boolean(embeddedBridgeForDeps(context.mcpDeps || {}))
     const effectiveServerId = useEmbedded
       ? BUILTIN_PLAYWRIGHT_INTERACTIVE_ID
-      : isCardBrowserDisplayMode(context.browserDisplayMode)
+      : browserDisplayModeForContext(context) === 'card'
       ? BUILTIN_PLAYWRIGHT_READER_ID
       : tool.serverId
     return withBuiltInPlaywrightProfile(
@@ -864,7 +1060,7 @@ export async function executeMcpTool(name, args = {}, context = {}) {
 
 function playwrightServerIdForContext(context = {}) {
   if (embeddedBridgeForDeps(context.mcpDeps || {})) return BUILTIN_PLAYWRIGHT_INTERACTIVE_ID
-  const requested = String(context.playwrightRole || context.mode || 'interactive').trim().toLowerCase()
+  const requested = playwrightRoleForContext(context)
   return requested === 'reader' ? BUILTIN_PLAYWRIGHT_READER_ID : BUILTIN_PLAYWRIGHT_INTERACTIVE_ID
 }
 
@@ -950,6 +1146,36 @@ export async function executeBuiltInPlaywrightTool(remoteName, args = {}, contex
   const safeArgs = validation.args
 
   const serverId = playwrightServerIdForContext(context)
+  const embeddedBridge = embeddedBridgeForDeps(context.mcpDeps || {})
+  if (name === 'browser_close' && embeddedBridge && typeof embeddedBridge.peekTarget === 'function') {
+    const liveTarget = await embeddedBridge.peekTarget()
+    if (!liveTarget) {
+      const staleConnection = connections.get(serverId)
+      if (staleConnection?.embedded === true) {
+        connections.delete(serverId)
+        await closeConnection(staleConnection)
+        rebuildToolCatalog()
+      }
+      return JSON.stringify({
+        ok: true,
+        source: 'mcp',
+        server_id: serverId,
+        remote_tool: name,
+        already_closed: true,
+        page_destroyed: true,
+        profile_data_preserved: true,
+        content: [],
+        browser_preview: {
+          mode: browserDisplayModeForContext(context),
+          state: 'closed',
+          action: name,
+          native_view: true,
+          page_destroyed: true,
+          profile_data_preserved: true,
+        },
+      }, null, 2)
+    }
+  }
   if (
     serverId === BUILTIN_PLAYWRIGHT_READER_ID
     && name === 'browser_close'
@@ -1062,5 +1288,6 @@ export const __internal = {
   pathIsWithin,
   readPlaywrightSnapshotFile,
   serverStatus,
+  normalizeBuiltInPlaywrightArgs,
   validateBuiltInPlaywrightArgs,
 }

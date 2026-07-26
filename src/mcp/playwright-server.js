@@ -1,6 +1,7 @@
 import fs from 'fs'
 import path from 'path'
 import { createRequire } from 'module'
+import { fileURLToPath } from 'url'
 import { config } from '../config.js'
 import { paths } from '../paths.js'
 
@@ -22,6 +23,8 @@ export const BUILTIN_PLAYWRIGHT_ALLOWED_TOOLS = Object.freeze([
   'browser_type',
   'browser_navigate',
   'browser_navigate_back',
+  'browser_navigate_forward',
+  'browser_reload',
   'browser_take_screenshot',
   'browser_snapshot',
   'browser_click',
@@ -101,8 +104,9 @@ export function getBuiltInPlaywrightToolDescriptor(name) {
 
 function resolveInstalledCli() {
   try {
-    const packageJson = require.resolve('@playwright/mcp/package.json')
-    return path.join(path.dirname(packageJson), 'cli.js')
+    require.resolve('@playwright/mcp/package.json')
+    const entry = path.join(path.dirname(fileURLToPath(import.meta.url)), 'playwright-cli-entry.cjs')
+    return fs.existsSync(entry) ? entry : ''
   } catch {
     return ''
   }
@@ -116,7 +120,7 @@ export function resolveBuiltInPlaywrightCli({
 
   // In a packaged Electron app resourcesDir points at app.asar. Electron's
   // patched filesystem and Node mode can execute a JavaScript entry from it.
-  const bundled = path.join(resourcesDir, 'node_modules', '@playwright', 'mcp', 'cli.js')
+  const bundled = path.join(resourcesDir, 'src', 'mcp', 'playwright-cli-entry.cjs')
   if (fs.existsSync(bundled)) return bundled
 
   const installed = resolveInstalledCli()
@@ -246,23 +250,25 @@ export function createBuiltInEmbeddedPlaywrightConfig({
   resourcesDir = paths.resourcesDir,
   sandboxDir = paths.sandboxDir,
   allowPrivateNetwork = config.security?.browserPrivateNetwork === true,
+  nativeNetworkGuard = false,
 } = {}) {
   const outputDir = ensureDirectory(path.join(sandboxDir, 'browser-output', 'interactive'))
+  const needsPlaywrightNetworkGuard = !allowPrivateNetwork && !nativeNetworkGuard
   return {
     browser: {
       browserName: 'chromium',
       // The guard is deliberately page-scoped so an Electron CDP context that
       // also contains Brain UI cannot receive browser-surface routes.
-      initPage: allowPrivateNetwork
-        ? []
-        : [resolveBuiltInPlaywrightPageGuard({ resourcesDir })],
+      initPage: needsPlaywrightNetworkGuard
+        ? [resolveBuiltInPlaywrightPageGuard({ resourcesDir })]
+        : [],
     },
     capabilities: ['core'],
     codegen: 'none',
     console: { level: 'warning' },
     imageResponses: 'omit',
     network: {
-      blockedOrigins: allowPrivateNetwork ? [] : [...BUILTIN_PLAYWRIGHT_BLOCKED_ORIGINS],
+      blockedOrigins: needsPlaywrightNetworkGuard ? [...BUILTIN_PLAYWRIGHT_BLOCKED_ORIGINS] : [],
     },
     outputDir,
     outputMaxSize: 50 * 1024 * 1024,

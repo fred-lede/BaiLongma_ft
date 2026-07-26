@@ -26,6 +26,7 @@ const {
   BUILTIN_PLAYWRIGHT_BLOCKED_ORIGINS,
   BUILTIN_PLAYWRIGHT_INTERACTIVE_ID,
   BUILTIN_PLAYWRIGHT_READER_ID,
+  createBuiltInEmbeddedPlaywrightConfig,
   createBuiltInPlaywrightServer,
 } = await import('./playwright-server.js')
 const {
@@ -57,6 +58,22 @@ const advertisedTools = [
     description: 'Snapshot',
     inputSchema: { type: 'object', properties: {} },
     annotations: { readOnlyHint: true, destructiveHint: false },
+  },
+  ...['browser_navigate_forward', 'browser_reload'].map(name => ({
+    name,
+    description: name,
+    inputSchema: { type: 'object', properties: {} },
+    annotations: { readOnlyHint: false, destructiveHint: true },
+  })),
+  {
+    name: 'browser_click',
+    description: 'Click',
+    inputSchema: {
+      type: 'object',
+      properties: { element: { type: 'string' }, ref: { type: 'string' } },
+      required: ['element', 'ref'],
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true },
   },
   {
     name: 'browser_close',
@@ -196,6 +213,11 @@ try {
   assert(listMcpTools().some(tool => tool.name === 'browser_navigate' && tool.builtIn === true)
     && getMcpToolSchema('browser_navigate')?.function?.parameters?.required?.includes('url'),
   'trusted official schemas remain discoverable before the first MCP connection')
+  assert(['browser_navigate_forward', 'browser_reload'].every(name => (
+    BUILTIN_PLAYWRIGHT_ALLOWED_TOOLS.includes(name)
+    && listMcpTools().some(tool => tool.name === name && tool.builtIn === true)
+    && getMcpToolSchema(name)
+  )), 'forward and reload expose trusted official schemas before connection')
 
   const coldStartNavigation = parseJson(await executeMcpTool(
     'browser_navigate',
@@ -211,6 +233,36 @@ try {
     && coldStartNavigation?.remote_tool === 'browser_navigate',
   'a discovered built-in browser tool lazily connects instead of returning unknown tool',
   JSON.stringify(coldStartNavigation))
+
+  const normalizedTargetArgs = mcpInternal.normalizeBuiltInPlaywrightArgs('browser_fill_form', {
+    fields: [
+      { name: 'query', type: 'textbox', target: 'ref=e36', value: 'OpenAI' },
+      { name: 'scope', type: 'combobox', target: '[ref=e41]', value: 'All' },
+    ],
+  })
+  assert(normalizedTargetArgs?.fields?.[0]?.target === 'e36'
+    && normalizedTargetArgs?.fields?.[1]?.target === 'e41',
+  'wrapped snapshot refs are normalized recursively for form fields',
+  JSON.stringify(normalizedTargetArgs))
+  const selectorArgs = mcpInternal.normalizeBuiltInPlaywrightArgs('browser_type', {
+    target: 'input#kw:visible',
+    text: 'OpenAI',
+  })
+  assert(selectorArgs?.target === 'input#kw:visible',
+    'real CSS selectors are not changed by snapshot-ref normalization',
+    JSON.stringify(selectorArgs))
+
+  const beforeWrappedRefClick = FakeClient.calls.length
+  await executeMcpTool(
+    'browser_click',
+    { element: 'Search', target: 'ref=e63' },
+    { mcpDeps: deps },
+  )
+  const wrappedRefClickCall = FakeClient.calls.slice(beforeWrappedRefClick)
+    .find(call => call.request?.name === 'browser_click')
+  assert(wrappedRefClickCall?.request?.arguments?.target === 'e63',
+    'the MCP execution boundary sends a raw snapshot ref instead of ref=e63',
+    JSON.stringify(wrappedRefClickCall))
   await shutdownMcpClients()
 
   const automaticSnapshotPath = path.join(interactive.cwd, 'page-auto-test.yml')
@@ -231,6 +283,12 @@ try {
     && !hydratedText.includes('[Snapshot](page-auto-test.yml)'),
   'built-in result adapter automatically inlines the official snapshot artifact',
   hydratedText)
+  assert(mcpInternal.readPlaywrightSnapshotFile(interactive.cwd, automaticSnapshotPath)
+    ?.includes('textbox "Search"'),
+  'snapshot hydration accepts a legitimate absolute artifact path')
+  assert(mcpInternal.readPlaywrightSnapshotFile(interactive.cwd, automaticSnapshotPath.slice(1))
+    ?.includes('textbox "Search"'),
+  'snapshot hydration repairs the macOS absolute-path form missing its leading slash')
 
   const outsideSnapshot = path.join(tmp, 'page-outside.yml')
   fs.writeFileSync(outsideSnapshot, 'SECRET_OUTSIDE_SNAPSHOT_ROOT')
@@ -247,6 +305,12 @@ try {
   }, { serverConfig: interactive }))
   assert(!JSON.stringify(outsideResult).includes('SECRET_OUTSIDE_SNAPSHOT_ROOT'),
     'automatic snapshot hydration cannot read outside the dedicated MCP output directory')
+  assert(mcpInternal.readPlaywrightSnapshotFile(interactive.cwd, '../page-outside.yml') === null,
+    'snapshot hydration rejects directory traversal')
+  const escapingSymlink = path.join(interactive.cwd, 'page-symlink-escape.yml')
+  fs.symlinkSync(outsideSnapshot, escapingSymlink)
+  assert(mcpInternal.readPlaywrightSnapshotFile(interactive.cwd, 'page-symlink-escape.yml') === null,
+    'snapshot hydration rejects a symlink escaping the output directory')
 
   const reader = createBuiltInPlaywrightServer({
     role: 'reader',
@@ -287,7 +351,14 @@ try {
     allowAutonomousReadOnly: false,
     timeoutMs: 10_000,
   }
+  const clientsBeforeCatalogReconcile = FakeClient.instances.length
   await reconcileMcpClients([userServer], deps)
+  const eagerlyConnectedClients = FakeClient.instances.slice(clientsBeforeCatalogReconcile)
+  assert(
+    eagerlyConnectedClients.length === 1
+      && eagerlyConnectedClients[0].transport?.params?.args?.[0] === '/fake/user-server.js',
+    'loading the MCP catalog connects user servers without eagerly starting built-in Playwright',
+  )
 
   const tools = listMcpTools()
   assert(tools.some(tool => tool.name === 'browser_navigate' && tool.builtIn === true),
@@ -325,6 +396,13 @@ try {
   ))
   assert(result?.ok === true && result?.remote_tool === 'browser_navigate',
     'internal interactive API calls an allowed remote tool', JSON.stringify(result))
+  for (const name of ['browser_navigate_forward', 'browser_reload']) {
+    const navigationResult = parseJson(await executeBuiltInPlaywrightTool(name, {}, { mcpDeps: deps }))
+    assert(navigationResult?.ok === true && navigationResult?.remote_tool === name
+      && FakeClient.calls.at(-1)?.request?.name === name,
+    `${name} is actually dispatched to the official Playwright MCP client`,
+    JSON.stringify(navigationResult))
+  }
 
   const beforePrivateCall = FakeClient.calls.length
   const privateNavigation = parseJson(await executeMcpTool(
@@ -476,8 +554,25 @@ try {
     targetId: 'embedded-target',
     webContentsId: 42,
     url: 'https://example.com/',
+    nativeNetworkGuard: true,
   }
-  const embeddedBridge = { async getTarget() { return embeddedTarget } }
+  let embeddedPageLive = true
+  let embeddedHostCloseCount = 0
+  let pendingWindowOpenTakeover = null
+  const embeddedBridge = {
+    async getTarget() { return embeddedPageLive ? embeddedTarget : null },
+    peekTarget() { return embeddedPageLive ? embeddedTarget : null },
+    closePage() {
+      embeddedPageLive = false
+      embeddedHostCloseCount += 1
+      return { partition: embeddedTarget.partition, webContentsId: null }
+    },
+    async consumeWindowOpenNavigation() {
+      const result = pendingWindowOpenTakeover
+      pendingWindowOpenTakeover = null
+      return result
+    },
+  }
   let embeddedConnectCount = 0
   let embeddedCloseCount = 0
   let embeddedConfig
@@ -506,12 +601,14 @@ try {
     connectEmbeddedPlaywrightFn,
     resolveEmbeddedBrowserTargetFn: async () => embeddedTarget,
   }
+  const embeddedDisplayState = { mode: 'card' }
   const beforeEmbeddedCalls = FakeClient.calls.length
   const embeddedCard = parseJson(await executeMcpTool(
     'browser_navigate',
     { url: 'https://example.com/native' },
     {
       browserDisplayMode: 'card',
+      browserDisplayState: embeddedDisplayState,
       mcpDeps: embeddedDeps,
       webUrlPolicyOptions: {
         hostnameResolver: async () => [{ address: '93.184.216.34' }],
@@ -533,23 +630,68 @@ try {
     && !embeddedCalls.some(call => call.request?.name === 'browser_take_screenshot'),
   'native browser preview does not take an extra screenshot',
   JSON.stringify(embeddedCalls))
-  assert(embeddedConfig?.browser?.initPage?.[0]?.endsWith('src/mcp/playwright-page-guard.cjs')
-    && embeddedConfig?.network?.blockedOrigins?.includes('http://127.0.0.1:*'),
-  'embedded MCP retains the page request guard and private-network origin guardrail',
+  assert(embeddedConfig?.browser?.initPage?.length === 0
+    && embeddedConfig?.network?.blockedOrigins?.length === 0,
+  'embedded MCP avoids Playwright routing when the Electron session owns the native network guard',
   JSON.stringify(embeddedConfig))
+  const fallbackEmbeddedConfig = createBuiltInEmbeddedPlaywrightConfig({
+    resourcesDir: tmp,
+    sandboxDir: tmp,
+    allowPrivateNetwork: false,
+    nativeNetworkGuard: false,
+  })
+  assert(fallbackEmbeddedConfig.browser.initPage?.[0]?.endsWith('src/mcp/playwright-page-guard.cjs')
+    && fallbackEmbeddedConfig.network.blockedOrigins?.includes('http://127.0.0.1:*'),
+  'embedded MCP keeps the Playwright network guard when no native guard is confirmed',
+  JSON.stringify(fallbackEmbeddedConfig))
 
   const embeddedWindow = parseJson(await executeMcpTool(
     'browser_snapshot',
     {},
-    { browserDisplayMode: 'window', mcpDeps: embeddedDeps },
+    {
+      browserDisplayMode: 'card',
+      browserDisplayState: Object.assign(embeddedDisplayState, { mode: 'window' }),
+      mcpDeps: embeddedDeps,
+    },
   ))
   assert(embeddedWindow?.ok === true
     && embeddedWindow?.browser_preview?.mode === 'window'
     && embeddedWindow?.browser_preview?.url === 'https://example.com/live-embedded-page'
     && embeddedWindow?.browser_preview?.title === 'Live embedded page'
     && embeddedConnectCount === 1,
-  'card and window modes reuse one embedded connection and read live page metadata',
+  'a live per-turn mode switch reuses one embedded connection and changes subsequent preview presentation',
   JSON.stringify({ embeddedWindow, embeddedConnectCount }))
+
+  pendingWindowOpenTakeover = {
+    ok: true,
+    requestedUrl: 'https://example.net/target-blank',
+    finalUrl: 'https://example.net/final-target',
+  }
+  const beforePopupClick = FakeClient.calls.length
+  const popupClick = parseJson(await executeMcpTool(
+    'browser_click',
+    { element: 'opens in new tab', ref: 'e42' },
+    { browserDisplayMode: 'window', mcpDeps: embeddedDeps },
+  ))
+  const popupCalls = FakeClient.calls.slice(beforePopupClick)
+  assert(popupClick?.ok === true
+    && popupClick?.browser_preview?.url === 'https://example.net/final-target'
+    && popupClick?.content?.some(item => String(item?.text || '').includes('https://example.net/final-target'))
+    && popupCalls[0]?.request?.name === 'browser_click'
+    && popupCalls[1]?.request?.name === 'browser_snapshot',
+  'target=_blank click reports the final in-place URL and a fresh official snapshot',
+  JSON.stringify({ popupClick, popupCalls }))
+
+  pendingWindowOpenTakeover = { ok: false, error: 'Private or local network URL is disabled' }
+  const blockedPopupClick = parseJson(await executeMcpTool(
+    'browser_click',
+    { element: 'unsafe link', ref: 'e43' },
+    { browserDisplayMode: 'window', mcpDeps: embeddedDeps },
+  ))
+  assert(blockedPopupClick?.ok === false
+    && blockedPopupClick?.content?.some(item => /blocked by Bailongma URL policy/.test(item?.text || '')),
+  'a dangerous target=_blank click is reported as blocked rather than successful',
+  JSON.stringify(blockedPopupClick))
 
   const beforeForbiddenTabCall = FakeClient.calls.length
   const forbiddenTabClose = parseJson(await executeMcpTool(
@@ -563,11 +705,37 @@ try {
   'embedded MCP cannot close the sole Electron-owned page',
   JSON.stringify(forbiddenTabClose))
 
+  const embeddedClose = parseJson(await executeMcpTool(
+    'browser_close',
+    {},
+    { browserDisplayMode: 'card', mcpDeps: embeddedDeps },
+  ))
+  assert(embeddedClose?.ok === true
+    && embeddedClose?.page_destroyed === true
+    && embeddedClose?.profile_data_preserved === true
+    && embeddedClose?.browser_preview?.state === 'closed'
+    && embeddedHostCloseCount === 1
+    && embeddedCloseCount === 1,
+  'browser_close detaches MCP and truly destroys the live embedded page without clearing its profile',
+  JSON.stringify({ embeddedClose, embeddedHostCloseCount, embeddedCloseCount }))
+
+  const embeddedCloseAgain = parseJson(await executeMcpTool(
+    'browser_close',
+    {},
+    { browserDisplayMode: 'card', mcpDeps: embeddedDeps },
+  ))
+  assert(embeddedCloseAgain?.ok === true
+    && embeddedCloseAgain?.already_closed === true
+    && embeddedConnectCount === 1
+    && embeddedHostCloseCount === 1,
+  'closing an already closed embedded browser does not create a replacement page',
+  JSON.stringify({ embeddedCloseAgain, embeddedConnectCount, embeddedHostCloseCount }))
+
   const beforeEmbeddedShutdown = FakeClient.calls.length
   await shutdownBuiltInPlaywright({ role: 'interactive' })
   assert(embeddedCloseCount === 1
     && !FakeClient.calls.slice(beforeEmbeddedShutdown).some(call => call.request?.name === 'browser_close'),
-  'embedded reconcile/shutdown closes only MCP transports, never the Electron page or context')
+  'shutdown after a real close does not recreate or re-close the embedded page')
 
   await shutdownBuiltInPlaywright({ role: 'reader' })
   assert(getMcpStatus().builtInPlaywright?.reader?.status === 'idle',

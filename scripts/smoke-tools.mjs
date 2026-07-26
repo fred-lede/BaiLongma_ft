@@ -49,7 +49,7 @@ const quickCommand = parseJsonResult(quickCommandText)
 assert(quickCommand?.ok === true && quickCommand?.command_profile === 'quick' && /quick-ok/.test(quickCommand?.stdout || ''), 'exec_quick_command uses quick profile', quickCommandText)
 
 const taskCommandText = await executeTool('exec_task_command', {
-  command: 'Write-Output task-ok',
+  command: 'node -e "console.log(\'task-ok\')"',
   timeout: 5,
 }, { source: 'smoke-test' })
 const taskCommand = parseJsonResult(taskCommandText)

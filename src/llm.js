@@ -9,8 +9,19 @@ import { sanitizeAssistantReplyForDelivery, createAssistantReplyStreamSanitizer 
 import { beginTurn } from './runtime/turn-trace.js'
 import { createMergedAbortSignal } from './capabilities/abort-utils.js'
 import { filterStrictEvaluationTools, isToolForbiddenInStrictEvaluation, makeStrictForbiddenToolResult } from './runtime/strict-evaluation.js'
+import {
+  detectBrowserChallenge,
+  isBrowserAccessBlockedAfterChallenge,
+  makeBrowserChallengeStoppedResult,
+  markBrowserChallengeResult,
+} from './runtime/browser-challenge-guard.js'
 import { streamWriteFileArgumentPreview, streamXmlFileWriteArgumentPreview } from './write-file-preview.js'
-import { actionContractToolSucceeded, containsUnsupportedCompletionClaim } from './runtime/action-contract.js'
+import {
+  actionContractCompletionIssue,
+  actionContractToolSucceeded,
+  containsUnsupportedCompletionClaim,
+  verifiedActionContractReply,
+} from './runtime/action-contract.js'
 
 // 单轮流式调用的「空闲超时」：从开始到第一个 token、以及每两个 token 之间，
 // 若超过这个时长没有任何增量到达，判定为 provider 连接卡死（连接开着却不吐字节）。
@@ -520,6 +531,10 @@ function summarizeToolCall(name, args = {}) {
       return `browser_read(${String(args.url || args.link || args.href || '?').slice(0, 80)})`
     case 'browser_navigate':
       return `browser_navigate(${String(args.url || args.link || args.href || '?').slice(0, 80)})`
+    case 'browser_navigate_forward':
+      return 'browser_navigate_forward()'
+    case 'browser_reload':
+      return 'browser_reload()'
     case 'search_memory': {
       if (Array.isArray(args.keywords)) {
         return `search_memory([${args.keywords.slice(0, 4).map(k => String(k).slice(0, 20)).join(', ')}])`
@@ -674,6 +689,8 @@ const HIGH_RISK_TOOLS = new Set([
   'browser_read',
   'browser_navigate',
   'browser_navigate_back',
+  'browser_navigate_forward',
+  'browser_reload',
   'browser_click',
   'browser_drag',
   'browser_type',
@@ -686,6 +703,7 @@ const HIGH_RISK_TOOLS = new Set([
   'browser_tabs',
   'browser_resize',
   'browser_close',
+  'browser_clear_data',
   'speak',
   'generate_lyrics',
   'generate_music',
@@ -1000,9 +1018,17 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
   let actionContractAttempted = false
   let actionContractNudgeCount = 0
   let actionClaimNudgeUsed = false
+  let actionCompletionNudgeUsed = false
+  let actionContractEvidence = null
   // 层 3：本 turn 是否已发过"不确定回退"软检查点（一 turn 一次，见 buildUncertaintyCheckpointNudge）。
   let uncertaintyNudgeUsed = false
   const toolLoopState = createToolLoopState()
+  // CAPTCHA / anti-bot challenges are a turn-scoped hard boundary. Once a
+  // browser result proves that the managed page is a challenge, all later web
+  // actions in this callLLM run are rejected before reaching their executors.
+  // A new user turn resets the boundary so the user can solve it manually and
+  // explicitly ask the agent to continue.
+  let browserChallenge = null
   // Turn-level send_message 历史：target_id → [{ length, isCloser }]。
   // 用于 closer dedup 安全网：当 LLM 在已经发过实质消息后又试图补一条短客套尾巴
   // ("有需要随时叫我"/"希望对你有帮助"/...) 时，运行时直接拦截这次 send_message 调用，
@@ -1145,6 +1171,28 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
         continue
       }
 
+      // A successful side effect does not make every surrounding claim true.
+      // In particular, system_browser_open verifies only a handoff to the OS
+      // default browser; it cannot identify the application, and the two
+      // Bailongma display modes still share one live page/profile.
+      if (mustReply && actionContract && actionContractSatisfied && allContent.trim()) {
+        const completionIssue = actionContractCompletionIssue(actionContract, allContent)
+        if (completionIssue) {
+          if (!actionCompletionNudgeUsed) {
+            if (content) messages.push({ role: 'assistant', content })
+            allContent = ''
+            actionCompletionNudgeUsed = true
+            messages.push({
+              role: 'user',
+              content: `The requested action succeeded, but your draft added an unsupported or incorrect claim: ${completionIssue} Reply from verified evidence only. Say that the URL was handed to the computer's system default browser; do not name Safari, Chrome, Edge, or any other application. If you explain the three forms, state that Bailongma's compact and large modes share the same live page/profile, while only the computer browser is separate.${INTERNAL_NUDGE_SUFFIX}`,
+            })
+            continue
+          }
+          allContent = verifiedActionContractReply(actionContract, actionContractEvidence)
+          break
+        }
+      }
+
       // 用户消息回复但只产出了 plain text，完全没调任何工具（包括 send_message）。
       //
       // 与 finalNudge 的区别：finalNudge 处理"调过工具但最后没补 send_message"（sawToolCall=true），
@@ -1233,6 +1281,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
       let silentSignalSuppressed = false
       let mediaCloserSuppressed = false
       let strictSuppressed = false
+      let browserChallengeSuppressed = false
       let actionContractSendSuppressed = false
       if (stopReason) {
         result = makeToolLoopStoppedResult(tc.name, stopReason)
@@ -1246,6 +1295,15 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
         result = makeStrictForbiddenToolResult(tc.name, strictEvaluation)
         recordToolLoopOutcome(toolLoopState, tc.name, fingerprint, result)
         console.log(`[strict evaluation] 拦截 forbidden tool ${tc.name}`)
+      } else if (browserChallenge && isBrowserAccessBlockedAfterChallenge(tc.name)) {
+        browserChallengeSuppressed = true
+        result = makeBrowserChallengeStoppedResult(tc.name, browserChallenge)
+        recordToolLoopOutcome(toolLoopState, tc.name, fingerprint, result)
+        // This is a deliberate policy stop, not an executor outage. Keep the
+        // general failure fuse from suppressing an allowed display-mode switch
+        // or the final report; exact repeated calls still hit sameFailureCounts.
+        toolLoopState.consecutiveFailures = 0
+        console.log(`[browser challenge] 拦截后续网页工具 ${tc.name}`)
       } else {
         const priorTickOutbound = tc.name === 'send_message'
           ? tickState?.outboundByTarget.get(normalizedArgs.target_id)
@@ -1301,7 +1359,19 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
           && actionContract
           && !actionContractSatisfied
           && (!actionContractAttempted || containsUnsupportedCompletionClaim(normalizedArgs.content))
-        if (actionContractBlocksSend) {
+        const actionContractCompletionProblem = tc.name === 'send_message' && actionContractSatisfied
+          ? actionContractCompletionIssue(actionContract, normalizedArgs.content)
+          : ''
+        if (actionContractCompletionProblem) {
+          actionContractSendSuppressed = true
+          result = JSON.stringify({
+            ok: false,
+            tool: 'send_message',
+            skipped: 'action_contract_reply_invalid',
+            reason: `${actionContractCompletionProblem} Reply only from verified tool evidence and correct the browser relationship before sending.`,
+          })
+          console.log(`[action contract] suppressed unsupported completion reply for ${actionContract.id}`)
+        } else if (actionContractBlocksSend) {
           actionContractSendSuppressed = true
           result = JSON.stringify({
             ok: false,
@@ -1365,10 +1435,17 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
           // 真正开始执行前通知 UI —— 让用户知道当前停留在哪一步的工具上
           onToolExecute?.(tc.name, normalizedArgs)
           result = await runTool(tc.name, normalizedArgs, { ...toolContext, signal })
+          const detectedChallenge = detectBrowserChallenge(tc.name, result)
+          if (detectedChallenge) {
+            browserChallenge ||= detectedChallenge
+            result = markBrowserChallengeResult(result, browserChallenge)
+            console.log(`[browser challenge] 检测到网页挑战，当前用户轮停止自动网页操作（${browserChallenge.reason}）`)
+          }
           if (actionContract?.requiredTools?.includes(tc.name)) {
             actionContractAttempted = true
             if (actionContractToolSucceeded(actionContract, tc.name, result)) {
               actionContractSatisfied = true
+              actionContractEvidence = { name: tc.name, args: normalizedArgs, result }
             }
           }
           let deliveredByToolResult = false
@@ -1448,7 +1525,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
           mediaPlayedKind = m
         }
       }
-      if (!strictSuppressed && shouldPersistActionLog(tc.name)) {
+      if (!strictSuppressed && !browserChallengeSuppressed && shouldPersistActionLog(tc.name)) {
         insertActionLog({
           timestamp: new Date().toISOString(),
           tool: tc.name,

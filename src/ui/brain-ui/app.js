@@ -3923,12 +3923,169 @@ function initTTSSettings() {
     openai:     document.getElementById("tts-creds-openai"),
     elevenlabs: document.getElementById("tts-creds-elevenlabs"),
     volcano:    document.getElementById("tts-creds-volcano"),
+    aethermesh: document.getElementById("tts-creds-aethermesh"),
   };
+
+  const aethermeshVoiceId = document.getElementById("tts-aethermesh-voice-id");
+  const aethermeshRefreshBtn = document.getElementById("tts-aethermesh-refresh-voices");
+  const aethermeshRegisterBtn = document.getElementById("tts-aethermesh-register-voice");
+  const aethermeshRegArea = document.getElementById("tts-aethermesh-register-area");
+  const aethermeshRegName = document.getElementById("tts-aethermesh-reg-name");
+  const aethermeshRegAudio = document.getElementById("tts-aethermesh-reg-audio");
+  const aethermeshRegSubmit = document.getElementById("tts-aethermesh-reg-submit");
+  const aethermeshRegCancel = document.getElementById("tts-aethermesh-reg-cancel");
+  const aethermeshVoiceName = document.getElementById("tts-aethermesh-voice-name");
+  const aethermeshRenameBtn = document.getElementById("tts-aethermesh-rename-voice");
+  let aethermeshVoicesList = [];
+
+  async function aethermeshRefreshVoices() {
+    if (aethermeshRefreshBtn) { aethermeshRefreshBtn.disabled = true; aethermeshRefreshBtn.textContent = "获取中…"; }
+    try {
+      const res = await fetch(`${API}/person-card/aethermesh-voices`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || '获取失败');
+      const list = Array.isArray(data.voices) ? data.voices : [];
+      aethermeshVoicesList = list;
+      if (aethermeshVoiceId) {
+        const prev = aethermeshVoiceId.value;
+        aethermeshVoiceId.innerHTML = '<option value="">— 选择声音 —</option>';
+        list.forEach(v => {
+          const vid = v.voice_id || v.id || "";
+          const name = v.name || "";
+          const dur = v.duration_seconds || 0;
+          const tooLong = dur > 15;
+          const opt = document.createElement("option");
+          opt.value = vid;
+          opt.dataset.name = name;
+          if (tooLong) {
+            opt.textContent = `⚠️ ${name} (${vid.slice(0,8)}…) — 參考音頻 ${dur.toFixed(1)}s 過長`;
+            opt.style.color = '#c00';
+          } else {
+            opt.textContent = name ? `${name} (${vid.slice(0,8)}…${dur ? ' ' + dur.toFixed(1) + 's' : ''})` : vid;
+          }
+          aethermeshVoiceId.appendChild(opt);
+        });
+        if (prev && [...aethermeshVoiceId.options].some(o => o.value === prev)) {
+          aethermeshVoiceId.value = prev;
+        }
+        syncAethermeshVoiceName();
+      }
+      if (aethermeshRefreshBtn) aethermeshRefreshBtn.textContent = `找到 ${list.length} 个`;
+    } catch (err) {
+      if (aethermeshRefreshBtn) aethermeshRefreshBtn.textContent = "获取失败";
+      console.error("[TTS] AetherMesh 刷新声音失败:", err.message);
+    } finally {
+      if (aethermeshRefreshBtn) {
+        aethermeshRefreshBtn.disabled = false;
+        setTimeout(() => { aethermeshRefreshBtn.textContent = "刷新"; }, 3000);
+      }
+    }
+  }
+
+  if (aethermeshRefreshBtn) aethermeshRefreshBtn.addEventListener("click", aethermeshRefreshVoices);
+
+  function syncAethermeshVoiceName() {
+    if (!aethermeshVoiceId || !aethermeshVoiceName) return;
+    const sel = aethermeshVoiceId.options[aethermeshVoiceId.selectedIndex];
+    if (sel && sel.value) {
+      aethermeshVoiceName.value = sel.dataset.name || "";
+      if (aethermeshRenameBtn) aethermeshRenameBtn.style.display = "";
+    } else {
+      aethermeshVoiceName.value = "";
+      if (aethermeshRenameBtn) aethermeshRenameBtn.style.display = "none";
+    }
+  }
+
+  if (aethermeshVoiceId) aethermeshVoiceId.addEventListener("change", syncAethermeshVoiceName);
+
+  if (aethermeshRenameBtn) {
+    aethermeshRenameBtn.addEventListener("click", async () => {
+      const voiceId = aethermeshVoiceId?.value;
+      const newName = aethermeshVoiceName?.value?.trim();
+      if (!voiceId) { alert("请先选择一个声音"); return; }
+      if (!newName) { alert("名称不能为空"); return; }
+      aethermeshRenameBtn.disabled = true;
+      aethermeshRenameBtn.textContent = "更名中…";
+      try {
+        const res = await fetch(`${API}/person-card/aethermesh-rename`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ voiceId, name: newName }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || '更名失败');
+        const sel = aethermeshVoiceId.options[aethermeshVoiceId.selectedIndex];
+        if (sel) { sel.dataset.name = newName; sel.textContent = `${newName} (${voiceId.slice(0,8)}…)`; }
+        const entry = aethermeshVoicesList.find(v => (v.voice_id || v.id) === voiceId);
+        if (entry) entry.name = newName;
+        aethermeshRenameBtn.textContent = "✓";
+      } catch (err) {
+        alert("更名失败: " + err.message);
+        aethermeshRenameBtn.textContent = "更名";
+      } finally {
+        aethermeshRenameBtn.disabled = false;
+        setTimeout(() => { if (aethermeshRenameBtn) aethermeshRenameBtn.textContent = "更名"; }, 2000);
+      }
+    });
+  }
+
+  if (aethermeshRegisterBtn) {
+    aethermeshRegisterBtn.addEventListener("click", () => {
+      if (aethermeshRegArea) aethermeshRegArea.style.display = aethermeshRegArea.style.display === "none" ? "" : "none";
+    });
+  }
+  if (aethermeshRegCancel) {
+    aethermeshRegCancel.addEventListener("click", () => {
+      if (aethermeshRegArea) aethermeshRegArea.style.display = "none";
+    });
+  }
+  if (aethermeshRegSubmit) {
+    aethermeshRegSubmit.addEventListener("click", async () => {
+      const name = aethermeshRegName?.value?.trim();
+      const file = aethermeshRegAudio?.files?.[0];
+      if (!name) { alert("请输入声音名称"); return; }
+      if (!file) { alert("请选择音频文件"); return; }
+      aethermeshRegSubmit.disabled = true;
+      aethermeshRegSubmit.textContent = "注册中…";
+      try {
+        const formData = new FormData();
+        formData.append("name", name);
+        formData.append("file", file);
+        const res = await fetch(`${API}/person-card/aethermesh-register`, { method: "POST", body: formData });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const result = await res.json();
+        if (!result.ok) throw new Error(result.error || '注册失败');
+        const newId = result.voice_id || "";
+        aethermeshRegSubmit.textContent = "注册成功！";
+        if (aethermeshRegArea) aethermeshRegArea.style.display = "none";
+        if (aethermeshRegName) aethermeshRegName.value = "";
+        if (aethermeshRegAudio) aethermeshRegAudio.value = "";
+        await aethermeshRefreshVoices();
+        if (newId && aethermeshVoiceId) aethermeshVoiceId.value = newId;
+      } catch (err) {
+        aethermeshRegSubmit.textContent = "注册失败";
+        console.error("[TTS] AetherMesh 注册声音失败:", err.message);
+        alert("注册声音失败: " + err.message);
+      } finally {
+        aethermeshRegSubmit.disabled = false;
+        setTimeout(() => { aethermeshRegSubmit.textContent = "提交注册"; }, 3000);
+      }
+    });
+  }
 
   function showCredSection(provider) {
     Object.entries(credSections).forEach(([k, el]) => {
       if (el) el.style.display = k === provider ? "" : "none";
     });
+    if (provider === "aethermesh") {
+      if (voiceSel) voiceSel.style.display = "none";
+      if (aethermeshVoiceId) aethermeshVoiceId.closest(".settings-row").style.display = "";
+    } else {
+      if (voiceSel) voiceSel.style.display = "";
+      if (aethermeshVoiceId) aethermeshVoiceId.closest(".settings-row").style.display = "none";
+    }
   }
 
   function updateVoiceOptions(provider, savedId) {
@@ -3969,6 +4126,15 @@ function initTTSSettings() {
     }
     const baseurlEl = document.getElementById("tts-openai-baseurl");
     if (baseurlEl && tts?.openaiTtsBaseURL) baseurlEl.value = tts.openaiTtsBaseURL;
+    const aethermeshKeyEl = document.getElementById("tts-aethermesh-key");
+    const aethermeshBaseURLEl = document.getElementById("tts-aethermesh-baseurl");
+    const aethermeshLangEl = document.getElementById("tts-aethermesh-lang");
+    const aethermeshTranslateEl = document.getElementById("tts-aethermesh-translate");
+    if (aethermeshKeyEl && tts?.aethermeshKey) aethermeshKeyEl.value = tts.aethermeshKey;
+    if (aethermeshBaseURLEl && tts?.aethermeshBaseURL) aethermeshBaseURLEl.value = tts.aethermeshBaseURL;
+    if (aethermeshLangEl && tts?.aethermeshLang) aethermeshLangEl.value = tts.aethermeshLang;
+    if (aethermeshTranslateEl) aethermeshTranslateEl.checked = !!tts?.aethermeshTranslate;
+    if (provider === "aethermesh") aethermeshRefreshVoices();
     showCredSection(provider);
   }).catch(() => {});
 
@@ -3998,6 +4164,15 @@ function initTTSSettings() {
       if (volcanoAppId) ttsBody.volcanoAppId = volcanoAppId;
       const volcanoToken = document.getElementById("tts-volcano-token")?.value?.trim();
       if (volcanoToken) ttsBody.volcanoToken = volcanoToken;
+      const aethermeshKey = document.getElementById("tts-aethermesh-key")?.value?.trim();
+      if (aethermeshKey !== undefined) ttsBody.aethermeshKey = aethermeshKey;
+      const aethermeshBaseURL = document.getElementById("tts-aethermesh-baseurl")?.value?.trim();
+      if (aethermeshBaseURL) ttsBody.aethermeshBaseURL = aethermeshBaseURL;
+      const aethermeshLang = document.getElementById("tts-aethermesh-lang")?.value;
+      if (aethermeshLang) ttsBody.aethermeshLang = aethermeshLang;
+      const aethermeshTranslate = document.getElementById("tts-aethermesh-translate")?.checked;
+      if (aethermeshTranslate !== undefined) ttsBody.aethermeshTranslate = aethermeshTranslate;
+      if (aethermeshVoiceId?.value) ttsBody.ttsVoiceId = aethermeshVoiceId.value;
 
       fetch(`${API}/settings/tts`, {
         method: "POST",

@@ -570,6 +570,7 @@ const createSettingsModal = () => `
                 <option value="elevenlabs">ElevenLabs（流式，高质量）</option>
                 <option value="volcano">火山引擎（中文，有免费额度）</option>
                 <option value="minimax">MiniMax（已有配置）</option>
+                <option value="aethermesh">AetherMesh 语音克隆（本地部署）</option>
               </select>
             </div>
             <div class="settings-row">
@@ -672,6 +673,68 @@ const createSettingsModal = () => `
                 <input class="settings-input" type="password" id="tts-volcano-token" placeholder="留空则不修改">
               </div>
               <p class="settings-hint">可用声音：BV001_streaming（通用女声）· BV002_streaming（通用男声）等，在火山引擎控制台查看全部。</p>
+            </div>
+
+            <div id="tts-creds-aethermesh" style="display:none;">
+              <div class="settings-row">
+                <label class="settings-label" for="tts-aethermesh-key">API Key</label>
+                <input class="settings-input" type="password" id="tts-aethermesh-key" placeholder="留空则不使用（本地部署通常不需要）">
+              </div>
+              <div class="settings-row">
+                <label class="settings-label" for="tts-aethermesh-baseurl">Base URL</label>
+                <input class="settings-input" type="text" id="tts-aethermesh-baseurl" placeholder="http://localhost:8001">
+              </div>
+              <div class="settings-row">
+                <label class="settings-label">声音</label>
+                <div style="display:flex;gap:6px;flex:1;flex-direction:column;">
+                  <div style="display:flex;gap:6px;">
+                    <select class="settings-input" id="tts-aethermesh-voice-id" style="flex:1;">
+                      <option value="">— 点「刷新」获取声音列表 —</option>
+                    </select>
+                    <button class="settings-save-btn" id="tts-aethermesh-refresh-voices" type="button" style="padding:0 10px;font-size:11px;white-space:nowrap;">刷新</button>
+                    <button class="settings-save-btn" id="tts-aethermesh-register-voice" type="button" style="padding:0 10px;font-size:11px;white-space:nowrap;">注册</button>
+                  </div>
+                  <div style="display:flex;gap:6px;align-items:center;">
+                    <label style="font-size:11px;color:var(--ink2);white-space:nowrap;">名称</label>
+                    <input class="settings-input" type="text" id="tts-aethermesh-voice-name" placeholder="选择声音后可编辑名称" style="flex:1;font-size:12px;">
+                    <button class="settings-save-btn" id="tts-aethermesh-rename-voice" type="button" style="padding:0 10px;font-size:11px;white-space:nowrap;display:none;">更名</button>
+                  </div>
+                </div>
+              </div>
+              <div id="tts-aethermesh-register-area" style="display:none;padding:8px 0 4px 0;">
+                <div class="settings-row">
+                  <label class="settings-label" for="tts-aethermesh-reg-name">声音名称</label>
+                  <input class="settings-input" type="text" id="tts-aethermesh-reg-name" placeholder="如：小明" style="flex:1;">
+                </div>
+                <div class="settings-row">
+                  <label class="settings-label" for="tts-aethermesh-reg-audio">音频文件</label>
+                  <input class="settings-input" type="file" id="tts-aethermesh-reg-audio" accept="audio/*" style="flex:1;">
+                </div>
+                <div class="settings-row">
+                  <div style="flex:1;text-align:right;">
+                    <button class="settings-save-btn" id="tts-aethermesh-reg-submit" type="button" style="padding:0 16px;font-size:11px;white-space:nowrap;">提交注册</button>
+                    <button class="settings-save-btn" id="tts-aethermesh-reg-cancel" type="button" style="padding:0 10px;font-size:11px;white-space:nowrap;margin-left:4px;">取消</button>
+                  </div>
+                </div>
+              </div>
+              <div class="settings-row">
+                <label class="settings-label" for="tts-aethermesh-lang">TTS 语言</label>
+                <select class="settings-input" id="tts-aethermesh-lang">
+                  <option value="zh-cn">中文（简体）</option>
+                  <option value="zh-tw">中文（繁体）</option>
+                  <option value="en">English</option>
+                  <option value="ja">日本語</option>
+                  <option value="ko">한국어</option>
+                  <option value="es">Español</option>
+                </select>
+              </div>
+              <div class="settings-row">
+                <label class="settings-label" for="tts-aethermesh-translate">实时翻译</label>
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--ink2);">
+                  <input type="checkbox" id="tts-aethermesh-translate" />
+                  语音对话时自动翻译为目标语言
+                </label>
+              </div>
             </div>
 
             <div class="settings-row" style="margin-top:8px;">

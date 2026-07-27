@@ -3,12 +3,8 @@ import { getHotspots, getHotspotPanelState, setHotspotPanelState } from '../../h
 import { getWorldcup, getWorldcupPanelState, setWorldcupPanelState } from '../../worldcup.js'
 import { getTyphoons, getTyphoonPanelState, setTyphoonPanelState } from '../../typhoon.js'
 import { DOC_TOPICS, getDocPanelState, setDocPanelState } from '../../docs.js'
-<<<<<<< HEAD
-import { getPersonCard, getPersonCardPanelState, setPersonCardPanelState } from '../../person-cards.js'
-import { getGeoWeatherSnapshot } from '../../geo-weather.js'
-=======
 import { getPersonCard, getPersonCardPanelState, setPersonCardPanelState, setPersonCardVoice, setPersonCardLanguage } from '../../person-cards.js'
->>>>>>> feature/merge-test
+import { getGeoWeatherSnapshot } from '../../geo-weather.js'
 import { getAgentName } from '../agent.js'
 import { aethermeshFetch } from '../../aethermesh-fetch.js'
 import { jsonResponse, parseBooleanish, readJsonBody } from '../utils.js'
@@ -186,14 +182,16 @@ export async function handlePanelRoutes(req, res, url, { getStateSnapshot = null
     return true
   }
 
-<<<<<<< HEAD
   if (req.method === 'GET' && url.pathname === '/environment-panel') {
     jsonResponse(res, 200, {
       ok: true,
       agentName: getAgentName(),
       ...getGeoWeatherSnapshot(),
       serverTime: new Date().toISOString(),
-=======
+    })
+    return true
+  }
+
   // POST /person-card/voice - save per-user voice preference
   if (req.method === 'POST' && url.pathname === '/person-card/voice') {
     readJsonBody(req)
@@ -272,13 +270,10 @@ export async function handlePanelRoutes(req, res, url, { getStateSnapshot = null
       } catch (err) {
         jsonResponse(res, 500, { ok: false, error: err.message })
       }
->>>>>>> feature/merge-test
     })
     return true
   }
 
-<<<<<<< HEAD
-=======
   // POST /person-card/aethermesh-register — proxy AetherMesh voice registration (avoids CORS)
   if (req.method === 'POST' && url.pathname === '/person-card/aethermesh-register') {
     ;(async () => {
@@ -339,6 +334,5 @@ export async function handlePanelRoutes(req, res, url, { getStateSnapshot = null
     return true
   }
 
->>>>>>> feature/merge-test
   return false
 }

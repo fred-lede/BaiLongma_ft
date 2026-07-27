@@ -719,6 +719,24 @@ export function initChat({
   msgInput.addEventListener("compositionend", () => {
     compositionActive = false;
   });
+  const screenshotBtn = document.getElementById("screenshot-btn");
+  if (screenshotBtn) {
+    const fileInput = document.createElement("input");
+    fileInput.type = "file";
+    fileInput.accept = "image/*";
+    fileInput.hidden = true;
+    fileInput.multiple = true;
+    screenshotBtn.after(fileInput);
+    screenshotBtn.title = "上傳圖片（AI 會以視覺分析）";
+    screenshotBtn.addEventListener("click", () => fileInput.click());
+    fileInput.addEventListener("change", () => {
+      const files = Array.from(fileInput.files || []);
+      fileInput.value = "";
+      if (!files.length) return;
+      addPastedImageFiles(files);
+      openChat();
+    });
+  }
   msgInput.addEventListener("keydown", event => {
     // 输入法中的 Enter/方向键用于确认或选择候选，不能触发发送或斜杠菜单。
     if (isImeComposing(event, compositionActive)) return;

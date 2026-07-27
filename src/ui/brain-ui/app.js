@@ -3921,6 +3921,7 @@ function initTTSSettings() {
     doubao:     document.getElementById("tts-creds-doubao"),
     minimax:    document.getElementById("tts-creds-minimax"),
     openai:     document.getElementById("tts-creds-openai"),
+    "custom-openai": document.getElementById("tts-creds-custom-openai"),
     elevenlabs: document.getElementById("tts-creds-elevenlabs"),
     volcano:    document.getElementById("tts-creds-volcano"),
     aethermesh: document.getElementById("tts-creds-aethermesh"),
@@ -3934,9 +3935,88 @@ function initTTSSettings() {
   const aethermeshRegAudio = document.getElementById("tts-aethermesh-reg-audio");
   const aethermeshRegSubmit = document.getElementById("tts-aethermesh-reg-submit");
   const aethermeshRegCancel = document.getElementById("tts-aethermesh-reg-cancel");
+
+  const customVoiceId = document.getElementById("tts-custom-voice-id");
+  const customRefreshModelsBtn = document.getElementById("tts-custom-refresh-models");
+  const customRefreshVoicesBtn = document.getElementById("tts-custom-refresh-voices");
+  const customModelInput = document.getElementById("tts-custom-model");
   const aethermeshVoiceName = document.getElementById("tts-aethermesh-voice-name");
   const aethermeshRenameBtn = document.getElementById("tts-aethermesh-rename-voice");
   let aethermeshVoicesList = [];
+
+  if (customRefreshModelsBtn) {
+    customRefreshModelsBtn.addEventListener("click", async () => {
+      const baseURL = document.getElementById("tts-custom-baseurl")?.value?.trim();
+      const apiKey = document.getElementById("tts-custom-key")?.value?.trim();
+      if (!baseURL) { alert("请先填写 Base URL"); return; }
+      customRefreshModelsBtn.disabled = true;
+      customRefreshModelsBtn.textContent = "获取中…";
+      try {
+        const headers = {};
+        if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
+        const res = await fetch(`${baseURL.replace(/\/$/, "")}/v1/models`, { headers });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const json = await res.json();
+        const models = (json.data || []).filter(m => {
+          const raw = m.capabilities ?? m.metadata?.capabilities;
+          const caps = Array.isArray(raw) ? raw : (raw ? Object.keys(raw) : []);
+          return caps.includes("audio") || caps.includes("tts") || /tts|speech|audio|voice/i.test(m.id);
+        });
+        if (models.length === 0) {
+          customRefreshModelsBtn.textContent = "未找到 TTS 模型";
+          setTimeout(() => { customRefreshModelsBtn.textContent = "刷新"; }, 2000);
+          return;
+        }
+        const ids = models.map(m => m.id);
+        if (customModelInput && ids.length) {
+          customModelInput.value = ids[0];
+          if (ids.length > 1) customModelInput.placeholder = `可用的模型: ${ids.join(", ")}`;
+        }
+        customRefreshModelsBtn.textContent = `找到 ${models.length} 个`;
+      } catch (err) {
+        customRefreshModelsBtn.textContent = "获取失败";
+        console.error("[TTS] 刷新模型失败:", err.message);
+      } finally {
+        customRefreshModelsBtn.disabled = false;
+        setTimeout(() => { customRefreshModelsBtn.textContent = "刷新"; }, 3000);
+      }
+    });
+  }
+
+  if (customRefreshVoicesBtn) {
+    customRefreshVoicesBtn.addEventListener("click", async () => {
+      const baseURL = document.getElementById("tts-custom-baseurl")?.value?.trim();
+      const apiKey = document.getElementById("tts-custom-key")?.value?.trim();
+      if (!baseURL) { alert("请先填写 Base URL"); return; }
+      customRefreshVoicesBtn.disabled = true;
+      customRefreshVoicesBtn.textContent = "获取中…";
+      try {
+        const headers = {};
+        if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
+        const res = await fetch(`${baseURL.replace(/\/$/, "")}/v1/voices`, { headers });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const json = await res.json();
+        const voices = json.data || json.voices || json.voice_ids || json.voice_id || json.models || [];
+        if (voices.length === 0) {
+          customRefreshVoicesBtn.textContent = "未找到声音";
+          setTimeout(() => { customRefreshVoicesBtn.textContent = "刷新"; }, 2000);
+          return;
+        }
+        if (customVoiceId && voices.length) {
+          customVoiceId.value = voices[0].voice_id || voices[0].id || "";
+          const names = voices.map(v => `${v.voice_id || v.id} (${v.name || v.language || ""})`).join(", ");
+          customVoiceId.placeholder = names;
+        }
+        customRefreshVoicesBtn.textContent = `找到 ${voices.length} 个`;
+      } catch (err) {
+        customRefreshVoicesBtn.textContent = "获取失败";
+        console.error("[TTS] 刷新声音失败:", err.message);
+      } finally {
+        customRefreshVoicesBtn.disabled = false;
+        setTimeout(() => { customRefreshVoicesBtn.textContent = "刷新"; }, 3000);
+      }
+    });
+  }
 
   async function aethermeshRefreshVoices() {
     if (aethermeshRefreshBtn) { aethermeshRefreshBtn.disabled = true; aethermeshRefreshBtn.textContent = "获取中…"; }
@@ -4079,11 +4159,17 @@ function initTTSSettings() {
     Object.entries(credSections).forEach(([k, el]) => {
       if (el) el.style.display = k === provider ? "" : "none";
     });
-    if (provider === "aethermesh") {
+    if (provider === "custom-openai") {
       if (voiceSel) voiceSel.style.display = "none";
+      if (customVoiceId) customVoiceId.style.display = "";
+      if (aethermeshVoiceId) aethermeshVoiceId.closest(".settings-row").style.display = "none";
+    } else if (provider === "aethermesh") {
+      if (voiceSel) voiceSel.style.display = "none";
+      if (customVoiceId) customVoiceId.style.display = "none";
       if (aethermeshVoiceId) aethermeshVoiceId.closest(".settings-row").style.display = "";
     } else {
       if (voiceSel) voiceSel.style.display = "";
+      if (customVoiceId) customVoiceId.style.display = "none";
       if (aethermeshVoiceId) aethermeshVoiceId.closest(".settings-row").style.display = "none";
     }
   }
@@ -4134,6 +4220,14 @@ function initTTSSettings() {
     if (aethermeshBaseURLEl && tts?.aethermeshBaseURL) aethermeshBaseURLEl.value = tts.aethermeshBaseURL;
     if (aethermeshLangEl && tts?.aethermeshLang) aethermeshLangEl.value = tts.aethermeshLang;
     if (aethermeshTranslateEl) aethermeshTranslateEl.checked = !!tts?.aethermeshTranslate;
+    const customKeyEl = document.getElementById("tts-custom-key");
+    const customBaseURLEl = document.getElementById("tts-custom-baseurl");
+    const customModelEl = document.getElementById("tts-custom-model");
+    if (customKeyEl && tts?.customOpenaiKey) customKeyEl.value = tts.customOpenaiKey;
+    if (customBaseURLEl && tts?.customOpenaiBaseURL) customBaseURLEl.value = tts.customOpenaiBaseURL;
+    if (customModelEl && tts?.customOpenaiModel) customModelEl.value = tts.customOpenaiModel;
+    if (customVoiceId && tts?.ttsVoiceId && provider === "custom-openai") customVoiceId.value = tts.ttsVoiceId;
+    if (aethermeshVoiceId && tts?.ttsVoiceId && provider === "aethermesh") aethermeshVoiceId.value = tts.ttsVoiceId;
     if (provider === "aethermesh") aethermeshRefreshVoices();
     showCredSection(provider);
   }).catch(() => {});
@@ -4173,6 +4267,13 @@ function initTTSSettings() {
       const aethermeshTranslate = document.getElementById("tts-aethermesh-translate")?.checked;
       if (aethermeshTranslate !== undefined) ttsBody.aethermeshTranslate = aethermeshTranslate;
       if (aethermeshVoiceId?.value) ttsBody.ttsVoiceId = aethermeshVoiceId.value;
+      const customKey = document.getElementById("tts-custom-key")?.value?.trim();
+      if (customKey) ttsBody.customOpenaiKey = customKey;
+      const customBaseURL = document.getElementById("tts-custom-baseurl")?.value?.trim();
+      if (customBaseURL) ttsBody.customOpenaiBaseURL = customBaseURL;
+      const customModel = document.getElementById("tts-custom-model")?.value?.trim();
+      if (customModel) ttsBody.customOpenaiModel = customModel;
+      if (providerSel.value === "custom-openai" && customVoiceId?.value) ttsBody.ttsVoiceId = customVoiceId.value;
 
       fetch(`${API}/settings/tts`, {
         method: "POST",
@@ -4193,7 +4294,9 @@ function initTTSSettings() {
       if (testStatus) testStatus.textContent = "保存配置中…";
       try {
         const preBody = { ttsProvider: providerSel.value };
-        const currentVoice = voiceSel?.value?.trim();
+        let currentVoice = voiceSel?.value?.trim();
+        if (providerSel.value === "custom-openai" && customVoiceId?.value) currentVoice = customVoiceId.value.trim();
+        else if (providerSel.value === "aethermesh" && aethermeshVoiceId?.value) currentVoice = aethermeshVoiceId.value.trim();
         if (currentVoice) { preBody.ttsVoiceId = currentVoice; activeTTSVoiceId = currentVoice; }
         const minimaxKey2 = document.getElementById("tts-minimax-key")?.value?.trim();
         if (minimaxKey2) preBody.minimaxKey = minimaxKey2;
@@ -4205,6 +4308,12 @@ function initTTSSettings() {
         if (rateEl3) preBody.doubaoSpeechRate = rateEl3.value;
         const openaiKey = document.getElementById("tts-openai-key")?.value?.trim();
         if (openaiKey) preBody.openaiTtsKey = openaiKey;
+        const customKey = document.getElementById("tts-custom-key")?.value?.trim();
+        if (customKey) preBody.customOpenaiKey = customKey;
+        const customBaseURL = document.getElementById("tts-custom-baseurl")?.value?.trim();
+        if (customBaseURL) preBody.customOpenaiBaseURL = customBaseURL;
+        const customModel = document.getElementById("tts-custom-model")?.value?.trim();
+        if (customModel) preBody.customOpenaiModel = customModel;
         const elevenKey = document.getElementById("tts-elevenlabs-key")?.value?.trim();
         if (elevenKey) preBody.elevenLabsKey = elevenKey;
         const volcanoAppId = document.getElementById("tts-volcano-appid")?.value?.trim();
@@ -4524,6 +4633,7 @@ function initTTSSettings() {
     "social-wechat-token":   "WECHAT_OFFICIAL_TOKEN",
     "social-wecom-botkey":   "WECOM_BOT_KEY",
     "social-wecom-token":    "WECOM_INCOMING_TOKEN",
+    "social-telegram-token": "TELEGRAM_BOT_TOKEN",
   };
 
   const SOCIAL_PLATFORM_STATUS = {
@@ -4531,6 +4641,7 @@ function initTTSSettings() {
     "social-status-feishu":  ["FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_VERIFICATION_TOKEN"],
     "social-status-wechat":  ["WECHAT_OFFICIAL_APP_ID", "WECHAT_OFFICIAL_APP_SECRET", "WECHAT_OFFICIAL_TOKEN"],
     "social-status-wecom":   ["WECOM_BOT_KEY", "WECOM_INCOMING_TOKEN"],
+    "social-status-telegram": ["TELEGRAM_BOT_TOKEN"],
   };
 
   async function loadSocialSettings() {
@@ -4922,6 +5033,7 @@ function initTTSSettings() {
       volcengine: "voice-cred-volcengine",
       tencent: "voice-cred-tencent",
       xunfei: "voice-cred-xunfei",
+      aethermesh: "voice-cred-aethermesh",
       local: null,
     };
     for (const [key, id] of Object.entries(panels)) {
@@ -5352,6 +5464,12 @@ function initTTSSettings() {
         localStorage.setItem(VOICE_PROVIDER_KEY, savedProvider);
         applyVoiceConfigStatus(data.voice);
       }
+      // Sync AetherMesh ASR settings from backend to localStorage for frontend direct WS
+      if (resp.ok && data?.voice) {
+        const cfg = data.voice;
+        if (cfg.aethermeshKey && typeof cfg.aethermeshKey === 'string') localStorage.setItem('aethermeshKey', cfg.aethermeshKey);
+        if (cfg.aethermeshBaseURL && typeof cfg.aethermeshBaseURL === 'string') localStorage.setItem('aethermeshBaseURL', cfg.aethermeshBaseURL);
+      }
       const savedVolcAsrKey = data?.voice?.volcAsrApiKey?.value;
       if (volcAsrKeyInput) volcAsrKeyInput.value = typeof savedVolcAsrKey === "string" ? savedVolcAsrKey : "";
     } catch {
@@ -5404,6 +5522,10 @@ function initTTSSettings() {
       if (xunfeiApikey) body.xunfeiApiKey = xunfeiApikey;
       const volcApiKey = document.getElementById("voice-volc-apikey")?.value?.trim();
       if (volcApiKey) body.volcAsrApiKey = volcApiKey;
+      const aethermeshKey = document.getElementById("voice-aethermesh-key")?.value?.trim();
+      if (aethermeshKey) body.aethermeshApiKey = aethermeshKey;
+      const aethermeshBaseurl = document.getElementById("voice-aethermesh-baseurl")?.value?.trim();
+      if (aethermeshBaseurl) body.aethermeshBaseUrl = aethermeshBaseurl;
 
       if (Object.keys(body).length > 0) {
         try {
@@ -5420,6 +5542,8 @@ function initTTSSettings() {
             "voice-tencent-sid",
             "voice-tencent-skey",
             "voice-xunfei-apikey",
+            "voice-aethermesh-key",
+            "voice-aethermesh-baseurl",
           ].forEach(id => {
             const el = document.getElementById(id);
             if (el) el.value = "";

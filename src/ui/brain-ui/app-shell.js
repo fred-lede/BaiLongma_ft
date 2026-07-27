@@ -219,6 +219,7 @@ const createConsole = () => `
     <div id="slash-menu" class="slash-menu" role="listbox" aria-label="命令" hidden></div>
     <span class="prompt-mark">▸</span>
     <textarea id="msg-input" rows="1" placeholder="向 Longma 发送消息…（输入 / 调出命令，Shift+Enter 换行）" autocomplete="off"></textarea>
+    <button id="screenshot-btn" type="button" title="上传图片（AI 會以視覺分析圖片）">🖼️</button>
     <button id="send-btn" type="button">发送</button>
   </div>
 </section>
@@ -486,6 +487,14 @@ const createSettingsModal = () => `
             </div>
             <span class="settings-feedback" id="clawbot-feedback"></span>
           </div>
+          <div class="settings-section">
+            <div class="settings-section-label">Telegram</div>
+            <div class="settings-platform-status" id="social-status-telegram"></div>
+            <div class="settings-row">
+              <label class="settings-label" for="social-telegram-token">Bot Token</label>
+              <input class="settings-input" id="social-telegram-token" type="password" placeholder="留空保持原值不变…" autocomplete="new-password">
+            </div>
+          </div>
           <div class="settings-section settings-section-action">
             <button class="settings-save-btn" id="settings-save-social" type="button">保存所有</button>
             <span class="settings-feedback" id="settings-social-feedback"></span>
@@ -509,6 +518,7 @@ const createSettingsModal = () => `
                 <option value="volcengine">火山引擎豆包 ASR</option>
                 <option value="tencent">腾讯云 ASR</option>
                 <option value="xunfei">科大讯飞 RTASR</option>
+                <option value="aethermesh">AetherMesh ASR（自建）</option>
               </select>
             </div>
             <p class="settings-hint" id="voice-config-status">正在读取主机上的语音识别配置…</p>
@@ -551,6 +561,18 @@ const createSettingsModal = () => `
                 <input class="settings-input" type="password" id="voice-xunfei-apikey" placeholder="留空则不修改">
               </div>
             </div>
+            <div id="voice-cred-aethermesh" style="display:none;">
+              <div class="settings-row">
+                <label class="settings-label" for="voice-aethermesh-key">API Key</label>
+                <input class="settings-input" type="password" id="voice-aethermesh-key" placeholder="留空則使用 TTS 的 Key">
+                <span class="ls_status" id="voice-aethermesh-key-status"></span>
+              </div>
+              <div class="settings-row">
+                <label class="settings-label" for="voice-aethermesh-baseurl">Base URL</label>
+                <input class="settings-input" type="text" id="voice-aethermesh-baseurl" placeholder="http://192.168.1.200:8001">
+                <span class="ls_status" id="voice-aethermesh-baseurl-status"></span>
+              </div>
+            </div>
           </div>
 
           <div class="settings-section">
@@ -571,6 +593,7 @@ const createSettingsModal = () => `
               <select class="settings-select" id="tts-provider-select">
                 <option value="doubao">豆包（方舟，流式，中文最自然）</option>
                 <option value="openai">OpenAI TTS（流式，$0.015/千字）</option>
+                <option value="custom-openai">自定义 OpenAI 兼容（流式）</option>
                 <option value="elevenlabs">ElevenLabs（流式，高质量）</option>
                 <option value="volcano">火山引擎（中文，有免费额度）</option>
                 <option value="minimax">MiniMax（已有配置）</option>
@@ -657,6 +680,32 @@ const createSettingsModal = () => `
                 <input class="settings-input" type="text" id="tts-openai-baseurl" placeholder="自定义端点，如 https://api.deepseek.com">
               </div>
               <p class="settings-hint">可用声音：nova · shimmer · alloy · echo · fable · onyx</p>
+            </div>
+
+            <div id="tts-creds-custom-openai" style="display:none;">
+              <div class="settings-row">
+                <label class="settings-label" for="tts-custom-key">API Key</label>
+                <input class="settings-input" type="password" id="tts-custom-key" placeholder="留空则不修改">
+              </div>
+              <div class="settings-row">
+                <label class="settings-label" for="tts-custom-baseurl">Base URL</label>
+                <input class="settings-input" type="text" id="tts-custom-baseurl" placeholder="如 https://api.openai.com">
+              </div>
+              <div class="settings-row">
+                <label class="settings-label" for="tts-custom-model">模型名</label>
+                <div style="display:flex;gap:6px;flex:1;">
+                  <input class="settings-input" type="text" id="tts-custom-model" placeholder="如 tts-1 / xtts-v2" style="flex:1;">
+                  <button class="settings-save-btn" id="tts-custom-refresh-models" type="button" style="padding:0 10px;font-size:11px;white-space:nowrap;">刷新</button>
+                </div>
+              </div>
+              <div class="settings-row">
+                <label class="settings-label" for="tts-custom-voice-id">声音 ID</label>
+                <div style="display:flex;gap:6px;flex:1;">
+                  <input class="settings-input" type="text" id="tts-custom-voice-id" placeholder="如 nova / alloy" style="flex:1;">
+                  <button class="settings-save-btn" id="tts-custom-refresh-voices" type="button" style="padding:0 10px;font-size:11px;white-space:nowrap;">刷新</button>
+                </div>
+              </div>
+              <p class="settings-hint">适用于任何实现 <code>POST /v1/audio/speech</code> 接口的服务。填入 API Key、Base URL 和模型名即可使用。点「刷新」从远端自动拉取模型列表和已注册的声音 ID。</p>
             </div>
 
             <div id="tts-creds-elevenlabs" style="display:none;">

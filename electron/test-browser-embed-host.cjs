@@ -30,6 +30,9 @@ class FakeWebContents extends EventEmitter {
     this.session = new FakeSession()
     this.url = ''
     this.loadCalls = []
+    this.insertCssCalls = []
+    this.removedCssKeys = []
+    this.nextCssKey = 0
     this.destroyed = false
   }
 
@@ -39,10 +42,18 @@ class FakeWebContents extends EventEmitter {
   getTitle() { return this.title || '' }
   async loadURL(url) {
     this.loadCalls.push(url)
+    this.emit('did-start-navigation', {}, url, false, true)
     this.url = url
     this.emit('did-navigate', {}, url)
+    this.emit('did-finish-load')
     this.emit('did-stop-loading')
   }
+  async insertCSS(css, options) {
+    const key = `css-${++this.nextCssKey}`
+    this.insertCssCalls.push({ css, options, key })
+    return key
+  }
+  async removeInsertedCSS(key) { this.removedCssKeys.push(key) }
   setZoomFactor(value) { this.zoomFactor = value }
   close() { this.destroyed = true }
 }
@@ -170,6 +181,7 @@ async function run() {
     View: FakeView,
     BaseWindow: FakeBaseWindow,
     logger: { warn: (...args) => warnings.push(args) },
+    platform: 'win32',
     onNavigation: entry => navigations.push(entry),
     nativeRequestGuard: true,
     onDiagnosticInput: input => {
@@ -217,6 +229,13 @@ async function run() {
   assert.equal(cardState.url, 'https://example.com/')
   assert.equal(cardState.zoomFactor, 0.5)
   assert.equal(view.webContents.zoomFactor, 0.5)
+  assert.equal(view.webContents.insertCssCalls.length, 2,
+    'Windows card mode reapplies its compact scrollbar style after navigation')
+  assert.equal(view.webContents.insertCssCalls.at(-1).options.cssOrigin, 'user')
+  assert.match(view.webContents.insertCssCalls.at(-1).css, /::-webkit-scrollbar/)
+  assert.match(view.webContents.insertCssCalls.at(-1).css, /display: none !important/)
+  assert.match(view.webContents.insertCssCalls.at(-1).css, /width: 0 !important/)
+  assert.match(view.webContents.insertCssCalls.at(-1).css, /height: 0 !important/)
   assert.equal(view.visible, true)
   assert.equal(view.radius, 20)
   assert.equal(mainWindow.contentView.children[0], view)
@@ -331,6 +350,8 @@ async function run() {
       'a rejected popup target leaves the controlled page unchanged')
   }
 
+  const cardScrollbarCssKey = view.webContents.insertCssCalls.at(-1).key
+  const cardScrollbarInsertCount = view.webContents.insertCssCalls.length
   const windowState = await host.update(mainWindow, {
     mode: 'window',
     visible: true,
@@ -347,6 +368,8 @@ async function run() {
   assert.equal(windowState.radius, 0)
   assert.equal(windowState.zoomFactor, 1)
   assert.equal(view.webContents.zoomFactor, 1)
+  assert.deepEqual(view.webContents.removedCssKeys, [cardScrollbarCssKey],
+    'large-window mode restores the normal page scrollbar')
   assert.equal(windowState.transitioning, false)
   assert.deepEqual(FakeBaseWindow.instances[0].contentBoundsCalls.slice(0, 2), [
     {
@@ -374,6 +397,8 @@ async function run() {
   assert.equal(mainWindow.contentView.children[0], view)
   assert.equal(FakeBaseWindow.instances[0].visible, false)
   assert.equal(view.webContents.zoomFactor, 500 / 1280)
+  assert.equal(view.webContents.insertCssCalls.length, cardScrollbarInsertCount + 1,
+    'returning to the card restores the compact scrollbar without reloading')
   assert.deepEqual(FakeBaseWindow.instances[0].contentBoundsCalls.at(-1), {
     bounds: { x: 100, y: 80, width: 500, height: 300 },
     animate: true,

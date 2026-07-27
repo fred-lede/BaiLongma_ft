@@ -2,6 +2,13 @@
 
 const BROWSER_EMBED_PARTITION = 'persist:bailongma-browser'
 const configuredSessions = new WeakMap()
+const WINDOWS_CARD_SCROLLBAR_CSS = `
+  ::-webkit-scrollbar {
+    display: none !important;
+    width: 0 !important;
+    height: 0 !important;
+  }
+`
 
 function isAllowedWebUrl(value) {
   if (typeof value !== 'string' || !value.trim()) return false
@@ -157,6 +164,7 @@ function createBrowserEmbedHost({
   nativeRequestGuard = false,
   onDiagnosticInput = () => false,
   logger = console,
+  platform = process.platform,
   transitionDurationMs = 480,
   waitForTransition = ms => new Promise(resolve => setTimeout(resolve, ms)),
 } = {}) {
@@ -177,6 +185,9 @@ function createBrowserEmbedHost({
   let transitionSequence = 0
   let windowOpenSequence = 0
   let pendingWindowOpenNavigation = null
+  let scrollbarDocumentRevision = 0
+  let cardScrollbarCssKey = null
+  let cardScrollbarInsert = null
   const state = {
     available: true,
     attached: false,
@@ -206,6 +217,68 @@ function createBrowserEmbedHost({
   function setViewVisibility(visible) {
     browserView?.setVisible(Boolean(visible))
     inputShield?.setVisible(Boolean(visible && !state.interactive))
+  }
+
+  function invalidateCardScrollbarStyle() {
+    scrollbarDocumentRevision += 1
+    // Electron discards inserted CSS with the old document during a main-frame
+    // navigation, so its removal key is no longer useful for the new page.
+    cardScrollbarCssKey = null
+  }
+
+  async function syncCardScrollbarStyle() {
+    const contents = browserView?.webContents
+    if (!contents || contents.isDestroyed()) return
+    if (
+      typeof contents.insertCSS !== 'function'
+      || typeof contents.removeInsertedCSS !== 'function'
+    ) return
+
+    const shouldUseCompactScrollbar = platform === 'win32' && state.mode === 'card'
+    if (!shouldUseCompactScrollbar) {
+      const key = cardScrollbarCssKey
+      cardScrollbarCssKey = null
+      if (key) {
+        try { await contents.removeInsertedCSS(key) } catch {}
+      }
+      // An insert that is already in flight checks the current mode when it
+      // resolves and removes itself before this promise completes.
+      if (cardScrollbarInsert) await cardScrollbarInsert.promise
+      return
+    }
+
+    const revision = scrollbarDocumentRevision
+    if (cardScrollbarCssKey || cardScrollbarInsert?.revision === revision) {
+      if (cardScrollbarInsert?.revision === revision) await cardScrollbarInsert.promise
+      return
+    }
+
+    const pending = {
+      revision,
+      promise: null,
+    }
+    pending.promise = contents.insertCSS(WINDOWS_CARD_SCROLLBAR_CSS, {
+      cssOrigin: 'user',
+    }).then(async key => {
+      const stillCurrent = (
+        !contents.isDestroyed()
+        && browserView?.webContents === contents
+        && platform === 'win32'
+        && state.mode === 'card'
+        && scrollbarDocumentRevision === revision
+      )
+      if (stillCurrent) {
+        cardScrollbarCssKey = key
+        return
+      }
+      try { await contents.removeInsertedCSS(key) } catch {}
+    }).catch(error => {
+      logger.warn?.('[browser-embed] unable to style compact scrollbar:', error?.message || error)
+    }).finally(() => {
+      if (cardScrollbarInsert === pending) cardScrollbarInsert = null
+    })
+    cardScrollbarInsert = pending
+    await pending.promise
   }
 
   function applyExternalBounds() {
@@ -313,6 +386,12 @@ function createBrowserEmbedHost({
     contents.on('will-frame-navigate', blockUnsafeNavigation)
     contents.on('will-navigate', blockUnsafeNavigation)
     contents.on('will-redirect', blockUnsafeNavigation)
+    contents.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => {
+      if (isMainFrame !== false && isInPlace !== true) invalidateCardScrollbarStyle()
+    })
+    contents.on('did-finish-load', () => {
+      void syncCardScrollbarStyle()
+    })
     contents.on('before-input-event', (event, input) => {
       if (onDiagnosticInput(input, contents) === true) {
         event.preventDefault()
@@ -419,6 +498,8 @@ function createBrowserEmbedHost({
       inputShield = null
       rendererReadyPromise = null
       requestedUrl = null
+      invalidateCardScrollbarStyle()
+      cardScrollbarInsert = null
       state.bounds = null
       state.url = null
       state.loading = false
@@ -543,7 +624,7 @@ function createBrowserEmbedHost({
     return hostWindow
   }
 
-  function applyCardLayout(targetWindow, { bounds, radius, visible, interactive }) {
+  async function applyCardLayout(targetWindow, { bounds, radius, visible, interactive }) {
     if (externalWindow && !externalWindow.isDestroyed()) externalWindow.hide()
     attachTo(targetWindow)
     state.mode = 'card'
@@ -552,6 +633,7 @@ function createBrowserEmbedHost({
     state.radius = Math.min(radius, bounds.width / 2, bounds.height / 2)
     state.zoomFactor = bounds.width > 0 ? Math.min(1, bounds.width / 1280) : 1
     state.visible = visible && bounds.width > 0 && bounds.height > 0
+    await syncCardScrollbarStyle()
     browserView.setBounds(bounds)
     browserView.setBorderRadius(state.radius)
     browserView.webContents.setZoomFactor(state.zoomFactor)
@@ -590,6 +672,7 @@ function createBrowserEmbedHost({
     state.transitioning = shouldAnimate
     state.transitionTarget = shouldAnimate ? 'window' : null
     browserView.webContents.setZoomFactor(1)
+    await syncCardScrollbarStyle()
 
     if (shouldAnimate && startBounds) setExternalContentBounds(windowHost, startBounds, false)
     attachTo(windowHost)
@@ -644,7 +727,7 @@ function createBrowserEmbedHost({
     }
 
     if (token !== transitionSequence) return snapshot()
-    applyCardLayout(targetWindow, { bounds, radius, visible, interactive })
+    await applyCardLayout(targetWindow, { bounds, radius, visible, interactive })
     state.transitioning = false
     state.transitionTarget = null
     return snapshot()
@@ -708,6 +791,7 @@ function createBrowserEmbedHost({
       }
     }
 
+    await syncCardScrollbarStyle()
     return snapshot()
   }
 

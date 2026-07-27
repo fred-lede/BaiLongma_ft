@@ -87,6 +87,7 @@ export async function handleSettingsRoutes(req, res, url, { requireLocalOrToken,
         thinking: config.thinking === true,
         contextWindow: getContextWindowConfig(),
         apiKey: config.apiKey || '',
+        imageGenModel: config.imageGenModel || '',
       },
       providers: getProviderSummaries(),
       minimax: {
@@ -115,10 +116,14 @@ export async function handleSettingsRoutes(req, res, url, { requireLocalOrToken,
 
   if (req.method === 'POST' && url.pathname === '/settings/model') {
     try {
-      const { provider, apiKey, model, baseURL } = await readJsonBody(req)
+      const { provider, apiKey, model, baseURL, imageGenModel } = await readJsonBody(req)
       const result = provider || apiKey || baseURL
         ? await saveLLMSettings({ provider, apiKey, model, baseURL })
         : switchModel(model)
+      if (imageGenModel) {
+        const { saveLLMSettings: save2 } = await import('../../config.js')
+        await save2({ imageGenModel })
+      }
       emitEvent('model_switched', result)
       jsonResponse(res, 200, { ok: true, ...result })
     } catch (err) {

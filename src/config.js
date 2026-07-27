@@ -1410,9 +1410,15 @@ export function switchProviderConfig({ provider, model } = {}) {
   }
 }
 
-export async function saveLLMSettings({ provider = AUTO_PROVIDER, apiKey, model, baseURL } = {}) {
+export async function saveLLMSettings({ provider = AUTO_PROVIDER, apiKey, model, baseURL, imageGenModel } = {}) {
   const p = String(provider || AUTO_PROVIDER).toLowerCase()
   const trimmedKey = String(apiKey || '').trim()
+
+  if (imageGenModel) {
+    const stored = getStoredConfig()
+    stored.imageGenModel = imageGenModel
+    await writeConfig(stored)
+  }
 
   if (p === 'custom') {
     const stored = resolveStoredLlmForProvider('custom')

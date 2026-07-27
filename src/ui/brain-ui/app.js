@@ -4500,6 +4500,8 @@ function initTTSSettings() {
         tempSlider.value = String(llm.temperature);
         if (tempVal) tempVal.textContent = llm.temperature.toFixed(2);
       }
+      const imageGenModelEl = document.getElementById("settings-imagegen-model");
+      if (imageGenModelEl && llm.imageGenModel) imageGenModelEl.value = llm.imageGenModel;
       if (thinkingToggle) thinkingToggle.checked = llm.thinking === true;
       const contextWindow = llm.contextWindow || {};
       const chatMessageLimit = Number(contextWindow.chatMessageLimit) || 20;
@@ -5567,6 +5569,9 @@ function initTTSSettings() {
         }
         if (apiKey && apiKey !== (selectedCfg.apiKey || "")) body.apiKey = apiKey;
       }
+
+      const imageGenModel = document.getElementById("settings-imagegen-model")?.value?.trim();
+      if (imageGenModel) body.imageGenModel = imageGenModel;
 
       const res = await fetch(`${API}/settings/model`, {
         method: "POST",

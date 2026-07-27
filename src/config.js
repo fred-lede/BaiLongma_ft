@@ -1052,6 +1052,7 @@ export const config = {
   // 默认关闭——只有用户在设置里显式开启才思考。这是「用户显式选择」的开关，
   // 不是 runtime 按难度替模型决定开关 reasoning（那条路 index.js 已注释外掉）。
   thinking: false,
+  imageGenModel: '',
   contextWindow: {
     chatMessageLimit: DEFAULT_CONTEXT_MESSAGE_LIMIT,
     toolCallLimit: DEFAULT_CONTEXT_TOOL_LIMIT,
@@ -1084,6 +1085,9 @@ if (parsedConfig) {
   // 缺字段（旧版升级 / 未开启过）按默认 false 处理 —— 无需 schema 迁移。
   if (typeof parsedConfig.thinking === 'boolean') {
     config.thinking = parsedConfig.thinking
+  }
+  if (typeof parsedConfig.imageGenModel === 'string') {
+    config.imageGenModel = parsedConfig.imageGenModel
   }
   if (parsedConfig.contextWindow && typeof parsedConfig.contextWindow === 'object') {
     const chatMessageLimit = Number(parsedConfig.contextWindow.chatMessageLimit)
@@ -1416,9 +1420,10 @@ export async function saveLLMSettings({ provider = AUTO_PROVIDER, apiKey, model,
   const trimmedKey = String(apiKey || '').trim()
 
   if (imageGenModel) {
-    const stored = getStoredConfig()
-    stored.imageGenModel = imageGenModel
-    await writeConfig(stored)
+    const existing = readExistingStoredConfig()
+    existing.imageGenModel = imageGenModel
+    writeStoredConfig(existing)
+    config.imageGenModel = imageGenModel
   }
 
   if (p === 'custom') {

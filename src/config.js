@@ -773,13 +773,14 @@ const VOICE_PROVIDER_ALIASES = {
   bytedance: 'volcengine',
   iflytek: 'xunfei',
 }
-const VOICE_PROVIDERS = new Set(['local', 'aliyun', 'volcengine', 'tencent', 'xunfei'])
+const VOICE_PROVIDERS = new Set(['local', 'aliyun', 'volcengine', 'tencent', 'xunfei', 'aethermesh'])
 const VOICE_PROVIDER_KEYS = {
   local: ['lang', 'macosRecognitionMode'],
   aliyun: ['aliyunApiKey', 'aliyunAsrModel'],
   tencent: ['tencentSecretId', 'tencentSecretKey', 'tencentAppId'],
   xunfei: ['xunfeiAppId', 'xunfeiApiKey', 'xunfeiApiSecret'],
   volcengine: ['volcAsrApiKey', 'volcAsrAppKey', 'volcAsrAccessKey', 'volcAsrResourceId'],
+  aethermesh: ['aethermeshKey', 'aethermeshBaseURL', 'aethermeshAsrModel'],
 }
 const VOICE_CONFIG_KEYS = [
   'voiceProvider',
@@ -1709,6 +1710,7 @@ const SOCIAL_ENV_KEYS = [
   'FEISHU_APP_ID', 'FEISHU_APP_SECRET', 'FEISHU_VERIFICATION_TOKEN',
   'WECHAT_OFFICIAL_APP_ID', 'WECHAT_OFFICIAL_APP_SECRET', 'WECHAT_OFFICIAL_TOKEN',
   'WECOM_BOT_KEY', 'WECOM_INCOMING_TOKEN',
+  'TELEGRAM_BOT_TOKEN',
 ]
 
 // ── WeChat ClawBot credentials (written automatically after QR scan, not exposed in SOCIAL_ENV_KEYS) ──
@@ -1778,7 +1780,11 @@ export function getVoiceConfig() {
     if (key === 'voiceProvider') continue
     const provider = VOICE_KEY_PROVIDER.get(key) || result.voiceProvider
     const stored = readVoiceProviderConfig(provider)
-    result[key] = { configured: !!stored[key] }
+    if (key === 'aethermeshKey' || key === 'aethermeshBaseURL' || key === 'aethermeshAsrModel') {
+      result[key] = stored[key] || ''
+    } else {
+      result[key] = { configured: !!stored[key] }
+    }
     if (key === 'aliyunApiKey' && stored[key]) {
       result[key] = {
         configured: isValidAliyunAsrKey(stored[key]),
@@ -1858,11 +1864,16 @@ const TTS_CONFIG_KEYS = [
   'openaiTtsKey', 'openaiTtsBaseURL',
   'elevenLabsKey',
   'volcanoAppId', 'volcanoToken',
+  'customOpenaiKey', 'customOpenaiBaseURL', 'customOpenaiModel',
+  'aethermeshKey', 'aethermeshBaseURL', 'aethermeshLanguage', 'aethermeshTranslate', 'aethermeshImageModel',
 ]
 
 export function getTTSConfig() {
   let stored = {}
+  let voiceStored = {}
   try { stored = JSON.parse(fs.readFileSync(paths.configFile, 'utf-8'))?.tts || {} } catch {}
+  try { voiceStored = JSON.parse(fs.readFileSync(paths.configFile, 'utf-8'))?.voice || {} } catch {}
+  const fallbackBaseURL = voiceStored.aethermeshBaseURL || 'http://192.168.1.200:8001'
   return {
     ttsProvider:     stored.ttsProvider  || 'doubao',
     ttsVoiceId:      stored.ttsVoiceId   || 'zh_female_xiaohe_uranus_bigtts',
@@ -1875,13 +1886,24 @@ export function getTTSConfig() {
     elevenLabsKey:   { configured: !!(stored.elevenLabsKey) },
     volcanoAppId:    { configured: !!(stored.volcanoAppId), value: stored.volcanoAppId || '' },
     volcanoToken:    { configured: !!(stored.volcanoToken) },
+    customOpenaiKey: { configured: !!(stored.customOpenaiKey) },
+    customOpenaiBaseURL: stored.customOpenaiBaseURL || '',
+    customOpenaiModel: stored.customOpenaiModel || '',
+    aethermeshKey:   { configured: !!(stored.aethermeshKey || voiceStored.aethermeshKey) },
+    aethermeshBaseURL: stored.aethermeshBaseURL || voiceStored.aethermeshBaseURL || fallbackBaseURL,
+    aethermeshLanguage: stored.aethermeshLanguage || 'zh-cn',
+    aethermeshTranslate: !!stored.aethermeshTranslate,
+    aethermeshImageModel: stored.aethermeshImageModel || 'x/z-image-turbo:bf16',
   }
 }
 
 // Read plaintext TTS credentials (backend use only — not exposed to frontend)
 export function getTTSCredentials() {
   let stored = {}
+  let voiceStored = {}
   try { stored = JSON.parse(fs.readFileSync(paths.configFile, 'utf-8'))?.tts || {} } catch {}
+  try { voiceStored = JSON.parse(fs.readFileSync(paths.configFile, 'utf-8'))?.voice || {} } catch {}
+  const fallbackBaseURL = voiceStored.aethermeshBaseURL || 'http://192.168.1.200:8001'
   return {
     provider:       stored.ttsProvider  || 'doubao',
     voiceId:        stored.ttsVoiceId   || 'zh_female_xiaohe_uranus_bigtts',
@@ -1894,6 +1916,14 @@ export function getTTSCredentials() {
     elevenLabsKey:  stored.elevenLabsKey || '',
     volcanoAppId:   stored.volcanoAppId  || '',
     volcanoToken:   stored.volcanoToken  || '',
+    customOpenaiKey: stored.customOpenaiKey || '',
+    customOpenaiBaseURL: stored.customOpenaiBaseURL || '',
+    customOpenaiModel: stored.customOpenaiModel || '',
+    aethermeshKey:   stored.aethermeshKey || voiceStored.aethermeshKey || '',
+    aethermeshBaseURL: stored.aethermeshBaseURL || voiceStored.aethermeshBaseURL || fallbackBaseURL,
+    aethermeshLanguage: stored.aethermeshLanguage || 'zh-cn',
+    aethermeshTranslate: !!stored.aethermeshTranslate,
+    aethermeshImageModel: stored.aethermeshImageModel || 'x/z-image-turbo:bf16',
   }
 }
 
@@ -1903,6 +1933,10 @@ export function setTTSConfig(updates) {
   const next = { ...current }
   for (const [key, val] of Object.entries(updates)) {
     if (!TTS_CONFIG_KEYS.includes(key)) continue
+    if (key === 'aethermeshTranslate') {
+      next[key] = !!val
+      continue
+    }
     const trimmed = String(val || '').trim()
     if (trimmed) next[key] = trimmed
     else delete next[key]

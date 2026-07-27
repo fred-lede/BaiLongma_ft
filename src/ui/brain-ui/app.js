@@ -5523,9 +5523,9 @@ function initTTSSettings() {
       const volcApiKey = document.getElementById("voice-volc-apikey")?.value?.trim();
       if (volcApiKey) body.volcAsrApiKey = volcApiKey;
       const aethermeshKey = document.getElementById("voice-aethermesh-key")?.value?.trim();
-      if (aethermeshKey) body.aethermeshApiKey = aethermeshKey;
+      if (aethermeshKey) body.aethermeshKey = aethermeshKey;
       const aethermeshBaseurl = document.getElementById("voice-aethermesh-baseurl")?.value?.trim();
-      if (aethermeshBaseurl) body.aethermeshBaseUrl = aethermeshBaseurl;
+      if (aethermeshBaseurl) body.aethermeshBaseURL = aethermeshBaseurl;
 
       if (Object.keys(body).length > 0) {
         try {

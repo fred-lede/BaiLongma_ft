@@ -79,9 +79,12 @@ export function getEmbeddingTimeoutMs() {
 //
 // opts.isQuery：召回 query 传 true（bge 会套检索指令前缀做非对称检索）；入库 passage 传 false（默认）。
 //               query/passage 向量不同（前缀不同），cacheKey 带 isQuery 区分，避免互相覆盖。
+const MD_DATA_URL_RE = /!\[([^\]]*)\]\((data:[^)]+)\)/g
+
 export async function computeEmbedding(text, { isQuery = false } = {}) {
-  const input = typeof text === 'string' ? text : ''
+  let input = typeof text === 'string' ? text : ''
   if (!input || input.length < MIN_TEXT_LENGTH) return null
+  input = input.replace(MD_DATA_URL_RE, (_m, alt) => alt ? `[image: ${alt}]` : '[image]')
 
   let cred
   try {

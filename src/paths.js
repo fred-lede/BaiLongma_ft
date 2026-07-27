@@ -38,6 +38,7 @@ export const paths = {
   mediaDir: ensureDir(path.join(USER_DIR, 'data', 'media')),
   // 本地嵌入模型缓存目录：transformers.js 首次下载 ONNX 模型落这里，之后离线命中。
   modelsDir: ensureDir(path.join(USER_DIR, 'data', 'models')),
+  binDir:    ensureDir(path.join(USER_DIR, 'data', 'bin')),
   configFile: path.join(USER_DIR, 'config.json'),
   llmConfigDir: ensureDir(path.join(USER_DIR, 'llm')),
   voiceConfigDir: ensureDir(path.join(USER_DIR, 'voice')),

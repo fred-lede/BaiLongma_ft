@@ -130,6 +130,12 @@ function normalizeText(value = '') {
     .replace(/[^\p{Script=Han}a-z0-9]+/gu, '')
 }
 
+function isTrivialPersonSummary(summary = '', name = '') {
+  const summaryKey = normalizeText(summary)
+  const nameKey = normalizeText(name)
+  return Boolean(summaryKey && nameKey && summaryKey === nameKey)
+}
+
 function normalizeList(value) {
   if (Array.isArray(value)) return value.map(v => String(v || '').trim()).filter(Boolean)
   if (typeof value === 'string') return value.split(/[,，、;；\n]/).map(v => v.trim()).filter(Boolean)
@@ -183,7 +189,7 @@ function storedKeysForCard(card = {}) {
 }
 
 function mergeCardData(existing = {}, incoming = {}) {
-  const merged = normalizeCard({
+  const mergedInput = {
     ...existing,
     ...incoming,
     aliases: [...new Set([...normalizeList(existing.aliases), ...normalizeList(incoming.aliases)])],
@@ -193,7 +199,11 @@ function mergeCardData(existing = {}, incoming = {}) {
     avatar: incoming.avatar || incoming.image || incoming.photo || existing.avatar || existing.image || existing.photo || '',
     source: incoming.source && incoming.source !== 'fallback' ? incoming.source : (existing.source || incoming.source || 'saved'),
     updatedAt: new Date().toISOString(),
-  })
+  }
+  if (isTrivialPersonSummary(incoming.summary, mergedInput.name)) {
+    mergedInput.summary = existing.summary || ''
+  }
+  const merged = normalizeCard(mergedInput)
   return merged
 }
 
@@ -228,6 +238,7 @@ function baseCardFromName(name = '') {
 function normalizeCard(card = {}) {
   const name = String(card.name || card.person || card.title || '').trim()
   const base = baseCardFromName(name)
+  const rawSummary = String(card.summary || base.summary || '').trim()
   return {
     ...base,
     ...card,
@@ -236,7 +247,7 @@ function normalizeCard(card = {}) {
     aliases: normalizeList(card.aliases ?? base.aliases),
     knownFor: normalizeList(card.knownFor ?? card.works ?? base.knownFor),
     tags: normalizeList(card.tags ?? base.tags),
-    summary: String(card.summary || base.summary || '').trim(),
+    summary: isTrivialPersonSummary(rawSummary, name) ? base.summary : rawSummary,
     title: String(card.title || card.identity || card.role || base.title || '人物卡片').trim(),
     image: String(card.image || card.photo || card.avatar || base.image || base.avatar || '').trim(),
     avatar: String(card.avatar || card.image || card.photo || base.avatar || base.image || '').trim(),

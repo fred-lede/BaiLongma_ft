@@ -1,7 +1,6 @@
 import { createHotspotPanel } from './hotspot-panel.js';
 import { createWorldcupPanel } from './worldcup-panel.js';
 import { createTyphoonPanel } from './typhoon-panel.js';
-import { createPersonCardPanel } from './person-card-panel.js';
 import { createDocPanel } from './doc-panel.js';
 
 const createAppTitlebar = () => `
@@ -172,19 +171,21 @@ const createSecondaryPanel = () => `
     </section>
 
     <section class="l2-module cognition-module" aria-labelledby="cognition-title">
-      <div class="l2-module-head compact cognition-head">
-        <div>
-          <div class="l2-module-kicker">LIVE COGNITION</div>
-          <h2 class="l2-module-title" id="cognition-title">思考与工具</h2>
+      <div class="cognition-surface" id="cognition-surface">
+        <div class="l2-module-head compact cognition-head">
+          <div>
+            <div class="l2-module-kicker">LIVE COGNITION</div>
+            <h2 class="l2-module-title" id="cognition-title">思考与工具</h2>
+          </div>
+          <div class="cognition-state-group">
+            <span class="l3-state" id="l3-state" data-state="idle">L3 待命</span>
+            <span class="cognition-state" id="cognition-state" data-state="idle">空闲</span>
+          </div>
         </div>
-        <div class="cognition-state-group">
-          <span class="l3-state" id="l3-state" data-state="idle">L3 待命</span>
-          <span class="cognition-state" id="cognition-state" data-state="idle">空闲</span>
-        </div>
-      </div>
-      <div class="stream cognition-stream">
-        <div class="stream-inner" id="si-l2">
-          <div class="cognition-empty" id="cognition-empty">心跳触发后，这里会实时显示思考与工具调用</div>
+        <div class="stream cognition-stream">
+          <div class="stream-inner" id="si-l2">
+            <div class="cognition-empty" id="cognition-empty">心跳触发后，这里会实时显示思考与工具调用</div>
+          </div>
         </div>
       </div>
     </section>
@@ -1116,7 +1117,6 @@ export function createBrainUiMarkup() {
     createHotspotPanel(),
     createWorldcupPanel(),
     createTyphoonPanel(),
-    createPersonCardPanel(),
     createDocPanel(),
   ].join("\n\n");
 

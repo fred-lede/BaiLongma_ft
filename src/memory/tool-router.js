@@ -84,7 +84,9 @@ const STARTUP_SELF_CHECK_TOOLS = [
   'browser_close',
   'hotspot_mode',
 ]
-const PERSON_CARD_TOOLS = ['person_card_mode']
+// 人物卡片不再从消息文本做关键词或正则分类。只在能展示本机 UI 的真实用户轮
+// 暴露 schema，由主模型理解完整语义后决定是否调用。
+const INTENT_ROUTED_VISUAL_TOOLS = ['person_card_mode']
 const FOCUS_BANNER_TOOLS = ['focus_banner']
 const TERMINAL_STREAM_TOOLS = ['terminal_stream']
 const CAPABILITY_DEMO_TOOLS = ['capability_demo']
@@ -150,12 +152,6 @@ const PREFETCH_TRIGGERS = [
 const TICKER_TRIGGERS = [
   '心跳', '节奏', '间隔', '频率', '多久叫一次', '别老叫', 'tick', 'cadence',
   'heartbeat', 'interval',
-]
-
-const PERSON_CARD_TRIGGERS = [
-  '谁是', '是谁', '是誰', '是个什么人', '是個什麼人', '是什么人', '是什麼人',
-  '是干嘛的', '是幹嘛的', '人物卡片', '人物卡', 'person card',
-  'who is', 'tell me about', 'biography of', 'profile of',
 ]
 
 const FOCUS_BANNER_TRIGGERS = [
@@ -241,7 +237,6 @@ export const TOOL_GROUPS = [
   { triggers: REMINDER_TRIGGERS,     tools: REMINDER_TOOLS },
   { triggers: PREFETCH_TRIGGERS,     tools: PREFETCH_TOOLS },
   { triggers: TICKER_TRIGGERS,       tools: TICKER_TOOLS },
-  { triggers: PERSON_CARD_TRIGGERS,  tools: PERSON_CARD_TOOLS },
   { triggers: FOCUS_BANNER_TRIGGERS, tools: FOCUS_BANNER_TOOLS },
   { triggers: TERMINAL_STREAM_TRIGGERS, tools: TERMINAL_STREAM_TOOLS },
   { triggers: CAPABILITY_DEMO_TRIGGERS, tools: CAPABILITY_DEMO_TOOLS },
@@ -273,60 +268,6 @@ function recentApiCapabilitySetupNeed(recentActionLog = []) {
     const text = `${entry?.status || ''} ${entry?.error || ''} ${entry?.result_preview || ''} ${entry?.args_json || ''}`
     return /not_configured|slot_not_found|credential_not_configured|api_key required|configure|capability/i.test(text)
   })
-}
-
-const PERSON_CARD_NON_PERSON_SUBJECT_RE = /(?:项目|功能|系统|工具|代码|文件|文档|文章|报告|方案|计划|任务|流程|架构|设计|页面|网站|应用|app|接口|api|正则|问题|bug|卡片|面板|按钮|图片|视频|音乐|游戏|天气|热点|热搜)/i
-const PERSON_CARD_GENERIC_SUBJECT_RE = /^(?:这个人|那个人|这人|那人|这位|那位|某个人|某位|有人|谁|哪位|什么人|人物|人物卡|人物卡片)$/i
-
-function cleanPersonCardCandidate(value = '') {
-  return String(value || '')
-    .trim()
-    .replace(/^["'“”‘’「」『』《》]+|["'“”‘’「」『』《》]+$/g, '')
-    .replace(/[，,。.!！：:；;、]+$/g, '')
-    .replace(/\s*(?:是谁|是誰|是什么人|是什麼人|是个什么人|是個什麼人|是干嘛的|是幹嘛的)$/g, '')
-    .replace(/(?:的)?(?:生平|资料|資料|背景|简介|簡介|履历|履歷|故事|百科|个人资料|個人資料)$/g, '')
-    .trim()
-}
-
-function looksLikePersonCardName(value = '') {
-  const name = cleanPersonCardCandidate(value)
-  if (!name || name.length > 32) return false
-  if (PERSON_CARD_NON_PERSON_SUBJECT_RE.test(name)) return false
-  if (PERSON_CARD_GENERIC_SUBJECT_RE.test(name)) return false
-  if (/[?？]/.test(name)) return false
-  if (/(?:帮我|给我|请|麻烦|写|做|生成|打开|关闭|修|改|看下|看看|一下)/.test(name)) return false
-
-  const compact = name.replace(/\s+/g, '')
-  if (/^[\u4e00-\u9fa5·]{2,8}$/.test(compact)) return true
-
-  const latinName = name.replace(/[·]/g, ' ').replace(/\s+/g, ' ').trim()
-  const latinTokens = latinName.split(' ').filter(Boolean)
-  if (latinTokens.length >= 2 && latinTokens.length <= 4) {
-    return latinTokens.every(token => /^[A-Za-z][A-Za-z.'-]{1,24}$/.test(token))
-  }
-  return false
-}
-
-function hitsPersonCardIntent(messageBody = '') {
-  const raw = String(messageBody || '').trim()
-  if (!raw || /热点|热搜/.test(raw)) return false
-
-  if (/(?:打开|显示|弹出|关闭|隐藏|收起).{0,8}(?:人物卡片|人物卡|person card)|(?:人物卡片|人物卡|person card).{0,8}(?:打开|显示|弹出|关闭|隐藏|收起)/i.test(raw)) {
-    return true
-  }
-
-  const patterns = [
-    /^谁是\s*(.+?)[？?]?$/,
-    /^(.+?)\s*(?:是谁|是誰|是什么人|是什麼人|是个什么人|是個什麼人|是干嘛的|是幹嘛的|为什么火|為什麼火|为什么红|為什麼紅)[？?]?$/,
-    /^(?:介绍一下|介绍下|查一下|了解一下|认识一下)\s*(.+?)[？?]?$/,
-    /^(?:who is|tell me about|biography of|profile of)\s+(.+?)[?.!]?$/i,
-  ]
-
-  for (const pattern of patterns) {
-    const match = raw.match(pattern)
-    if (looksLikePersonCardName(match?.[1])) return true
-  }
-  return false
 }
 
 export function selectTools(ctx = {}) {
@@ -431,8 +372,10 @@ export function selectTools(ctx = {}) {
   for (const t of capabilityToolsFor(capCtx)) out.add(t)
   if (INLINE_IMAGE_RE.test(messageBody)) out.add('analyze_image')
 
-  if (hitsPersonCardIntent(messageBody)) {
-    for (const t of PERSON_CARD_TOOLS) out.add(t)
+  // 这是“给模型判断意图”的能力曝光，不是文本触发：无论用户怎样措辞，本地
+  // 用户轮都提供同一 schema；只有模型实际调用后，UI 才会收到开关事件。
+  if (!isTick && localVisualTurn !== false) {
+    for (const t of INTENT_ROUTED_VISUAL_TOOLS) out.add(t)
   }
   if (hits(body, FOCUS_BANNER_TRIGGERS) || hasTask) {
     for (const t of FOCUS_BANNER_TOOLS) out.add(t)
@@ -475,6 +418,7 @@ export function selectTools(ctx = {}) {
     for (const entry of recentActionLog) {
       const name = entry?.tool
       if (name === 'browser_clear_data' && !isExplicitAgentBrowserDataDeletionRequest(messageBody)) continue
+      if (name === 'person_card_mode') continue
       // Stateful Playwright continuity must restore the complete safe group
       // below, never a single stranded action schema on an unrelated turn.
       if (typeof name === 'string' && (BROWSER_TOOLS.includes(name) || BROWSER_DISPLAY_TOOLS.includes(name))) continue

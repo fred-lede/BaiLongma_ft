@@ -8,7 +8,7 @@ import { initVoicePanel } from "./voice-panel.js";
 import { initHotspot, toggleHotspot, setHotspotMode, moveVoicePanelToBody, restoreVoicePanel } from "./hotspot.js";
 import { initWorldcup, toggleWorldcup, setWorldcupMode } from "./worldcup.js";
 import { initTyphoon, toggleTyphoon, setTyphoonMode } from "./typhoon.js";
-import { enrichVisiblePersonCardFromText, initPersonCard, setPersonCardMode, showPersonCardByName } from "./person-card.js";
+import { cancelPersonCardAssistantEnrichment, enrichVisiblePersonCardFromText, initPersonCard, setPersonCardMode } from "./person-card.js";
 import { initDocPanel, setDocPanelMode } from "./doc.js";
 import { initWechatPopup, showWechatPopup } from "./wechat-popup.js";
 import { initFeishuPopup, showFeishuPopup } from "./feishu-popup.js";
@@ -2394,6 +2394,9 @@ function handle({ type, data = {}, ts = null }) {
       applyHeartbeatConfig(data);
       break;
     case "message_received": {
+      // 新用户轮开始后，上一轮人物卡的简介更新窗口立即失效。只有本轮再次
+      // 调用 person_card_mode，随后的有效人物说明才允许更新当前卡片。
+      cancelPersonCardAssistantEnrichment();
       // L1 也是一次真实意识唤醒：只驱动波形，不累加 L2 心跳计数。
       triggerHeartbeatPulse(HEARTBEAT_MAJOR_STRENGTH, "major");
       if (activeHeartbeatRound) {
@@ -3653,56 +3656,6 @@ d3.timer(() => {
   refreshNodeVisuals();
 });
 
-const PERSON_CARD_NON_PERSON_SUBJECT_RE = /(?:项目|功能|系统|工具|代码|文件|文档|文章|报告|方案|计划|任务|流程|架构|设计|页面|网站|应用|app|接口|api|正则|问题|bug|卡片|面板|按钮|图片|视频|音乐|游戏|天气|热点|热搜)/i;
-const PERSON_CARD_GENERIC_SUBJECT_RE = /^(?:这个人|那个人|这人|那人|这位|那位|某个人|某位|有人|谁|哪位|什么人|人物|人物卡|人物卡片)$/;
-
-function cleanPersonCardCandidate(value = "") {
-  return String(value || "")
-    .trim()
-    .replace(/^["'“”‘’「」『』《》]+|["'“”‘’「」『』《》]+$/g, "")
-    .replace(/[，,。.!！：:；;、]+$/g, "")
-    .replace(/\s*(?:是谁|是誰|是什么人|是什麼人|是个什么人|是個什麼人|是干嘛的|是幹嘛的)$/g, "")
-    .replace(/(?:的)?(?:生平|资料|資料|背景|简介|簡介|履历|履歷|故事|百科|个人资料|個人資料)$/g, "")
-    .trim();
-}
-
-function looksLikePersonCardName(value = "") {
-  const name = cleanPersonCardCandidate(value);
-  if (!name || name.length > 32) return false;
-  if (PERSON_CARD_NON_PERSON_SUBJECT_RE.test(name)) return false;
-  if (PERSON_CARD_GENERIC_SUBJECT_RE.test(name)) return false;
-  if (/[?？]/.test(name)) return false;
-  if (/(?:帮我|给我|请|麻烦|写|做|生成|打开|关闭|修|改|看下|看看|一下)/.test(name)) return false;
-
-  const compact = name.replace(/\s+/g, "");
-  if (/^[\u4e00-\u9fa5·]{2,8}$/.test(compact)) return true;
-
-  const latinName = name.replace(/[·]/g, " ").replace(/\s+/g, " ").trim();
-  const latinTokens = latinName.split(" ").filter(Boolean);
-  if (latinTokens.length >= 2 && latinTokens.length <= 4) {
-    return latinTokens.every(token => /^[A-Za-z][A-Za-z.'-]{1,24}$/.test(token));
-  }
-  return false;
-}
-
-function extractPersonCardQuery(text = "") {
-  const value = String(text || "").trim();
-  if (!value || /热点|热搜/.test(value)) return "";
-
-  const patterns = [
-    /^谁是\s*(.+?)[？?]?$/,
-    /^(.+?)\s*(?:是谁|是誰|是什么人|是什麼人|是干嘛的|简介|介绍|资料|履历)[？?]?$/,
-    /^(?:介绍一下|介绍下|查一下|了解一下|认识一下)\s*(.+?)[？?]?$/,
-  ];
-
-  for (const pattern of patterns) {
-    const match = value.match(pattern);
-    const name = cleanPersonCardCandidate(match?.[1]);
-    if (looksLikePersonCardName(name)) return name;
-  }
-  return "";
-}
-
 setAgentName(DEFAULT_AGENT_NAME);
 initUiZoom();
 readPhysicsSettings();
@@ -3728,10 +3681,6 @@ chat = initChat({
       toggleTyphoon();
       return;
     }
-    if (document.body.classList.contains('person-card-mode') && /关闭|退出|关掉|隐藏/.test(text)) {
-      setPersonCardMode(false, { source: 'chat_input' });
-      return;
-    }
     if (/热点|热搜/.test(text) && !document.body.classList.contains('hotspot-mode')) {
       toggleHotspot();
     }
@@ -3740,10 +3689,6 @@ chat = initChat({
     }
     if (/台风|热带气旋/.test(text) && !document.body.classList.contains('typhoon-mode')) {
       toggleTyphoon();
-    }
-    const personQuery = extractPersonCardQuery(text);
-    if (personQuery) {
-      showPersonCardByName(personQuery, { source: 'chat_input' });
     }
   },
 });

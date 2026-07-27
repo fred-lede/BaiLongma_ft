@@ -17,6 +17,20 @@ const BROWSER_INFORMATION_ACTION_RE = /(?:搜索|查询|查找|浏览(?!器)|阅
 const BROWSER_OPEN_TARGET_RE = /(?:打开|访问|进入|前往|加载)\s*(?:一下\s*)?(?!这个(?:网页|页面)|当前(?:网页|页面)|刚才(?:的)?(?:网页|页面)|$)[\p{L}\p{N}]/iu
 const BROWSER_OPEN_TARGET_EN_RE = /(?:open|visit|go\s+to|navigate\s+to|load)\s+(?!(?:this|the current|the previous)\s+(?:page|webpage)\b)[a-z0-9]/i
 const BROWSER_CLOSE_RE = /(?:(?:关闭|关掉|退出).{0,12}(?:你的浏览器|白龙马浏览器|agent\s*浏览器|小窗口浏览器|大窗口浏览器|小浏览器|大浏览器|当前网页|当前页面|浏览器|网页|页面)|(?:close|quit|exit)\s+(?:your|the\s+bailongma|the\s+agent|the\s+current)?\s*(?:browser|webpage|page)\b)/i
+const BROWSER_CLOSE_FILLER_RE = /(?:不用|无需|不要|别)(?:再)?(?:说话|解释|说明)|只(?:要|需)?(?:回复|回)?(?:一个)?(?:ok)?(?:的)?(?:👌)?(?:表情|图标)?|那(?:现在)?(?:怎么办)?|请|麻烦(?:你)?|帮我|帮忙|给我|现在|就|直接|真的|真正|先|再|把|将|好的?|行|可以|一下|吧|啊|呀|哦|呢|啦|谢谢(?:你)?|麻烦了|就行(?:了)?|即可|\b(?:please|now|just|simply|thanks|thank\s+you|do\s+it)\b/giu
+const BROWSER_CLOSE_PUNCTUATION_RE = /[\s，。！？、；：,.!?;:'"“”‘’（）()\[\]{}<>《》…—-]/gu
+
+function hasAdditionalBrowserCloseTask(text = '') {
+  // Treat the close as standalone only when everything outside the matched
+  // close clause is known conversational filler. Unknown words are substantive
+  // by default, so combined tasks cannot lose their real answer merely because
+  // a new verb was absent from an enumerated intent regex.
+  const remainder = String(text || '')
+    .replace(BROWSER_CLOSE_RE, ' ')
+    .replace(BROWSER_CLOSE_FILLER_RE, ' ')
+    .replace(BROWSER_CLOSE_PUNCTUATION_RE, '')
+  return remainder.length > 0
+}
 
 function isExplicitBrowserNavigationRequest(text = '') {
   const value = String(text || '').trim()
@@ -53,6 +67,9 @@ const CONTRACTS = [
     label: '真正关闭白龙马浏览器页面',
     tools: ['browser_close'],
     match: text => !explicitlyKeepsBrowserOpen(text) && BROWSER_CLOSE_RE.test(text),
+    resolve: text => ({
+      fixedReply: hasAdditionalBrowserCloseTask(text) ? '' : '👌',
+    }),
   },
   {
     id: 'browser_display_mode',
@@ -114,8 +131,8 @@ const CONTRACTS = [
   {
     id: 'ui_action',
     label: '更新界面状态',
-    tools: ['focus_banner', 'hotspot_mode', 'worldcup_mode', 'typhoon_mode', 'person_card_mode', 'ui_set'],
-    pattern: /(?:打开|关闭|显示|隐藏).{0,30}(?:专注|热点|热搜|世界杯|台风|人物卡|面板|卡片)|(?:进入|退出).{0,12}(?:专注|心流|focus)/i,
+    tools: ['focus_banner', 'hotspot_mode', 'worldcup_mode', 'typhoon_mode', 'ui_set'],
+    pattern: /(?:打开|关闭|显示|隐藏).{0,30}(?:专注|热点|热搜|世界杯|台风|面板)|(?:进入|退出).{0,12}(?:专注|心流|focus)/i,
   },
 ]
 
@@ -173,6 +190,7 @@ export function actionContractCompletionIssue(contract, text = '') {
 }
 
 export function verifiedActionContractReply(contract, evidence = {}) {
+  if (contract?.id === 'browser_close') return String(contract?.fixedReply || '')
   if (contract?.id !== 'system_browser_open') return ''
   let url = String(evidence?.args?.url || '').trim()
   try {

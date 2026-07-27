@@ -367,7 +367,9 @@ for (const messageBody of [
     `13) admin keyword → admin group injected (got: ${tools.join(',')})`)
 }
 
-// ====== 14) Person card 触发 ======
+// ====== 14) Person card 由模型语义意图触发 ======
+// 路由器不再读消息文本猜人物意图。本地用户轮始终给模型同一 schema，
+// 是否真正打开卡片只取决于模型是否调用 person_card_mode。
 {
   const tools = selectTools({
     messageBody: '介绍一下周杰伦是个什么人',
@@ -375,16 +377,7 @@ for (const messageBody of [
     senderId: 'ID:000001',
   })
   assert(has(tools, 'person_card_mode'),
-    `14) person card keyword → person_card_mode injected (got: ${tools.join(',')})`)
-}
-{
-  const tools = selectTools({
-    messageBody: '马云是谁',
-    isTick: false,
-    senderId: 'ID:000001',
-  })
-  assert(has(tools, 'person_card_mode'),
-    `14b) direct person question → person_card_mode injected (got: ${tools.join(',')})`)
+    `14) local user turn exposes person_card_mode for semantic intent (got: ${tools.join(',')})`)
 }
 {
   const tools = selectTools({
@@ -392,17 +385,28 @@ for (const messageBody of [
     isTick: false,
     senderId: 'ID:000001',
   })
-  assert(!has(tools, 'person_card_mode'),
-    `14c) non-person introduction → person_card_mode NOT injected (got: ${tools.join(',')})`)
+  assert(has(tools, 'person_card_mode'),
+    `14b) schema availability is independent of person keywords (got: ${tools.join(',')})`)
 }
 {
   const tools = selectTools({
-    messageBody: '人物卡片有点问题，经常错误触发',
+    messageBody: '马云是谁',
     isTick: false,
     senderId: 'ID:000001',
+    localVisualTurn: false,
   })
   assert(!has(tools, 'person_card_mode'),
-    `14d) talking about the feature itself → person_card_mode NOT injected (got: ${tools.join(',')})`)
+    `14c) external turn cannot open a local person card (got: ${tools.join(',')})`)
+}
+{
+  const tools = selectTools({
+    messageBody: '马云是谁',
+    isTick: true,
+    senderId: 'ID:000001',
+    recentActionLog: [{ tool: 'person_card_mode' }],
+  })
+  assert(!has(tools, 'person_card_mode'),
+    `14d) Tick and ActionLog continuity cannot reactivate person_card_mode (got: ${tools.join(',')})`)
 }
 
 // ====== 14e) Terminal stream / progress window ======

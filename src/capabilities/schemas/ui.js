@@ -175,7 +175,7 @@ export const uiSchemas = {
     type: 'function',
     function: {
       name: 'person_card_mode',
-      description: 'Control the person-card panel. Use only when the user says they do not know someone, asks who someone is or why they are popular, or when the current conversation truly needs a public-figure explanation. Do not proactively open it for ordinary Q&A. Basic profile data can update the card.',
+      description: 'Intent-gated control for the person-card panel. Call only when the user intent is to identify or understand a named real public figure (for example: who they are, why they are known, their biography), or when the user explicitly asks to show, update, or close the person card. Do not call merely because a person is mentioned. Do not call for feature discussions, code or bug reports about the person-card system, projects, products, fictional/unknown targets, writing requests, or ordinary Q&A. If the intent is uncertain, answer normally without opening the card. Basic verified profile data may update an already intended card.',
       parameters: {
         type: 'object',
         properties: {

@@ -1176,6 +1176,14 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
       // default browser; it cannot identify the application, and the two
       // Bailongma display modes still share one live page/profile.
       if (mustReply && actionContract && actionContractSatisfied && allContent.trim()) {
+        // Closing a visible browser is self-evident. Keep this acknowledgement
+        // deterministic instead of letting the provider narrate the page,
+        // profile persistence, cookies, or other implementation details.
+        const fixedReply = verifiedActionContractReply(actionContract, actionContractEvidence)
+        if (actionContract.id === 'browser_close' && fixedReply) {
+          allContent = fixedReply
+          break
+        }
         const completionIssue = actionContractCompletionIssue(actionContract, allContent)
         if (completionIssue) {
           if (!actionCompletionNudgeUsed) {
@@ -1349,6 +1357,15 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
             normalizedArgs.content = mediaPlayedKind === 'video' ? '🎬' : '🎵'
             mediaEmojiSent = true
           }
+        }
+
+        // An explicit browser close needs only a quiet visual acknowledgement.
+        // Normalize even an over-explanatory provider draft before it reaches
+        // local, voice, or external channels.
+        if (!silentSignalSuppressed && tc.name === 'send_message'
+            && actionContract?.id === 'browser_close' && actionContractSatisfied) {
+          const fixedReply = verifiedActionContractReply(actionContract, actionContractEvidence)
+          if (fixedReply) normalizedArgs.content = fixedReply
         }
 
         // On external channels send_message is itself a side effect, and used
@@ -1692,6 +1709,16 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
         }
       }
     }
+    // A standalone close command has a runtime-owned acknowledgement. Once the
+    // close succeeds, skip another provider round entirely: this avoids both
+    // latency and any streamed narration before the final emoji is delivered.
+    const fixedActionReply = actionContractSatisfied
+      ? verifiedActionContractReply(actionContract, actionContractEvidence)
+      : ''
+    if (mustReply && actionContract?.id === 'browser_close' && fixedActionReply && !delivered) {
+      allContent = fixedActionReply
+      break
+    }
     if (terminalInternalRound) break
   }
 
@@ -1719,6 +1746,12 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
     // 退回 salvageableReply —— 这正是中断/卡死时把"已生成但没发出"的答案救回来的关键。
     let fallbackContent = stripProtocolMarkersForDelivery(allContent.trim() ? allContent : salvageableReply)
     const fallbackTarget = toolContext?.currentTargetId
+    // Preserve the close acknowledgement even if the provider is interrupted
+    // after the browser tool succeeds and delivery falls back to the runtime.
+    if (actionContract?.id === 'browser_close' && actionContractSatisfied) {
+      const fixedReply = verifiedActionContractReply(actionContract, actionContractEvidence)
+      if (fixedReply) fallbackContent = fixedReply
+    }
     // 播放收尾一致性：视频流程里模型常不调 send_message 而是留 body 走兜底（音乐则习惯调
     // send_message 被 isMediaCloser 替换）。这里对兜底 body 做同样处理——本 turn 播放过媒体、
     // 且 body 正是一句播放确认时换成单个表情，确保"播放中"之类文字不会原样发出/被语音念。

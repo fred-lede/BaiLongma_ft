@@ -1297,8 +1297,11 @@ async function runTurn(input, label, msg = null) {
     // happened.  Keep a narrow action contract for clear imperative requests;
     // callLLM uses it to require a successful matching tool result before it
     // accepts a completion-style reply.
+    // semanticInput is the full queue envelope for ordinary user turns
+    // (`[ID] timestamp [channel] body`).  Classify the raw body so envelope
+    // metadata is never mistaken for a second task (notably after browser_close).
     const actionContract = isUserTurn && !silentSignal
-      ? classifyActionContract(semanticInput || '')
+      ? classifyActionContract(toolContext.currentUserMessage || semanticInput || '')
       : null
     if (actionContract) {
       toolContext.actionContract = actionContract

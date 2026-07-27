@@ -1,16 +1,64 @@
 ﻿import { apiUrl } from './api-client.js';
+import { createPersonCardPanel } from './person-card-panel.js';
 
 let personCardActive = false;
 let currentCard = null;
 let imageLookupToken = 0;
 let revealTimer = null;
 let animationTimer = null;
+let transitionFrame = null;
+let personCardAwaitingAssistantSummary = false;
 
 const PERSON_CARD_REVEAL_DELAY_MS = 1000;
-const PERSON_CARD_LEAVE_MS = 220;
-const PERSON_CARD_ENTER_MS = 280;
+const PERSON_CARD_SURFACE_TRANSITION_MS = 480;
 
 const $ = (id) => document.getElementById(id);
+
+function personCardTransitionDuration() {
+  return window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches
+    ? 1
+    : PERSON_CARD_SURFACE_TRANSITION_MS;
+}
+
+function clearPersonCardTimers() {
+  if (revealTimer) { clearTimeout(revealTimer); revealTimer = null; }
+  if (animationTimer) { clearTimeout(animationTimer); animationTimer = null; }
+  if (transitionFrame) { cancelAnimationFrame(transitionFrame); transitionFrame = null; }
+}
+
+function getCognitionModule() {
+  return document.querySelector('.cognition-module');
+}
+
+function mountPersonCardPanel() {
+  const existing = $('person-card-panel');
+  if (existing) return existing;
+  const module = getCognitionModule();
+  if (!module) return null;
+
+  const template = document.createElement('template');
+  template.innerHTML = createPersonCardPanel().trim();
+  const panel = template.content.firstElementChild;
+  if (!panel) return null;
+  panel.setAttribute('aria-hidden', 'false');
+  module.appendChild(panel);
+  panel.querySelector('#pc-exit-btn')?.addEventListener('click', () => {
+    setPersonCardMode(false, { source: 'brain-ui' });
+  });
+  return panel;
+}
+
+function destroyPersonCardPanel() {
+  $('person-card-panel')?.remove();
+  const module = getCognitionModule();
+  if (module) {
+    delete module.dataset.personActive;
+    delete module.dataset.personPhase;
+  }
+  $('cognition-surface')?.setAttribute('aria-hidden', 'false');
+  document.body.classList.remove('person-card-mode');
+  imageLookupToken += 1;
+}
 
 function normalizeList(value) {
   if (Array.isArray(value)) return value.map(v => String(v || '').trim()).filter(Boolean);
@@ -28,6 +76,24 @@ function cleanLine(value = '') {
     .replace(/\*\*/g, '')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function comparablePersonText(value = '') {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^\p{Script=Han}a-z0-9]+/gu, '');
+}
+
+function isUsefulAssistantPersonSummary(summary = '', card = {}) {
+  const summaryKey = comparablePersonText(summary);
+  const names = uniqueList([card.name, ...normalizeList(card.aliases)])
+    .map(comparablePersonText)
+    .filter(Boolean);
+  if (!summaryKey || !names.length) return false;
+  const matchedName = names.find(name => summaryKey.includes(name));
+  if (!matchedName) return false;
+  // “乔布斯。”这类复述不是简介，不能覆盖已经存在的人物资料。
+  return summaryKey.length >= matchedName.length + 6;
 }
 
 function extractKnownForFromText(text = '') {
@@ -66,11 +132,14 @@ function formatUpdatedAt(value) {
   return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-function initials(name = '') {
-  const compact = String(name || '').trim();
-  if (!compact) return '人';
-  const chars = [...compact.replace(/\s+/g, '')];
-  return chars.slice(0, Math.min(2, chars.length)).join('');
+function avatarLabel(name = '') {
+  const value = String(name || '').trim();
+  if (!value) return '人';
+  const latinWords = value.split(/\s+/).filter(Boolean);
+  if (latinWords.length > 1 && latinWords.every(word => /^[A-Za-z]/.test(word))) {
+    return latinWords.slice(0, 2).map(word => word[0].toUpperCase()).join('');
+  }
+  return [...value.replace(/\s+/g, '')][0] || '人';
 }
 
 function setText(id, text) {
@@ -83,7 +152,7 @@ function setHeroImage(src = '', name = '') {
   const heroImg = $('pc-hero-img');
   const fallback = $('pc-hero-fallback');
   const imageUrl = String(src || '').trim();
-  if (fallback) fallback.textContent = initials(name);
+  if (fallback) fallback.textContent = avatarLabel(name);
   if (heroImg) {
     heroImg.src = imageUrl;
     heroImg.alt = imageUrl ? name : '';
@@ -95,16 +164,33 @@ function setHeroImage(src = '', name = '') {
 async function findPersonImage(name = '') {
   const query = String(name || '').trim();
   if (!query || query === '人物卡片' || query === '未知人物') return '';
-  const endpoints = [
+  const summaryEndpoints = [
     `https://zh.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(query)}`,
     `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(query)}`,
   ];
-  for (const url of endpoints) {
+  for (const url of summaryEndpoints) {
     try {
       const res = await fetch(url, { headers: { Accept: 'application/json' } });
       if (!res.ok) continue;
       const data = await res.json();
       const image = data?.thumbnail?.source || data?.originalimage?.source || '';
+      if (image) return image;
+    } catch {}
+  }
+
+  // 别名（如“乔布斯”）不一定是百科页面的精确标题；搜索 API 作为回退，
+  // 避免大多数知名人物长期停留在文字占位图。
+  const searchEndpoints = [
+    `https://zh.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(query)}&gsrlimit=1&prop=pageimages&piprop=thumbnail&pithumbsize=640&format=json&origin=*`,
+    `https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(query)}&gsrlimit=1&prop=pageimages&piprop=thumbnail&pithumbsize=640&format=json&origin=*`,
+  ];
+  for (const url of searchEndpoints) {
+    try {
+      const res = await fetch(url, { headers: { Accept: 'application/json' } });
+      if (!res.ok) continue;
+      const data = await res.json();
+      const pages = Object.values(data?.query?.pages || {});
+      const image = pages[0]?.thumbnail?.source || '';
       if (image) return image;
     } catch {}
   }
@@ -120,6 +206,7 @@ function scheduleHeroImageLookup(card = {}) {
   findPersonImage(name).then((image) => {
     if (token !== imageLookupToken || !image) return;
     if (currentCard?.name !== name) return;
+    if (!personCardActive || !$('person-card-panel')) return;
     currentCard = { ...currentCard, image, avatar: currentCard?.avatar || image };
     setHeroImage(image, name);
     reportPersonCardState(personCardActive, 'image_lookup', currentCard);
@@ -128,6 +215,7 @@ function scheduleHeroImageLookup(card = {}) {
 
 function renderPersonCard(card = {}) {
   currentCard = card;
+  if (!$('person-card-panel')) return;
   const name = String(card.name || '未知人物').trim();
   setText('pc-name', name);
   setText('pc-title', card.title || '人物卡片');
@@ -174,73 +262,119 @@ function reportPersonCardState(visible, source = 'brain-ui', card = currentCard)
   }).catch(() => {});
 }
 
-export function setPersonCardMode(visible, { source = 'brain-ui', card = null } = {}) {
-  const nextVisible = !!visible;
-  const panel = $('person-card-panel');
-  if (revealTimer) { clearTimeout(revealTimer); revealTimer = null; }
-  if (animationTimer) { clearTimeout(animationTimer); animationTimer = null; }
-
-  if (!nextVisible) {
-    if (card) renderPersonCard(card);
+function revealPersonCardSurface(card, source) {
+  const module = getCognitionModule();
+  const cognitionSurface = $('cognition-surface');
+  const panel = mountPersonCardPanel();
+  if (!module || !panel) {
     personCardActive = false;
-    if (panel && panel.classList.contains('pc-visible')) {
-      panel.classList.remove('pc-entering');
-      panel.classList.add('pc-leaving');
-      animationTimer = setTimeout(() => {
-        animationTimer = null;
-        document.body.classList.remove('person-card-mode');
-        panel.classList.remove('pc-visible', 'pc-leaving');
-      }, PERSON_CARD_LEAVE_MS);
-    } else {
-      document.body.classList.remove('person-card-mode');
-      if (panel) panel.classList.remove('pc-visible', 'pc-entering', 'pc-leaving');
-    }
     reportPersonCardState(false, source, currentCard);
     return;
   }
 
-  // 切换不同人物：先退场，退场结束后立即入场新卡片（跳过初始延迟）
-  const isDifferentPerson = card?.name && currentCard?.name && card.name !== currentCard.name;
-  if (personCardActive && isDifferentPerson && panel?.classList.contains('pc-visible')) {
-    panel.classList.remove('pc-entering');
-    panel.classList.add('pc-leaving');
+  personCardActive = true;
+  renderPersonCard(card);
+  cognitionSurface?.setAttribute('aria-hidden', 'false');
+  panel.setAttribute('aria-hidden', 'false');
+  module.dataset.personActive = 'true';
+  delete module.dataset.personPhase;
+
+  // 与小窗口浏览器一致：先让右侧的初始位姿渲染一帧，再同步切换两层。
+  void module.offsetWidth;
+  transitionFrame = requestAnimationFrame(() => {
+    transitionFrame = null;
+    if (!personCardActive || !$('person-card-panel')) return;
+    module.dataset.personPhase = 'person';
+    const duration = personCardTransitionDuration();
     animationTimer = setTimeout(() => {
       animationTimer = null;
-      panel.classList.remove('pc-visible', 'pc-leaving');
-      renderPersonCard(card);
-      panel.classList.add('pc-visible', 'pc-entering');
-      personCardActive = true;
-      animationTimer = setTimeout(() => {
-        animationTimer = null;
-        panel.classList.remove('pc-entering');
-      }, PERSON_CARD_ENTER_MS);
-      reportPersonCardState(true, source, currentCard);
-    }, PERSON_CARD_LEAVE_MS);
+      if (!personCardActive || module.dataset.personPhase !== 'person') return;
+      cognitionSurface?.setAttribute('aria-hidden', 'true');
+    }, duration + 34);
+  });
+  reportPersonCardState(true, source, currentCard);
+}
+
+function concealPersonCardSurface({ source, report = true, onHidden = null } = {}) {
+  const module = getCognitionModule();
+  const cognitionSurface = $('cognition-surface');
+  const panel = $('person-card-panel');
+  personCardActive = false;
+  cognitionSurface?.setAttribute('aria-hidden', 'false');
+
+  if (!module || !panel || module.dataset.personPhase !== 'person') {
+    destroyPersonCardPanel();
+    if (report) reportPersonCardState(false, source, currentCard);
+    onHidden?.();
     return;
   }
 
-  // 正常打开（面板关闭状态，或同一人物更新数据）
-  if (card) renderPersonCard(card);
-  revealTimer = setTimeout(() => {
-    revealTimer = null;
-    personCardActive = true;
-    document.body.classList.add('person-card-mode');
-    if (panel) {
-      panel.classList.remove('pc-leaving');
-      panel.classList.add('pc-visible', 'pc-entering');
-      animationTimer = setTimeout(() => {
-        animationTimer = null;
-        panel.classList.remove('pc-entering');
-      }, PERSON_CARD_ENTER_MS);
+  const duration = personCardTransitionDuration();
+  transitionFrame = requestAnimationFrame(() => {
+    transitionFrame = null;
+    delete module.dataset.personPhase;
+    animationTimer = setTimeout(() => {
+      animationTimer = null;
+      destroyPersonCardPanel();
+      onHidden?.();
+    }, duration + 34);
+  });
+  if (report) reportPersonCardState(false, source, currentCard);
+}
+
+export function setPersonCardMode(visible, { source = 'brain-ui', card = null } = {}) {
+  const nextVisible = !!visible;
+  const panel = $('person-card-panel');
+  clearPersonCardTimers();
+
+  if (!nextVisible) {
+    personCardAwaitingAssistantSummary = false;
+    if (card) currentCard = card;
+    concealPersonCardSurface({ source });
+    return;
+  }
+
+  const nextCard = card || currentCard || {
+    name: '人物卡片',
+    title: '待命',
+    summary: '当你不认识某位公众人物时，Longma 会在这里弹出一张简短人物卡片。',
+    knownFor: [],
+    tags: ['standby'],
+    source: 'standby',
+  };
+  if (source === 'agent_event') personCardAwaitingAssistantSummary = true;
+  const isDifferentPerson = card?.name && currentCard?.name && card.name !== currentCard.name;
+  if (personCardActive && isDifferentPerson && panel) {
+    concealPersonCardSurface({
+      source,
+      report: false,
+      onHidden: () => revealPersonCardSurface(nextCard, source),
+    });
+    return;
+  }
+
+  if (personCardActive && panel) {
+    renderPersonCard(nextCard);
+    if (getCognitionModule()?.dataset.personPhase === 'person') {
+      $('cognition-surface')?.setAttribute('aria-hidden', 'true');
     }
     reportPersonCardState(true, source, currentCard);
+    return;
+  }
+
+  currentCard = nextCard;
+  destroyPersonCardPanel();
+  revealTimer = setTimeout(() => {
+    revealTimer = null;
+    revealPersonCardSurface(nextCard, source);
   }, PERSON_CARD_REVEAL_DELAY_MS);
 }
 
 export function enrichVisiblePersonCardFromText(text, { source = 'assistant_summary' } = {}) {
-  if (!personCardActive || !currentCard) return false;
+  if (!personCardActive || !currentCard || !personCardAwaitingAssistantSummary) return false;
   const summary = cleanLine(text).slice(0, 260);
-  if (!summary) return false;
+  if (!summary || !isUsefulAssistantPersonSummary(summary, currentCard)) return false;
+  personCardAwaitingAssistantSummary = false;
 
   const knownFor = uniqueList([
     ...normalizeList(currentCard.knownFor),
@@ -255,6 +389,10 @@ export function enrichVisiblePersonCardFromText(text, { source = 'assistant_summ
   });
   reportPersonCardState(true, source, currentCard);
   return true;
+}
+
+export function cancelPersonCardAssistantEnrichment() {
+  personCardAwaitingAssistantSummary = false;
 }
 
 export function togglePersonCard(source = 'brain-ui') {
@@ -288,15 +426,9 @@ export async function showPersonCardByName(name, { source = 'brain-ui' } = {}) {
 
 
 export function initPersonCard() {
-  renderPersonCard(currentCard || {
-    name: '人物卡片',
-    title: '待命',
-    summary: '当你不认识某位公众人物时，Longma 会在这里弹出一张简短人物卡片。',
-    knownFor: [],
-    tags: ['standby'],
-    source: 'standby',
-  });
-
-  const exitBtn = $('pc-exit-btn');
-  if (exitBtn) exitBtn.addEventListener('click', () => setPersonCardMode(false, { source: 'brain-ui' }));
+  clearPersonCardTimers();
+  personCardActive = false;
+  currentCard = null;
+  personCardAwaitingAssistantSummary = false;
+  destroyPersonCardPanel();
 }

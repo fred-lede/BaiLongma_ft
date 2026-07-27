@@ -2,6 +2,7 @@
 // 支持: OpenAI TTS / ElevenLabs / 火山引擎 / 豆包（方舟）
 // 统一返回 Node.js Readable stream，供 api.js pipe 到 HTTP 响应
 import '../network-proxy.js'
+import { aethermeshFetch } from '../aethermesh-fetch.js'
 import { Readable, Transform } from 'stream'
 
 export const TTS_PROVIDERS = [
@@ -10,6 +11,8 @@ export const TTS_PROVIDERS = [
   { id: 'openai',      label: 'OpenAI TTS',   streaming: true  },
   { id: 'elevenlabs',  label: 'ElevenLabs',   streaming: true  },
   { id: 'volcano',     label: '火山引擎',       streaming: false },
+  { id: 'custom-openai', label: '自定义 OpenAI 兼容', streaming: true },
+  { id: 'aethermesh',    label: 'AetherMesh 语音克隆', streaming: false },
 ]
 
 export const TTS_VOICES = {
@@ -58,6 +61,8 @@ export const TTS_VOICES = {
     { id: 'BV001_streaming',         label: '通用女声' },
     { id: 'BV002_streaming',         label: '通用男声' },
   ],
+  'custom-openai': [],
+  aethermesh: [],
 }
 
 // ── 各服务商凭证要求（合成前预检的单一权威）──────────────────────────────────
@@ -93,6 +98,22 @@ export const TTS_PROVIDER_REQUIREMENTS = {
       { keys: ['volcanoToken'], label: 'Token' },
     ],
     guide: '请在「语音设置 → 语音合成」里选择火山引擎，并同时填写 AppId 和 Token 两项。',
+  },
+  'custom-openai': {
+    label: '自定义 OpenAI 兼容',
+    groups: [
+      { keys: ['customTtsKey'], label: 'API Key' },
+      { keys: ['customTtsBaseURL'], label: 'Base URL' },
+      { keys: ['customTtsModel'], label: '模型名' },
+    ],
+    guide: '请在「语音设置 → 语音合成」里选择自定义 OpenAI 兼容，并填写 API Key、Base URL 和模型名。该服务商使用 POST /v1/audio/speech 接口，兼容 OpenAI TTS 格式。',
+  },
+  aethermesh: {
+    label: 'AetherMesh 语音克隆',
+    groups: [
+      { keys: ['aethermeshBaseURL'], label: 'Base URL' },
+    ],
+    guide: '请在「语音设置 → 语音合成」里选择 AetherMesh 语音克隆，并确认服务已启动。默认为 http://localhost:8001。可在人物卡片中克隆声音并分配给指定用户。',
   },
 }
 
@@ -355,8 +376,101 @@ async function streamVolcano({ text, voiceId = 'BV001_streaming', appId, token }
   return Readable.from([buf])
 }
 
+// ── 自定义 OpenAI 兼容 TTS ──────────────────────────────────────────────────
+// 适用于任何实现了 POST /v1/audio/speech 接口的服务（如自定义部署、Fish Speech、Groq 等）
+async function streamCustomOpenAI({ text, voiceId = 'nova', apiKey, baseURL, model = 'tts-1' }) {
+  if (!apiKey) throw new Error('自定义 TTS: 缺少 API Key，请在设置中填写')
+  if (!baseURL) throw new Error('自定义 TTS: 缺少 Base URL，请在设置中填写')
+  if (!model) throw new Error('自定义 TTS: 缺少模型名，请在设置中填写')
+  const resp = await fetch(`${baseURL.replace(/\/$/, '')}/v1/audio/speech`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      input: text,
+      voice: voiceId,
+      response_format: 'mp3',
+    }),
+  })
+  if (!resp.ok) {
+    const err = await resp.text()
+    throw new Error(`自定义 TTS 失败 (${resp.status}): ${err.slice(0, 300)}`)
+  }
+  return webStreamToNode(resp.body)
+}
+
+// ── AetherMesh TTS ──────────────────────────────────────────────────────────
+// 服务地址默认为 http://localhost:8001
+// POST /v1/audio/speech  合成语音（OpenAI 兼容格式）
+// POST /v1/voices        注册/克隆声音
+async function streamAetherMesh({ text, voiceId, baseURL = 'http://localhost:8001', apiKey = '', model = 'xtts-v2', language }) {
+  if (!voiceId) throw new Error('AetherMesh TTS: 缺少声音 ID，请先在人物卡片中克隆或指定声音')
+  if (!language) {
+    if (/[\u3040-\u309f\u30a0-\u30ff]/.test(text)) language = 'ja'
+    else if (/[\uac00-\ud7af]/.test(text)) language = 'ko'
+    else if (/[\u4e00-\u9fff]/.test(text)) language = 'zh-cn'
+    else language = 'en'
+  } else if (language === 'zh-tw') {
+    language = 'zh-cn'
+  }
+  const url = `${baseURL.replace(/\/$/, '')}/v1/audio/speech`
+  const headers = { 'Content-Type': 'application/json' }
+  if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`
+  const body = JSON.stringify({ model, input: text, voice: voiceId, language, response_format: 'mp3' })
+  const controller = new AbortController()
+  const ttsTimeout = Math.max(30000, text.length * 80) // ~80ms/char, min 30s
+  const timeoutId = setTimeout(() => controller.abort(), ttsTimeout)
+  let resp
+  try {
+    resp = await aethermeshFetch(url, { method: 'POST', headers, body, signal: controller.signal })
+    clearTimeout(timeoutId)
+  } catch (err) {
+    clearTimeout(timeoutId)
+    throw new Error(`AetherMesh TTS 连不上 (${baseURL}): ${err?.cause?.code || err.message}`)
+  }
+  if (!resp.ok) {
+    const err = await resp.text()
+    throw new Error(`AetherMesh TTS 失败 (${resp.status}): ${err.slice(0, 300)}`)
+  }
+  const contentType = resp.headers.get('content-type') || 'audio/mpeg'
+
+  // CUDA corrupted state detection: AetherMesh may return HTTP 200 with garbage audio
+  // (e.g. silence, extremely small file, or non-MP3 header). Read the first chunk
+  // to validate the MP3 signature (ID3 tag or 0xFF sync word) before streaming on.
+  const reader = resp.body.getReader()
+  const { value: firstChunk, done } = await reader.read()
+  if (done || !firstChunk || firstChunk.byteLength < 4) {
+    throw new Error('AetherMesh TTS: 返回空音频（可能 CUDA 损坏，请重启 AetherMesh 并重载 NVIDIA 驱动）')
+  }
+  const header = new Uint8Array(firstChunk.slice(0, 4))
+  const isMP3 = (header[0] === 0x49 && header[1] === 0x44 && header[2] === 0x33)  // "ID3"
+              || (header[0] === 0xFF && (header[1] & 0xE0) === 0xE0)                // MPEG sync
+  if (!isMP3) {
+    throw new Error('AetherMesh TTS: 返回无效音频格式（CUDA 可能损坏，请重启 AetherMesh 并重载 NVIDIA 驱动）')
+  }
+
+  // Reconstruct a readable stream from the already-read first chunk + the rest
+  const restStream = new ReadableStream({
+    async start(controller) {
+      controller.enqueue(firstChunk)
+      try {
+        for (;;) {
+          const { value, done: d } = await reader.read()
+          if (d) { controller.close(); break }
+          controller.enqueue(value)
+        }
+      } catch (err) { controller.error(err) }
+    },
+  })
+  return { stream: webStreamToNode(restStream), contentType }
+}
+
 // ── 通用入口 ────────────────────────────────────────────────────────────────
-export async function streamTTS({ text, provider, voiceId, keys = {} }) {
+// Returns { stream, contentType } — contentType defaults to 'audio/mpeg' for providers that only return a stream
+export async function streamTTS({ text, provider, voiceId, keys = {}, language }) {
   if (!text?.trim()) throw new Error('TTS: 文本为空')
   switch (provider) {
     case 'doubao':
@@ -375,6 +489,12 @@ export async function streamTTS({ text, provider, voiceId, keys = {} }) {
       return streamElevenLabs({ text, voiceId, apiKey: keys.elevenLabsKey })
     case 'volcano':
       return streamVolcano({ text, voiceId, appId: keys.volcanoAppId, token: keys.volcanoToken })
+    case 'custom-openai':
+      return streamCustomOpenAI({ text, voiceId, apiKey: keys.customTtsKey, baseURL: keys.customTtsBaseURL, model: keys.customTtsModel })
+    case 'aethermesh': {
+      const { stream } = await streamAetherMesh({ text, voiceId, baseURL: keys.aethermeshBaseURL, apiKey: keys.aethermeshKey, language: language || keys.aethermeshLanguage })
+      return stream
+    }
     default:
       throw new Error(`未知 TTS 服务商: ${provider}，请在设置中选择一个 TTS 服务商`)
   }

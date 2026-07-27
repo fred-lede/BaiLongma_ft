@@ -19,6 +19,31 @@ export const createPersonCardPanel = () => `
       <ul class="pc-known-list" id="pc-known-list"></ul>
     </div>
     <div class="pc-tags" id="pc-tags"></div>
+
+    <div class="pc-section">
+      <div class="pc-section-title">声音设定</div>
+      <div class="pc-voice-row">
+        <input class="settings-input" type="text" id="pc-voice-id" placeholder="输入声音 ID 或点击克隆" style="flex:1;">
+        <button class="settings-save-btn" id="pc-clone-voice-btn" type="button" style="padding:0 10px;font-size:11px;white-space:nowrap;">克隆</button>
+        <button class="settings-save-btn" id="pc-test-voice-btn" type="button" style="padding:0 10px;font-size:11px;white-space:nowrap;">试听</button>
+      </div>
+      <div class="pc-voice-row" style="margin-top:6px;">
+        <label class="settings-label" for="pc-language" style="font-size:11px;white-space:nowrap;">语言</label>
+        <select class="settings-input" id="pc-language" style="flex:1;font-size:11px;">
+          <option value="">跟随系统</option>
+          <option value="zh-tw">中文（繁体）</option>
+          <option value="zh-cn">中文（简体）</option>
+          <option value="en">English</option>
+          <option value="ja">日本語</option>
+          <option value="ko">한국어</option>
+          <option value="es">Español</option>
+          <option value="th">ภาษาไทย</option>
+        </select>
+      </div>
+      <input type="file" id="pc-clone-file" accept="audio/*" style="display:none;">
+      <span id="pc-clone-status" style="font-size:11px;color:var(--ink2);"></span>
+    </div>
+
     <div class="pc-footer">
       <span class="pc-source" id="pc-source">来源：待机</span>
       <span class="pc-updated" id="pc-updated">--</span>

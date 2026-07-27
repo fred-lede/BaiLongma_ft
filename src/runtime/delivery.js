@@ -336,6 +336,11 @@ export async function deliverMessage({ target_id, content = '', channel = 'AUTO'
     const resolvedTarget = delivery.externalTargetId || (delivery.isLocal ? 'TUI' : 'unknown')
     return `错误：媒体消息当前仅支持微信 ClawBot（wechat:clawbot:*），当前解析目标为 ${resolvedTarget}`
   }
+  if (media && !delivery.externalTargetId) {
+    return `错误：媒体消息当前仅支持微信 ClawBot（wechat:clawbot:*）和 Telegram，但未找到外部目标 ID`
+  }
+  // 媒体发送支持：Telegram 已在 sendTelegramMessage 中通过 markdown 图片 URL 提取处理（见 telegram.js sendTelegramMessage 实现）
+  // WeChat ClawBot 也已支持。无需额外 externalTargetId 平台检查。
 
   const channelLabel = delivery.deliveryChannel || (delivery.isLocal ? 'TUI' : '')
   const previousFailure = getRecentOutboundFailure({

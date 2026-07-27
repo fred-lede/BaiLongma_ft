@@ -11,6 +11,7 @@ export const mediaSchemas = {
           text: { type: 'string', description: 'Text to convert to speech.' },
           voice_id: { type: 'string', description: 'Optional voice ID. Omit this unless the user explicitly asks for a specific known voice. The system uses the configured TTS voice by default; a voice ID must belong to the current TTS provider.' },
           filename: { type: 'string', description: 'Optional output filename without extension.' },
+          target_person: { type: 'string', description: 'Optional. Name of the person this speech is for. If the person profile has a preferred voice set, that voice will be used automatically.' },
         },
         required: ['text']
       }
@@ -101,8 +102,8 @@ Music mode rules:
       parameters: {
         type: 'object',
         properties: {
-          prompt: { type: 'string', description: 'Image description. More detail is better.' },
-          aspect_ratio: { type: 'string', description: 'Aspect ratio, optional values: 1:1 default, 16:9, 4:3, 3:4, 9:16.' },
+          prompt: { type: 'string', description: 'Image description. More detail is better. When the user specifies a ratio (16:9, 4:3, etc.) or orientation (landscape/横, portrait/竖/直), repeat it naturally in the prompt text, e.g. "a 16:9 wide landscape of..." instead of silently moving it to aspect_ratio alone.' },
+          aspect_ratio: { type: 'string', description: 'Aspect ratio. IMPORTANT: You MUST extract ratio/orientation from the user\'s request and pass it here. Valid values: 1:1 (default), 16:9 (landscape/wide/横/横屏/横图), 4:3, 3:4, 9:16 (portrait/竖/竖屏/直/直式). When the user says "画一张 16:9 的..." or mentions any ratio or orientation, you MUST include this parameter.' },
           n: { type: 'number', description: 'Number of images to generate, 1-4, default 1.' },
         },
         required: ['prompt']

@@ -207,6 +207,7 @@ browser_set_display_mode 只在前两种白龙马形态之间切换，不导航�
 
 支持平台：
   - Discord（social/discord.js）
+  - Telegram Bot（social/telegram.js）
   - 微信 ClawBot（个人微信扫码挂载，social/wechat-clawbot.js）
   - 微信公众号、企业微信、飞书（webhooks + 官方接口）
 

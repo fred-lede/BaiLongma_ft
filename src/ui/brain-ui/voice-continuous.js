@@ -32,10 +32,10 @@ const BARGEIN_NO_SPEECH_MS = 3500; // 3.5s 内没有识别到语音 → 视为�
 export function createContinuousPolicy(core, { getAutoSend }) {
   // ─── 自动发送状态 ───
   // 「攒成一条，说完再发」：只有转写文本停更足够久才发。底噪/呼吸/键盘声不刷新计时。
-  // 延迟可经 localStorage 调，默认 2s（比一次思考停顿长，比一句话间隔长）。
+  // 延迟可经 localStorage 调（UI 设置 → 静音延迟），默认 3s。
   const SILENCE_SEND_MS = (() => {
     const v = parseInt(localStorage.getItem('bailongma-voice-silence-ms') || '', 10);
-    return Number.isFinite(v) && v >= 800 ? v : 2000;
+    return Number.isFinite(v) && v >= 800 ? v : 3000;
   })();
   let autoSendTimer = null;
   // 最近一次「转写文本发生变化」的时间戳。自动发送只看它；麦克风音量不参与重置。
@@ -96,24 +96,32 @@ export function createContinuousPolicy(core, { getAutoSend }) {
 
   // 自动发送：攒成一条，只有转写文本 SILENCE_SEND_MS 内没有变化才整条发出。
   // 底噪不会产生新字，因此不会顺延；ASR 发来重复 interim/final 也不会刷新计时。
-  function scheduleAutoSend() {
+  // delayMs 可选：覆盖默认静音延迟（final 句子未结束时翻倍，避免 VAD 误断句截断）。
+  function scheduleAutoSend(delayMs) {
     if (core.pttHolding) return;       // PTT 按住期间禁用自动发送（由 pttEnd 统一发送）
     if (getAutoSend?.() === false) return; // 关了自动发送 → 纯手动（回车 / 松 PTT）
     noteTranscriptActivity();
     if (autoSendTimer) return; // 已有计时器在跑，靠 lastTranscriptActivityTs 自校正，无需重置
+    const sendDelay = delayMs || SILENCE_SEND_MS;
     const tick = () => {
       const idle = Date.now() - lastTranscriptActivityTs;
-      if (idle >= SILENCE_SEND_MS) {
+      if (idle >= sendDelay) {
         autoSendTimer = null;
-        lastObservedTranscriptText = '';
-        core.setStatus('processing');
-        core.sendRecognizedVoiceText();
+        // 先 flush ASR，让服务端把缓冲的音频转写成最终结果，
+        // 再等一小段让 final transcript 回传后再发送，避免拿到半句 interim。
+        core.flushAsr();
+        setTimeout(() => {
+          core.suppressIncomingTranscripts(2000); // 吞掉 flush 尾随的 final，避免二次发送
+          lastObservedTranscriptText = '';
+          core.setStatus('processing');
+          core.sendRecognizedVoiceText();
+        }, 400);
       } else {
         // 期间又识别出新字了 → 顺延到「最后新字 + 延迟窗口」
-        autoSendTimer = setTimeout(tick, SILENCE_SEND_MS - idle);
+        autoSendTimer = setTimeout(tick, sendDelay - idle);
       }
     };
-    autoSendTimer = setTimeout(tick, SILENCE_SEND_MS);
+    autoSendTimer = setTimeout(tick, sendDelay);
   }
 
   function cancelAutoSend() {
@@ -197,7 +205,8 @@ export function createContinuousPolicy(core, { getAutoSend }) {
   }
 
   // ─── core 钩子：收到一条 transcript 后的策略 ───
-  function onTranscript() {
+  let lastTranscriptEndsWithTerminator = false;
+  function onTranscript(msg, isFinal) {
     // 收到真实语音 → 取消所有误触发恢复机制（正常流程下这些本就处于关闭态，清理为 no-op）
     bargeinFastCheckActive = false;
     bargeinFastSilentFrames = 0;
@@ -205,7 +214,15 @@ export function createContinuousPolicy(core, { getAutoSend }) {
     const currentText = (core.getText?.() || '').trim();
     if (!currentText || currentText === lastObservedTranscriptText) return;
     lastObservedTranscriptText = currentText;
-    scheduleAutoSend();
+    const endsSentence = /[。！？\n]$/.test(currentText);
+    if (isFinal && !endsSentence) {
+      // final 结果但句子没结束（如 AetherMesh VAD 误判断句）→ silence 窗口翻倍，避免截断
+      lastTranscriptEndsWithTerminator = false;
+      scheduleAutoSend(SILENCE_SEND_MS * 2);
+    } else {
+      lastTranscriptEndsWithTerminator = endsSentence;
+      scheduleAutoSend();
+    }
   }
 
   // ─── core 钩子：会话停止时清理本策略的计时器/检测状态 ───

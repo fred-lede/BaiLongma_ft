@@ -83,6 +83,8 @@ const STATE_CFG = {
 export const BARGEIN_THRESHOLD = 0.09; // 振幅阈值（高于环境噪声和 AEC 残留）
 
 const CLOUD_WS_URL = () => apiWebSocketUrl('/voice/cloud');
+// AetherMesh direct WS streaming ASR (bypass backend proxy)
+const AETHERMESH_WS_URL = 'ws://192.168.1.200:8001/v1/audio/transcriptions/stream';
 const VOICE_PROVIDER_KEY = 'bailongma-voice-provider';
 const VOICE_MIC_DEVICE_KEY = 'bailongma-voice-mic-device-id';
 
@@ -412,6 +414,7 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
   let cloudWorkletNode = null;   // 首选路径：AudioWorkletNode（独立音频线程采集）
   let cloudWs = null;
   let cloudWsIntentional = false; // stopCloudStream 主动关闭时置 true，避免触发重连
+  let aethermeshAsrWs = null;     // 直连 AetherMesh 的 ASR WebSocket（renderer Chromium WS，繞開 main process EHOSTUNREACH）
 
   // ─── 采集诊断（定位长语音丢字根因；localStorage 'bailongma-voice-diag'='0' 关闭，默认开） ───
   const DIAG_ON = localStorage.getItem('bailongma-voice-diag') !== '0';
@@ -459,7 +462,14 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
   // 兜底「云端静默停识别」：音频在正常送、WS 仍 OPEN、用户还在出声，却数秒收不到任何
   // 转录 → 主动关连接触发重连，把识别任务滚动重启接活。不依赖云端发任何结束/错误事件，
   // 也就修了「说到几十个字球变绿后不再出字」。localStorage 'bailongma-voice-watchdog'='0' 可关。
-  const WATCHDOG_ON = localStorage.getItem('bailongma-voice-watchdog') !== '0';
+  const WATCHDOG_ON = (() => {
+    const stored = localStorage.getItem('bailongma-voice-watchdog')
+    if (stored === '0') return false
+    // AetherMesh has built-in VAD and auto-flush — no watchdog needed
+    const provider = localStorage.getItem(VOICE_PROVIDER_KEY) || 'aliyun'
+    if (provider === 'aethermesh') return false
+    return true
+  })()
   const STALL_RECONNECT_MS = 3500;   // 仍在说却这么久没转录 → 判定停滞
   const WATCHDOG_SPEECH_VOL = 0.05;  // 判定「人在说话」的音量阈值（与 continuous SPEECH_VOL 同量级）
   let watchdogTimer = null;
@@ -474,8 +484,9 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
       const now = Date.now();
       if (now - lastLoudTs < 1200 && now - lastInboundTs > STALL_RECONNECT_MS) {
         diag('watchdog: stalled → force reconnect', 'sinceTx=' + (now - lastInboundTs) + 'ms');
-        lastInboundTs = now;            // 防重连窗口内重复触发
-        try { cloudWs.close(); } catch {} // onclose(!intentional) → commitPendingInterim + 重连续上
+        lastInboundTs = now;
+        cloudWsIntentional = true; // 主动关闭，不触发 reconnect
+        try { cloudWs.close(); } catch {}
       }
     }, 1000);
   }
@@ -682,6 +693,16 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
   // ─── Cloud ASR 传输（后端代理） ───
   function connectCloudWs() {
     cloudWsIntentional = false; // 新连接建立时清除上一次主动关闭的标记
+    const provider = localStorage.getItem(VOICE_PROVIDER_KEY) || 'aliyun';
+    const isAethermesh = provider === 'aethermesh';
+    if (isAethermesh) {
+      // AetherMesh ASR：前端直连 Chromium WebSocket，绕开 main process TCP 限制
+      cloudWs = null; // 不需要后端 WS 中转
+      setStatus('listening');
+      lastInboundTs = Date.now();
+      connectAethermeshAsr();
+      return;
+    }
     const ws = new WebSocket(CLOUD_WS_URL(), apiWebSocketProtocols());
     ws.binaryType = 'arraybuffer';
     cloudWs = ws;
@@ -710,9 +731,12 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
 
     ws.onerror = () => { if (cloudWs === ws) setStatus('error'); };
 
-    ws.onclose = () => {
+    ws.onclose = (ev) => {
       if (cloudWs !== ws) return; // 已被新连接取代，忽略旧连接的 close 事件
       cloudWs = null;
+      const reason = ev?.reason ? ` reason='${ev.reason}'` : '';
+      console.error('[voice-core] ws.onclose called code=' + (ev?.code||'?') + reason + ' intentional=' + cloudWsIntentional);
+      diag(`ws-closed intentional=${cloudWsIntentional} code=${ev?.code||'?'}${reason}`);
       if (!cloudWsIntentional && micActive) {
         // 非主动断开（超时/网络抖动）且用户仍在录音 → 自动重连，保留已识别文字。
         // 先把当前句未定稿的前半句提级保住，否则新会话只 finalize 尾巴会覆盖丢失。
@@ -725,6 +749,57 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
         if (micActive) setStatus('idle');
       }
     };
+  }
+
+  // ─── 直连 AetherMesh ASR WebSocket（绕过 main process TCP 限制） ───
+  function createAethermeshAsrWs() {
+    const baseURL = (localStorage.getItem('aethermeshBaseURL') || 'http://192.168.1.200:8001')
+      .replace(/\/+$/, '').replace(/^http:/, 'ws:').replace(/^https:/, 'wss:')
+    const apiKey = localStorage.getItem('aethermeshKey') || ''
+    const model = localStorage.getItem('aethermeshAsrModel') || 'whisper-large-v3'
+    const hasKey = !!apiKey
+    const wsURL = `${baseURL}/v1/audio/transcriptions/stream?model=${encodeURIComponent(model)}&interim=true`
+    const url = apiKey ? `${wsURL}&api_key=${encodeURIComponent(apiKey)}` : wsURL
+    console.log('[voice-core] AetherMesh ASR connecting to', url.replace(apiKey, '***'))
+    if (transcript) transcript.textContent = '🔄 ' + baseURL + ' ASR' + (hasKey ? ' (有 key)' : ' (無 key)') + '...'
+    const ws = new WebSocket(url)
+    ws.binaryType = 'arraybuffer'
+    return ws
+  }
+
+  function connectAethermeshAsr() {
+    const ws = createAethermeshAsrWs()
+    aethermeshAsrWs = ws
+    if (transcript) transcript.textContent = '🔄 連線 AetherMesh ASR...'
+    ws.onopen = () => {
+      console.log('[voice-core] AetherMesh ASR connected')
+      if (aethermeshAsrWs !== ws) return
+      if (transcript) transcript.textContent = '✅ AetherMesh ASR 已連線'
+      setStatus('listening')
+      // 補發重連死區裡暫存的音頻，避免連上前說的話丟失
+      if (reconnectBuffer.length) {
+        for (const chunk of reconnectBuffer) {
+          if (ws.readyState === WebSocket.OPEN) ws.send(chunk.buffer)
+        }
+        reconnectBuffer = []
+      }
+    }
+    ws.onmessage = (ev) => {
+      if (aethermeshAsrWs !== ws) return
+      try {
+        const msg = typeof ev.data === 'string' ? JSON.parse(ev.data) : JSON.parse(new TextDecoder().decode(ev.data))
+        if (msg.type === 'transcript') handleAsrMessage(msg)
+      } catch {}
+    }
+    ws.onerror = () => { if (aethermeshAsrWs === ws) setStatus('error') }
+    ws.onclose = (ev) => {
+      if (aethermeshAsrWs !== ws) return
+      aethermeshAsrWs = null
+      const reason = ev.reason ? ` (${ev.reason})` : ''
+      if (transcript) transcript.textContent = '⚠️ 連線關閉 code=' + ev.code + reason
+      console.log('[voice-core] AetherMesh ASR closed, code=' + ev.code + reason)
+      if (micActive) setTimeout(connectAethermeshAsr, 1000)
+    }
   }
 
   async function startCloudStream(stream) {
@@ -755,6 +830,11 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
       // TTS 播放中：写入环形缓冲而非发送，供打断时回放
       bargeinBuffer.push(i16);
       if (bargeinBuffer.length > BARGEIN_MAX_CHUNKS) bargeinBuffer.shift();
+      return;
+    }
+    // AetherMesh 直连：送 AetherMesh WS
+    if (aethermeshAsrWs && aethermeshAsrWs.readyState === WebSocket.OPEN) {
+      aethermeshAsrWs.send(i16.buffer);
       return;
     }
     if (!cloudWs || cloudWs.readyState !== WebSocket.OPEN) {
@@ -817,6 +897,11 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
 
   function stopCloudStream({ preserveProcessor = false } = {}) {
     cloudWsIntentional = true; // 标记为主动关闭，防止 onclose 触发重连
+    // 关闭 AetherMesh 直连 WS
+    if (aethermeshAsrWs) {
+      try { aethermeshAsrWs.close(); } catch {}
+      aethermeshAsrWs = null;
+    }
     const ws = cloudWs;
     try {
       if (ws && ws.readyState === WebSocket.OPEN) {
@@ -837,9 +922,12 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
     }
   }
 
-  // 向云端 ASR 请求立即给最终结果（PTT 松手 / 关闭时调用）
+  // 向云端 ASR 请求立即给最终结果（PTT 松手 / 自动发送 / 关闭时调用）
   function flushAsr() {
     try {
+      if (aethermeshAsrWs && aethermeshAsrWs.readyState === WebSocket.OPEN) {
+        aethermeshAsrWs.send(JSON.stringify({ type: 'flush' }));
+      }
       if (cloudWs && cloudWs.readyState === WebSocket.OPEN) {
         cloudWs.send(JSON.stringify({ type: 'flush' }));
       }
@@ -924,6 +1012,36 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
       resetTranscriptAccumulation();
       if (transcript) transcript.textContent = '';
       cloudWsIntentional = false; // stopCloudStream(TTS) 留下的是旧连接标志，新连接要恢复自愈重连
+
+      // AetherMesh：重连直连 WS 而非后端 WS
+      const provider = localStorage.getItem(VOICE_PROVIDER_KEY) || 'aliyun';
+      if (provider === 'aethermesh') {
+        if (aethermeshAsrWs) { try { aethermeshAsrWs.close(); } catch {}; aethermeshAsrWs = null; }
+        const aetherWs = createAethermeshAsrWs();
+        aethermeshAsrWs = aetherWs;
+        aetherWs.onopen = () => {
+          if (aethermeshAsrWs !== aetherWs) return;
+          lastInboundTs = Date.now();
+          for (const chunk of bufferedChunks) {
+            if (aetherWs.readyState === WebSocket.OPEN) aetherWs.send(chunk.buffer);
+          }
+        };
+        aetherWs.onmessage = (ev) => {
+          if (aethermeshAsrWs !== aetherWs) return;
+          try {
+            const msg = typeof ev.data === 'string' ? JSON.parse(ev.data) : JSON.parse(new TextDecoder().decode(ev.data));
+            if (msg.type === 'transcript') handleAsrMessage(msg);
+          } catch {}
+        };
+        aetherWs.onerror = () => { if (aethermeshAsrWs === aetherWs) setStatus('error'); };
+        aetherWs.onclose = () => {
+          if (aethermeshAsrWs !== aetherWs) return;
+          aethermeshAsrWs = null;
+          if (micActive) setTimeout(connectAethermeshAsr, 1000);
+        };
+        return;
+      }
+
       const bargeinWs = new WebSocket(CLOUD_WS_URL(), apiWebSocketProtocols());
       bargeinWs.binaryType = 'arraybuffer';
       cloudWs = bargeinWs;

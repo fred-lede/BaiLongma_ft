@@ -470,10 +470,151 @@ function createVolcengineSession(config, onTranscript, onError, onClose, onEvent
   }
 }
 
+// ─── AetherMesh ASR ───
+// Batch HTTP API (OpenAI-compatible): 缓冲所有 PCM 音频, flush 时拼成 WAV 发 POST
+function pcmToWav(pcmBuffer, sampleRate = 16000) {
+  const numChannels = 1
+  const bitsPerSample = 16
+  const byteRate = sampleRate * numChannels * bitsPerSample / 8
+  const blockAlign = numChannels * bitsPerSample / 8
+  const dataSize = pcmBuffer.length
+  const headerSize = 44
+  const totalSize = headerSize + dataSize
+  const wav = Buffer.alloc(totalSize)
+  wav.write('RIFF', 0)
+  wav.writeUInt32LE(totalSize - 8, 4)
+  wav.write('WAVE', 8)
+  wav.write('fmt ', 12)
+  wav.writeUInt32LE(16, 16)
+  wav.writeUInt16LE(1, 20)
+  wav.writeUInt16LE(numChannels, 22)
+  wav.writeUInt32LE(sampleRate, 24)
+  wav.writeUInt32LE(byteRate, 28)
+  wav.writeUInt16LE(blockAlign, 32)
+  wav.writeUInt16LE(bitsPerSample, 34)
+  wav.write('data', 36)
+  wav.writeUInt32LE(dataSize, 40)
+  pcmBuffer.copy(wav, 44)
+  return wav
+}
+
+function createAetherMeshSession(config, lang, onTranscript, onError, onClose) {
+  const baseURL = (config.aethermeshBaseURL || 'http://192.168.1.200:8001').replace(/\/+$/, '').replace(/^http:/, 'ws:').replace(/^https:/, 'wss:')
+  const apiKey = config.aethermeshKey || ''
+  const model = config.aethermeshAsrModel || 'whisper-large-v3'
+  const wsURL = `${baseURL}/v1/audio/transcriptions/stream?model=${encodeURIComponent(model)}&interim=true`
+  let closed = false
+  let ws = null
+  let reconnectTimer = null
+  // Accumulation buffer: merge small PCM frames into ~0.5s chunks before sending
+  // Short enough to not truncate sentences, large enough for stable Whisper input
+  let accBuf = null       // Buffer being accumulated
+  let accBytes = 0        // bytes accumulated so far
+  const ACC_TARGET = 16000   // ~0.5 second of PCM (16kHz × 2 bytes × 0.5s = 16000 bytes)
+
+  function log(...args) { console.error('[AetherMesh-ASR]', ...args) }
+
+  function flushAccumulated() {
+    if (!accBuf || accBytes === 0) return
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(accBuf.subarray(0, accBytes))
+    }
+    accBuf = null
+    accBytes = 0
+  }
+
+  function connect() {
+    if (closed) return
+    const url = apiKey ? `${wsURL}&api_key=${encodeURIComponent(apiKey)}` : wsURL
+    log(`connecting to ${url.replace(apiKey, '***')}`)
+    ws = new WebSocket(url)
+
+    ws.on('open', () => {
+      log('connected')
+      // Flush any accumulated audio that arrived while reconnecting
+      flushAccumulated()
+    })
+
+    ws.on('message', (data) => {
+      try {
+        const msg = typeof data === 'string' ? JSON.parse(data) : JSON.parse(data.toString())
+        if (msg.type === 'transcript') {
+          const detectedLang = msg.language || ''
+          if (!closed) onTranscript(msg.text, !!msg.is_final, 'am', detectedLang)
+        } else if (msg.type === 'error') {
+          if (!closed) onError(`AetherMesh ASR error: ${msg.message}`)
+        }
+      } catch (e) {
+        log('message parse error:', e.message)
+      }
+    })
+
+    ws.on('close', () => {
+      log('connection closed')
+      ws = null
+      if (!closed) {
+        reconnectTimer = setTimeout(connect, 1000)
+      }
+    })
+
+    ws.on('error', (err) => {
+      log('connection error:', err.message || err)
+    })
+  }
+
+  connect()
+
+  return {
+    sendAudio(pcmBuffer) {
+      if (closed) { log('sendAudio: closed, drop'); return }
+      const buf = Buffer.from(pcmBuffer)
+      // Accumulate small PCM frames into larger chunks for Whisper
+      if (!accBuf) {
+        accBuf = Buffer.alloc(ACC_TARGET * 2) // pre-allocate generous size
+        accBytes = 0
+      }
+      // Grow buffer if needed
+      if (accBytes + buf.length > accBuf.length) {
+        const newBuf = Buffer.alloc(Math.max(accBuf.length * 2, accBytes + buf.length))
+        accBuf.copy(newBuf, 0, 0, accBytes)
+        accBuf = newBuf
+      }
+      buf.copy(accBuf, accBytes)
+      accBytes += buf.length
+      // Flush when accumulation target reached or WS is ready
+      if (accBytes >= ACC_TARGET) {
+        flushAccumulated()
+      }
+    },
+    async flush() {
+      if (closed) { log('flush: closed, skip'); return }
+      // Flush any accumulated PCM first, then send WS flush command
+      flushAccumulated()
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        log('flush: ws not open, skip')
+        return
+      }
+      ws.send(JSON.stringify({ type: 'flush' }))
+    },
+    async close() {
+      if (closed) return
+      closed = true
+      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
+      flushAccumulated()
+      if (ws) {
+        try { ws.close() } catch {}
+        ws = null
+      }
+      onClose()
+    },
+  }
+}
+
 // ─── 工厂函数 ───
 // config: { provider, lang, aliyunApiKey?, tencentSecretId?, tencentSecretKey?,
 //           tencentAppId?, xunfeiAppId?, xunfeiApiKey?,
-//           volcAsrApiKey?, volcAsrAppKey?, volcAsrAccessKey?, volcAsrResourceId? }
+//           volcAsrApiKey?, volcAsrAppKey?, volcAsrAccessKey?, volcAsrResourceId?,
+//           aethermeshKey?, aethermeshBaseURL?, aethermeshAsrModel? }
 export function createCloudASRSession(config, onTranscript, onError, onClose, onEvent) {
   const provider = normalizeVoiceProvider(config?.provider || config?.voiceProvider || 'aliyun', '')
   const { lang = 'zh' } = config || {}
@@ -516,6 +657,10 @@ export function createCloudASRSession(config, onTranscript, onError, onClose, on
       return null
     }
     return createVolcengineSession(config, onTranscript, onError, onClose, onEvent)
+  }
+
+  if (provider === 'aethermesh') {
+    return createAetherMeshSession(config, lang, onTranscript, onError, onClose)
   }
 
   onError(`未知云端 ASR 服务商: ${config?.provider || config?.voiceProvider || provider || '空'}`)

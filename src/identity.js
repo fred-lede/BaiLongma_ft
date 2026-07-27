@@ -16,7 +16,7 @@ export { normalizeChannel, PUBLIC_CHANNELS, isVoiceChannel }
 
 export function isExternalChannel(channel) {
   const norm = normalizeChannel(channel)
-  return norm === 'WECHAT' || norm === 'DISCORD' || norm === 'FEISHU' || norm === 'WECOM'
+  return norm === 'WECHAT' || norm === 'DISCORD' || norm === 'FEISHU' || norm === 'WECOM' || norm === 'TELEGRAM'
 }
 
 // 把简化渠道名展开成数据库里实际存的 channel 值集合（用于 lookupReplyTarget 查询）
@@ -27,6 +27,7 @@ function expandChannelToConcrete(channel) {
     case 'WECOM':  return ['WECOM']
     case 'DISCORD': return ['DISCORD']
     case 'FEISHU': return ['FEISHU']
+    case 'TELEGRAM': return ['TELEGRAM']
     case 'TUI':    return ['TUI', 'API', '']
     default:       return [String(channel)]
   }

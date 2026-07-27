@@ -9,9 +9,9 @@
     "name": "xiaoyuanda666-ship-it"
   },
   "scripts": {
-    "start": "chcp 65001 >nul && electron .",
+    "start": "node scripts/start.mjs",
     "start:lan": "powershell -ExecutionPolicy Bypass -File scripts/start-lan.ps1 app",
-    "start:backend": "chcp 65001 >nul && node --env-file=.env src/index.js",
+    "start:backend": "node scripts/start-backend.mjs",
     "start:backend:lan": "powershell -ExecutionPolicy Bypass -File scripts/start-lan.ps1 backend",
     "dev": "chcp 65001 >nul && node --env-file=.env --watch src/index.js",
     "build": "node scripts/prebuild-clean.mjs && node scripts/prepare-playwright-browsers.mjs && node scripts/build-macos-speech.mjs && node ./node_modules/@electron/rebuild/lib/cli.js -f -w better-sqlite3 -v 33.4.11 && node ./node_modules/electron-builder/cli.js",
@@ -77,7 +77,7 @@
     "@playwright/mcp": "0.0.78",
     "better-sqlite3": "^12.8.0",
     "d3": "^7.9.0",
-    "electron-updater": "^6.3.9",
+    "electron-updater": "^6.8.9",
     "node-forge": "^1.4.0",
     "openai": "^6.34.0",
     "qrcode": "^1.5.4",

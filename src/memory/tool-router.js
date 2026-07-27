@@ -205,8 +205,10 @@ const MUSIC_GEN_TRIGGERS = [
   'compose', 'generate music', 'make a song',
 ]
 const IMAGE_GEN_TRIGGERS = [
-  '画个', '画一张', '画一幅', '画张', '帮我画',
-  '生成图', '生成图片', '出张图', '配图',
+  '画个', '畫個', '画一张', '畫一張', '画一幅', '畫一幅', '画张', '畫張',
+  '画只', '畫隻', '画条', '畫條', '画一个', '畫一個', '画幅', '畫幅',
+  '画一只', '畫一隻', '画一条', '畫一條', '画一座', '畫一座',
+  '帮我画', '幫我畫', '生成图', '生成圖片', '出张图', '出張圖', '配图', '配圖',
   // 注：曾包含 '画图'，但常被"没说画图"等反语命中——改用更强限定的词组
   'draw', 'paint', 'generate image', 'image of', 'picture of',
 ]
@@ -343,6 +345,7 @@ export function selectTools(ctx = {}) {
     startupSelfCheckActive = false,
     localVisualTurn = true,
     fastUserPath = false,
+    conversationWindow = [],
   } = ctx
 
   const body = (messageBody || '').toLowerCase()
@@ -429,7 +432,12 @@ export function selectTools(ctx = {}) {
   // software-install=isSoftwareInstallRequest），保留与旧分支等价的解耦语义。
   const capCtx = { text: body, rawText: messageBody, isTick, mmCaps, hasTask }
   for (const t of capabilityToolsFor(capCtx)) out.add(t)
-  if (INLINE_IMAGE_RE.test(messageBody)) out.add('analyze_image')
+  if (INLINE_IMAGE_RE.test(messageBody)
+    || (Array.isArray(conversationWindow) && conversationWindow.some(m =>
+      typeof m.content === 'string' && INLINE_IMAGE_RE.test(m.content)
+    ))) {
+    out.add('analyze_image')
+  }
 
   if (hitsPersonCardIntent(messageBody)) {
     for (const t of PERSON_CARD_TOOLS) out.add(t)

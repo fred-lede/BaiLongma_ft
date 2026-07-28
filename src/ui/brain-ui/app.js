@@ -2775,6 +2775,28 @@ function handle({ type, data = {}, ts = null }) {
         audioEl.play().catch(() => {});
       }
       break;
+    case "image_created":
+      if (data.urls && isUiClientTarget(data)) {
+        // 在聊天中显示生成的图片
+        const urls = Array.isArray(data.urls) ? data.urls : [data.urls];
+        const messageDiv = document.createElement("div");
+        messageDiv.style.cssText = "margin: 8px 0; text-align: center;";
+        urls.forEach(url => {
+          const img = document.createElement("img");
+          // 图片路径是相对根目录的，不是相对于 /api/ 的
+          img.src = url.startsWith('/') ? url : '/' + url;
+          img.style.cssText = "max-width: 100%; max-height: 400px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);";
+          img.alt = "Generated image";
+          messageDiv.appendChild(img);
+        });
+        // 将图片插入到 chatMessages 区域
+        const chatArea = document.getElementById("chat-messages");
+        if (chatArea) {
+          chatArea.appendChild(messageDiv);
+          chatArea.scrollTop = chatArea.scrollHeight;
+        }
+      }
+      break;
     case "tts_reply":
       if (data.text && isUiClientTarget(data)) playTTSReply(data.text);
       break;
@@ -4018,7 +4040,7 @@ function initTTSSettings() {
     });
   }
 
-  async function aethermeshRefreshVoices() {
+  async function aethermeshRefreshVoices(savedVoiceId) {
     if (aethermeshRefreshBtn) { aethermeshRefreshBtn.disabled = true; aethermeshRefreshBtn.textContent = "获取中…"; }
     try {
       const res = await fetch(`${API}/person-card/aethermesh-voices`);
@@ -4028,7 +4050,7 @@ function initTTSSettings() {
       const list = Array.isArray(data.voices) ? data.voices : [];
       aethermeshVoicesList = list;
       if (aethermeshVoiceId) {
-        const prev = aethermeshVoiceId.value;
+        const prev = savedVoiceId || aethermeshVoiceId.value;
         aethermeshVoiceId.innerHTML = '<option value="">— 选择声音 —</option>';
         list.forEach(v => {
           const vid = v.voice_id || v.id || "";
@@ -4047,6 +4069,12 @@ function initTTSSettings() {
           aethermeshVoiceId.appendChild(opt);
         });
         if (prev && [...aethermeshVoiceId.options].some(o => o.value === prev)) {
+          aethermeshVoiceId.value = prev;
+        } else if (prev) {
+          const fallback = document.createElement("option");
+          fallback.value = prev;
+          fallback.textContent = prev;
+          aethermeshVoiceId.appendChild(fallback);
           aethermeshVoiceId.value = prev;
         }
         syncAethermeshVoiceName();
@@ -4180,8 +4208,16 @@ function initTTSSettings() {
     voiceSel.innerHTML = voices.map(v =>
       `<option value="${v.id}">${v.label}</option>`
     ).join("");
-    if (savedId && voices.some(v => v.id === savedId)) {
-      voiceSel.value = savedId;
+    if (savedId) {
+      if (voices.some(v => v.id === savedId)) {
+        voiceSel.value = savedId;
+      } else {
+        const opt = document.createElement("option");
+        opt.value = savedId;
+        opt.textContent = savedId;
+        voiceSel.prepend(opt);
+        voiceSel.value = savedId;
+      }
     }
     syncFxToggle();
   }
@@ -4215,20 +4251,20 @@ function initTTSSettings() {
     const aethermeshKeyEl = document.getElementById("tts-aethermesh-key");
     const aethermeshBaseURLEl = document.getElementById("tts-aethermesh-baseurl");
     const aethermeshLangEl = document.getElementById("tts-aethermesh-lang");
-    const aethermeshTranslateEl = document.getElementById("tts-aethermesh-translate");
-    if (aethermeshKeyEl && tts?.aethermeshKey) aethermeshKeyEl.value = tts.aethermeshKey;
+    const responseLanguageEl = document.getElementById("tts-response-language");
+    if (aethermeshKeyEl && tts?.aethermeshKey?.value) aethermeshKeyEl.value = tts.aethermeshKey.value;
     if (aethermeshBaseURLEl && tts?.aethermeshBaseURL) aethermeshBaseURLEl.value = tts.aethermeshBaseURL;
     if (aethermeshLangEl && tts?.aethermeshLang) aethermeshLangEl.value = tts.aethermeshLang;
-    if (aethermeshTranslateEl) aethermeshTranslateEl.checked = !!tts?.aethermeshTranslate;
+    if (responseLanguageEl && tts?.responseLanguage) responseLanguageEl.value = tts.responseLanguage;
     const customKeyEl = document.getElementById("tts-custom-key");
     const customBaseURLEl = document.getElementById("tts-custom-baseurl");
     const customModelEl = document.getElementById("tts-custom-model");
-    if (customKeyEl && tts?.customOpenaiKey) customKeyEl.value = tts.customOpenaiKey;
+    if (customKeyEl && tts?.customOpenaiKey?.value) customKeyEl.value = tts.customOpenaiKey.value;
     if (customBaseURLEl && tts?.customOpenaiBaseURL) customBaseURLEl.value = tts.customOpenaiBaseURL;
     if (customModelEl && tts?.customOpenaiModel) customModelEl.value = tts.customOpenaiModel;
     if (customVoiceId && tts?.ttsVoiceId && provider === "custom-openai") customVoiceId.value = tts.ttsVoiceId;
     if (aethermeshVoiceId && tts?.ttsVoiceId && provider === "aethermesh") aethermeshVoiceId.value = tts.ttsVoiceId;
-    if (provider === "aethermesh") aethermeshRefreshVoices();
+    if (provider === "aethermesh") aethermeshRefreshVoices(tts?.ttsVoiceId);
     showCredSection(provider);
   }).catch(() => {});
 
@@ -4264,8 +4300,8 @@ function initTTSSettings() {
       if (aethermeshBaseURL) ttsBody.aethermeshBaseURL = aethermeshBaseURL;
       const aethermeshLang = document.getElementById("tts-aethermesh-lang")?.value;
       if (aethermeshLang) ttsBody.aethermeshLang = aethermeshLang;
-      const aethermeshTranslate = document.getElementById("tts-aethermesh-translate")?.checked;
-      if (aethermeshTranslate !== undefined) ttsBody.aethermeshTranslate = aethermeshTranslate;
+      const responseLanguage = document.getElementById("tts-response-language")?.value;
+      if (responseLanguage) ttsBody.responseLanguage = responseLanguage;
       if (aethermeshVoiceId?.value) ttsBody.ttsVoiceId = aethermeshVoiceId.value;
       const customKey = document.getElementById("tts-custom-key")?.value?.trim();
       if (customKey) ttsBody.customOpenaiKey = customKey;
@@ -4471,9 +4507,11 @@ function initTTSSettings() {
     setTimeout(() => { el.textContent = ""; el.className = "settings-feedback"; }, 3000);
   }
 
-  function refreshConfigSummary({ llm, minimax }) {
+  function refreshConfigSummary({ llm, minimax, tts }) {
     const cfgLlm = document.getElementById("settings-cfg-llm");
     const cfgLlmDot = document.getElementById("settings-cfg-llm-dot");
+    const cfgVlm = document.getElementById("settings-cfg-vlm");
+    const cfgVlmDot = document.getElementById("settings-cfg-vlm-dot");
     const cfgMedia = document.getElementById("settings-cfg-media");
     const cfgMediaDot = document.getElementById("settings-cfg-media-dot");
     if (cfgLlm) cfgLlm.textContent = `${llm.provider || "—"} · ${llm.model || "—"}`;
@@ -4481,6 +4519,13 @@ function initTTSSettings() {
       cfgLlmDot.textContent = "●";
       cfgLlmDot.className = `settings-config-dot ${llm.activated ? "active" : "inactive"}`;
       cfgLlmDot.title = llm.activated ? "Running" : "Inactive";
+    }
+    const vlmModel = tts?.aethermeshImageModel || "";
+    if (cfgVlm) cfgVlm.textContent = vlmModel || "not configured";
+    if (cfgVlmDot) {
+      cfgVlmDot.textContent = "●";
+      cfgVlmDot.className = `settings-config-dot ${vlmModel ? "active" : "inactive"}`;
+      cfgVlmDot.title = vlmModel ? `Model: ${vlmModel}` : "Not configured";
     }
     if (cfgMedia) cfgMedia.textContent = `minimax · ${minimax.configured ? "configured" : "not configured"}`;
     if (cfgMediaDot) {
@@ -4596,12 +4641,15 @@ function initTTSSettings() {
 
   async function loadSettings() {
     try {
-      const data = await fetch(`${API}/settings`).then(r => r.json());
+      const [data, ttsData] = await Promise.all([
+        fetch(`${API}/settings`).then(r => r.json()),
+        fetch(`${API}/settings/tts`).then(r => r.json()).catch(() => ({})),
+      ]);
       const { llm, minimax, providers } = data;
       if (providers) cachedProviders = providers;
       cachedLlm = llm;
       if (agentNameInput) agentNameInput.value = data.agent_name || agentName || DEFAULT_AGENT_NAME;
-      refreshConfigSummary({ llm, minimax });
+      refreshConfigSummary({ llm, minimax, tts: ttsData.tts });
       populateProviderSelect(providers, llm.provider || "auto");
       if (providerSelect && llm.provider) providerSelect.value = llm.provider;
       applyCustomProviderUI(llm);
@@ -5438,6 +5486,19 @@ function initTTSSettings() {
     if (!overlay.hidden) { loadMicrophoneDevices(); loadOutputDevices(); }
   });
 
+  function setCredentialIndicator(fieldId, configured) {
+    const el = document.getElementById(fieldId);
+    if (!el) return;
+    if (configured) {
+      el.dataset.origPlaceholder = el.dataset.origPlaceholder || el.placeholder;
+      el.placeholder = "已配置，留空则不修改";
+      el.style.borderColor = "var(--ok, #4caf50)";
+    } else {
+      if (el.dataset.origPlaceholder) el.placeholder = el.dataset.origPlaceholder;
+      el.style.borderColor = "";
+    }
+  }
+
   async function loadVoiceSettings() {
     const langSelect = document.getElementById("voice-lang-select");
     const autoSend   = document.getElementById("voice-auto-send");
@@ -5467,8 +5528,28 @@ function initTTSSettings() {
       // Sync AetherMesh ASR settings from backend to localStorage for frontend direct WS
       if (resp.ok && data?.voice) {
         const cfg = data.voice;
+        // 保存 AetherMesh 配置到 localStorage，供前端 WebSocket 直连使用
         if (cfg.aethermeshKey && typeof cfg.aethermeshKey === 'string') localStorage.setItem('aethermeshKey', cfg.aethermeshKey);
         if (cfg.aethermeshBaseURL && typeof cfg.aethermeshBaseURL === 'string') localStorage.setItem('aethermeshBaseURL', cfg.aethermeshBaseURL);
+        // 填充语音设置输入框
+        const voiceAethermeshKeyEl = document.getElementById("voice-aethermesh-key");
+        const voiceAethermeshBaseurlEl = document.getElementById("voice-aethermesh-baseurl");
+        const voiceLangSelect = document.getElementById("voice-lang-select");
+        if (voiceAethermeshKeyEl && cfg.aethermeshKey) voiceAethermeshKeyEl.value = cfg.aethermeshKey;
+        if (voiceAethermeshBaseurlEl && cfg.aethermeshBaseURL) voiceAethermeshBaseurlEl.value = cfg.aethermeshBaseURL;
+        if (voiceLangSelect && cfg.lang) voiceLangSelect.value = cfg.lang;
+        // Show configured status for ASR credential fields
+        setCredentialIndicator("voice-aliyun-key",     cfg.aliyunApiKey?.configured);
+        setCredentialIndicator("voice-tencent-sid",     cfg.tencentSecretId?.configured);
+        setCredentialIndicator("voice-tencent-skey",    cfg.tencentSecretKey?.configured);
+        setCredentialIndicator("voice-xunfei-appid",   cfg.xunfeiAppId?.configured);
+        setCredentialIndicator("voice-xunfei-apikey",   cfg.xunfeiApiKey?.configured);
+        setCredentialIndicator("voice-volc-apikey",     cfg.volcAsrApiKey?.configured);
+        setCredentialIndicator("voice-volc-appkey",     cfg.volcAsrAppKey?.configured);
+        setCredentialIndicator("voice-volc-accesskey",  cfg.volcAsrAccessKey?.configured);
+        setCredentialIndicator("voice-volc-resourceid", cfg.volcAsrResourceId?.configured);
+        setCredentialIndicator("voice-aethermesh-key",  !!cfg.aethermeshKey && typeof cfg.aethermeshKey === 'string');
+        setCredentialIndicator("voice-aethermesh-baseurl", !!cfg.aethermeshBaseURL && typeof cfg.aethermeshBaseURL === 'string');
       }
       const savedVolcAsrKey = data?.voice?.volcAsrApiKey?.value;
       if (volcAsrKeyInput) volcAsrKeyInput.value = typeof savedVolcAsrKey === "string" ? savedVolcAsrKey : "";
@@ -5507,7 +5588,7 @@ function initTTSSettings() {
       const micLabel = voiceMicSelect?.selectedOptions?.[0]?.textContent || "系统默认麦克风";
       setVoiceMicStatus(`当前麦克风：${micLabel}。重新开启语音对话生效。`);
 
-      const body = { voiceProvider: provider };
+      const body = { voiceProvider: provider, lang };
       const aliyunKey = document.getElementById("voice-aliyun-key")?.value?.trim();
       if (aliyunKey) body.aliyunApiKey = aliyunKey;
       const tencentSid = document.getElementById("voice-tencent-sid")?.value?.trim();

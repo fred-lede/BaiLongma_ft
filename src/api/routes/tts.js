@@ -42,6 +42,7 @@ export async function handleTTSRoutes(req, res, url) {
           aethermeshKey: creds.aethermeshKey,
           aethermeshBaseURL: creds.aethermeshBaseURL,
           aethermeshLanguage: creds.aethermeshLanguage,
+          responseLanguage: creds.responseLanguage,
         },
       })
       let headersWritten = false

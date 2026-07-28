@@ -1006,13 +1006,13 @@ async function runTurn(input, label, msg = null) {
       directions.push('For voice input, do not send process acknowledgements like "I will look" or "let me check" before the answer. Send one compact answer unless you truly need a slow tool and have no result yet.')
       directions.push('If the user asks you to read, repeat, or output exact text for recording, reply with the exact text as normal chat text. Do not call the speak tool; this voice channel already turns assistant text into audio automatically. Do not paraphrase, summarize, shorten, or add commentary.')
       directions.push('If the voice input is clearly a speech recognition error (meaningless noise, garbled syllables, random characters) OR appears to be ambient speech not directed at you — such as someone nearby talking to another person, background conversation, or utterances with no plausible intent to address an AI assistant — treat it as noise and stay genuinely silent. Do NOT call send_message or any other tool. Critically, do NOT write any spoken sentence about it either: on a voice/local turn your plain text reply is read aloud by TTS, so explaining "this looks like recognition noise, so I will stay silent" is self-defeating — that explanation itself becomes spoken sound, which is the opposite of silence. Instead reply with a SINGLE emoji and nothing else — prefer 👂 — with no words, punctuation, or reasoning before or after it. A lone emoji gives TTS nothing meaningful to speak, so it stays effectively silent while still showing on screen that you registered the input and deliberately chose not to act on it. Only answer normally when the input is reasonably addressed to you.')
-      const ttsConfig = getTTSConfig()
-      const responseLanguage = ttsConfig.responseLanguage || 'auto'
-      if (responseLanguage !== 'auto') {
-        const langNames = { 'zh-cn': 'Chinese (Simplified)', 'zh-tw': 'Chinese (Traditional)', 'en': 'English', 'ja': 'Japanese', 'ko': 'Korean', 'es': 'Spanish' }
-        const langName = langNames[responseLanguage] || responseLanguage
-        directions.unshift(`Response language preference: The user has set their preferred response language to ${langName}. You MUST reply in ${langName}, regardless of the language the user spoke. The system will handle pronunciation automatically.`)
-      }
+    }
+    const ttsConfig = getTTSConfig()
+    const responseLanguage = ttsConfig.responseLanguage || 'auto'
+    if (responseLanguage !== 'auto') {
+      const langNames = { 'zh-cn': 'Chinese (Simplified)', 'zh-tw': 'Chinese (Traditional)', 'en': 'English', 'ja': 'Japanese', 'ko': 'Korean', 'es': 'Spanish' }
+      const langName = langNames[responseLanguage] || responseLanguage
+      directions.unshift(`Response language preference: The user has set their preferred response language to ${langName}. You MUST reply in ${langName}, regardless of the language the user spoke. The system will handle pronunciation automatically.`)
     }
 
     if (keyConfigFailDir) directions.unshift(keyConfigFailDir)

@@ -492,7 +492,7 @@ export async function streamTTS({ text, provider, voiceId, keys = {}, language, 
     case 'custom-openai':
       return streamCustomOpenAI({ text, voiceId, apiKey: keys.customTtsKey, baseURL: keys.customTtsBaseURL, model: keys.customTtsModel })
     case 'aethermesh': {
-      const ttsLang = (responseLanguage && responseLanguage !== 'auto') ? responseLanguage : (language || keys.aethermeshLanguage)
+      const ttsLang = (keys.responseLanguage && keys.responseLanguage !== 'auto') ? keys.responseLanguage : (language || keys.aethermeshLanguage)
       const { stream } = await streamAetherMesh({ text, voiceId, baseURL: keys.aethermeshBaseURL, apiKey: keys.aethermeshKey, language: ttsLang })
       return stream
     }

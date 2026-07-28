@@ -784,6 +784,7 @@ const VOICE_PROVIDER_KEYS = {
 }
 const VOICE_CONFIG_KEYS = [
   'voiceProvider',
+  'lang',
   ...Object.values(VOICE_PROVIDER_KEYS).flat(),
 ]
 const VOICE_KEY_PROVIDER = new Map(

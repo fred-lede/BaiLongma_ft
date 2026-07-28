@@ -4254,7 +4254,7 @@ function initTTSSettings() {
     const responseLanguageEl = document.getElementById("tts-response-language");
     if (aethermeshKeyEl && tts?.aethermeshKey?.value) aethermeshKeyEl.value = tts.aethermeshKey.value;
     if (aethermeshBaseURLEl && tts?.aethermeshBaseURL) aethermeshBaseURLEl.value = tts.aethermeshBaseURL;
-    if (aethermeshLangEl && tts?.aethermeshLang) aethermeshLangEl.value = tts.aethermeshLang;
+    if (aethermeshLangEl && tts?.aethermeshLanguage) aethermeshLangEl.value = tts.aethermeshLanguage;
     if (responseLanguageEl && tts?.responseLanguage) responseLanguageEl.value = tts.responseLanguage;
     const customKeyEl = document.getElementById("tts-custom-key");
     const customBaseURLEl = document.getElementById("tts-custom-baseurl");
@@ -4299,7 +4299,7 @@ function initTTSSettings() {
       const aethermeshBaseURL = document.getElementById("tts-aethermesh-baseurl")?.value?.trim();
       if (aethermeshBaseURL) ttsBody.aethermeshBaseURL = aethermeshBaseURL;
       const aethermeshLang = document.getElementById("tts-aethermesh-lang")?.value;
-      if (aethermeshLang) ttsBody.aethermeshLang = aethermeshLang;
+      if (aethermeshLang) ttsBody.aethermeshLanguage = aethermeshLang;
       const responseLanguage = document.getElementById("tts-response-language")?.value;
       if (responseLanguage) ttsBody.responseLanguage = responseLanguage;
       if (aethermeshVoiceId?.value) ttsBody.ttsVoiceId = aethermeshVoiceId.value;

@@ -470,7 +470,7 @@ async function streamAetherMesh({ text, voiceId, baseURL = 'http://localhost:800
 
 // ── 通用入口 ────────────────────────────────────────────────────────────────
 // Returns { stream, contentType } — contentType defaults to 'audio/mpeg' for providers that only return a stream
-export async function streamTTS({ text, provider, voiceId, keys = {}, language }) {
+export async function streamTTS({ text, provider, voiceId, keys = {}, language, responseLanguage }) {
   if (!text?.trim()) throw new Error('TTS: 文本为空')
   switch (provider) {
     case 'doubao':
@@ -492,7 +492,8 @@ export async function streamTTS({ text, provider, voiceId, keys = {}, language }
     case 'custom-openai':
       return streamCustomOpenAI({ text, voiceId, apiKey: keys.customTtsKey, baseURL: keys.customTtsBaseURL, model: keys.customTtsModel })
     case 'aethermesh': {
-      const { stream } = await streamAetherMesh({ text, voiceId, baseURL: keys.aethermeshBaseURL, apiKey: keys.aethermeshKey, language: language || keys.aethermeshLanguage })
+      const ttsLang = (responseLanguage && responseLanguage !== 'auto') ? responseLanguage : (language || keys.aethermeshLanguage)
+      const { stream } = await streamAetherMesh({ text, voiceId, baseURL: keys.aethermeshBaseURL, apiKey: keys.aethermeshKey, language: ttsLang })
       return stream
     }
     default:

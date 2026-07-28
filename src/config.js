@@ -1441,13 +1441,16 @@ export async function saveLLMSettings({ provider = AUTO_PROVIDER, apiKey, model,
   }
 
   if (trimmedKey || p === AUTO_PROVIDER) {
-    if (!trimmedKey) throw new Error('API key is required to auto-detect a provider')
-    const prepared = await prepareActivation({
-      provider: p,
-      apiKey: trimmedKey,
-      model,
-    })
-    return commitPreparedActivation(prepared)
+    if (trimmedKey) {
+      const prepared = await prepareActivation({
+        provider: p,
+        apiKey: trimmedKey,
+        model,
+      })
+      return commitPreparedActivation(prepared)
+    }
+    if (model) return switchProviderConfig({ provider: p, model })
+    return { ok: true, provider: p, model: config.model }
   }
 
   return switchProviderConfig({ provider: p, model })
@@ -1785,7 +1788,7 @@ export function getVoiceConfig() {
     if (key === 'voiceProvider') continue
     const provider = VOICE_KEY_PROVIDER.get(key) || result.voiceProvider
     const stored = readVoiceProviderConfig(provider)
-    if (key === 'aethermeshKey' || key === 'aethermeshBaseURL' || key === 'aethermeshAsrModel') {
+    if (key === 'aethermeshKey' || key === 'aethermeshBaseURL' || key === 'aethermeshAsrModel' || key === 'lang' || key === 'macosRecognitionMode') {
       result[key] = stored[key] || ''
     } else {
       result[key] = { configured: !!stored[key] }
@@ -1870,7 +1873,7 @@ const TTS_CONFIG_KEYS = [
   'elevenLabsKey',
   'volcanoAppId', 'volcanoToken',
   'customOpenaiKey', 'customOpenaiBaseURL', 'customOpenaiModel',
-  'aethermeshKey', 'aethermeshBaseURL', 'aethermeshLanguage', 'aethermeshTranslate', 'aethermeshImageModel',
+  'aethermeshKey', 'aethermeshBaseURL', 'aethermeshLanguage', 'responseLanguage', 'aethermeshImageModel',
 ]
 
 export function getTTSConfig() {
@@ -1891,13 +1894,13 @@ export function getTTSConfig() {
     elevenLabsKey:   { configured: !!(stored.elevenLabsKey) },
     volcanoAppId:    { configured: !!(stored.volcanoAppId), value: stored.volcanoAppId || '' },
     volcanoToken:    { configured: !!(stored.volcanoToken) },
-    customOpenaiKey: { configured: !!(stored.customOpenaiKey) },
+    customOpenaiKey: { configured: !!(stored.customOpenaiKey), value: stored.customOpenaiKey || '' },
     customOpenaiBaseURL: stored.customOpenaiBaseURL || '',
     customOpenaiModel: stored.customOpenaiModel || '',
-    aethermeshKey:   { configured: !!(stored.aethermeshKey || voiceStored.aethermeshKey) },
+    aethermeshKey:   { configured: !!(stored.aethermeshKey || voiceStored.aethermeshKey), value: (stored.aethermeshKey || voiceStored.aethermeshKey) || '' },
     aethermeshBaseURL: stored.aethermeshBaseURL || voiceStored.aethermeshBaseURL || fallbackBaseURL,
     aethermeshLanguage: stored.aethermeshLanguage || 'zh-cn',
-    aethermeshTranslate: !!stored.aethermeshTranslate,
+    responseLanguage: stored.responseLanguage || 'auto',
     aethermeshImageModel: stored.aethermeshImageModel || 'x/z-image-turbo:bf16',
   }
 }
@@ -1924,10 +1927,10 @@ export function getTTSCredentials() {
     customOpenaiKey: stored.customOpenaiKey || '',
     customOpenaiBaseURL: stored.customOpenaiBaseURL || '',
     customOpenaiModel: stored.customOpenaiModel || '',
-    aethermeshKey:   stored.aethermeshKey || voiceStored.aethermeshKey || '',
+    aethermeshKey:   (typeof stored.aethermeshKey === 'string' && stored.aethermeshKey.trim()) ? stored.aethermeshKey : (voiceStored.aethermeshKey || ''),
     aethermeshBaseURL: stored.aethermeshBaseURL || voiceStored.aethermeshBaseURL || fallbackBaseURL,
     aethermeshLanguage: stored.aethermeshLanguage || 'zh-cn',
-    aethermeshTranslate: !!stored.aethermeshTranslate,
+    responseLanguage: stored.responseLanguage || 'auto',
     aethermeshImageModel: stored.aethermeshImageModel || 'x/z-image-turbo:bf16',
   }
 }
@@ -1938,8 +1941,8 @@ export function setTTSConfig(updates) {
   const next = { ...current }
   for (const [key, val] of Object.entries(updates)) {
     if (!TTS_CONFIG_KEYS.includes(key)) continue
-    if (key === 'aethermeshTranslate') {
-      next[key] = !!val
+    if (key === 'responseLanguage') {
+      next[key] = ['auto', 'zh-cn', 'zh-tw', 'en', 'ja', 'ko', 'es'].includes(val) ? val : 'auto'
       continue
     }
     const trimmed = String(val || '').trim()

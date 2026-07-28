@@ -473,14 +473,24 @@ export async function sendTelegramMessage(chatId, content) {
   const token = env('TELEGRAM_BOT_TOKEN')
   if (!token) return { ok: false, skipped: true, reason: 'TELEGRAM_BOT_TOKEN not configured' }
 
-  // 嘗試從 content 中提取本地圖片，以 sendPhoto 替代 sendMessage
-  const imgMatch = String(content || '').match(/!\[.*?\]\(\/media\/chat\/([^)\s]+)\)/)
-  if (imgMatch) {
-    const filename = imgMatch[1]
+  // 從 content 中提取本地圖片（markdown 形式或裸路徑），以 sendPhoto 替代 sendMessage
+  //   markdown: ![alt](/media/chat/<filename>)
+  //   bare:     /media/chat/<filename>   （generate_image 工具的回應即為裸路徑）
+  const stripped = String(content || '')
+  // 先抓 markdown 形式；逐張比對檔案存在後送出第一張即可（Telegram sendPhoto 一次一張）
+  const imgMatch = stripped.match(/!\[.*?\]\(\/media\/chat\/([^)\s]+)\)/)
+  const bareMatch = !imgMatch ? stripped.match(/(^|\s)\/media\/chat\/([^\s)]+?)(?=[\s)\u3000]|$)/) : null
+
+  const filename = imgMatch ? imgMatch[1]
+    : (bareMatch ? bareMatch[2] : null)
+
+  if (filename) {
     const filePath = path.join(paths.mediaDir, path.basename(filename))
     if (fs.existsSync(filePath)) {
-      const caption = content.replace(/!\[.*?\]\(\/media\/chat\/[^)\s]+\)/g, '').trim()
-      // 先把文件完整讀入 Buffer，避免 form-data.getBuffer() 返回 DelayedStream
+      // 移除截獲的 markdown 或裸路徑片段，剩餘文字作為 caption
+      const caption = imgMatch
+        ? stripped.replace(/!\[.*?\]\(\/media\/chat\/[^)\s]+\)/g, '').trim()
+        : stripped.replace(/\/media\/chat\/[^\s)]+/g, '').trim()
       const photoBuffer = fs.readFileSync(filePath)
       const fd = new FormData()
       fd.append('chat_id', String(chatId))
@@ -489,7 +499,10 @@ export async function sendTelegramMessage(chatId, content) {
       const res = await multipartRequest(`https://api.telegram.org/bot${token}/sendPhoto`, fd)
       if (!res.ok) {
         // 降級：如果 sendPhoto 失敗，退回 sendMessage（用戶至少能看到文字）
-        return sendTelegramMessage(chatId, content.replace(/!\[.*?\]\(.*?\)/g, '').trim() || '（图片）')
+        const fallbackText = imgMatch
+          ? stripped.replace(/!\[.*?\]\(.*?\)/g, '').trim() || '（图片）'
+          : stripped.replace(/\/media\/chat\/[^\s)]+/g, '').trim() || '（图片）'
+        return sendTelegramMessage(chatId, fallbackText)
       }
       return { ok: true, platform: 'telegram', message_id: res.data?.result?.message_id || null }
     }

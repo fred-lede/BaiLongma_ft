@@ -1,5 +1,5 @@
 import OpenAI from 'openai'
-import { config, MIMO_PROVIDER, ZHIPU_PROVIDER, getProviderModelFallbacks, shouldOmitSamplingForProviderModel, shouldSendThinkingDisabledForProviderModel, shouldUseMaxCompletionTokensForProviderModel, switchModel } from './config.js'
+import { config, MIMO_PROVIDER, ZHIPU_PROVIDER, getProviderModelFallbacks, shouldOmitSamplingForProviderModel, shouldSendThinkingDisabledForProviderModel, shouldUseMaxCompletionTokensForProviderModel, switchModel, getTTSConfig } from './config.js'
 import { executeTool } from './capabilities/executor.js'
 import { getToolSchemas } from './capabilities/schemas.js'
 import { recordUsage, shouldThrottle } from './quota.js'
@@ -786,18 +786,73 @@ function isSlowAckTool(name, args) {
   return SLOW_ACK_TOOLS.has(name)
 }
 function slowAckText(name, args) {
+  const responseLanguage = (getTTSConfig().responseLanguage || 'auto')
+  // ack 文案按 responseLanguage 取本地化版;未提供則回退中文。
+  const ACK_BY_LANG = {
+    'en': {
+      music_s: (s) => `Looking for "${s}", just a sec~`,
+      music: 'Looking, just a sec~',
+      generate_image: 'Drawing, just a sec~',
+      generate_music_lyrics: 'Creating, just a sec~',
+      web_s: (q) => `Let me look up "${q}"~`,
+      web: 'Let me check~',
+      exec: 'Running it~',
+      default: 'Got it, working on it~',
+    },
+    'ja': {
+      music_s: (s) => `「${s}」を探してる、ちょっと待って〜`,
+      music: '探してる、ちょっと待って〜',
+      generate_image: '描いてる、ちょっと待って〜',
+      generate_music_lyrics: '作ってる、ちょっと待って〜',
+      web_s: (q) => `「${q}」ちょっと調べるね〜`,
+      web: 'ちょっと調べるね〜',
+      exec: '実行してる〜',
+      default: '了解、やってる〜',
+    },
+    'ko': {
+      music_s: (s) => `"${s}" 찾고 있어요, 잠깐만요~`,
+      music: '찾고 있어요, 잠깐만요~',
+      generate_image: '그리고 있어요, 잠깐만요~',
+      generate_music_lyrics: '만들고 있어요, 잠깐만요~',
+      web_s: (q) => `"${q}" 찾아볼게요~`,
+      web: '찾아볼게요~',
+      exec: '실행 중~',
+      default: '알겠어요, 처리 중~',
+    },
+    'es': {
+      music_s: (s) => `Buscando "${s}", un momento~`,
+      music: 'Buscando, un momento~',
+      generate_image: 'Dibujando, un momento~',
+      generate_music_lyrics: 'Creando, un momento~',
+      web_s: (q) => `Déjame buscar "${q}"~`,
+      web: 'Déjame revisar~',
+      exec: 'Ejecutando~',
+      default: 'Recibido, en ello~',
+    },
+  }
+  const pick = (key, s) => {
+    const t = ACK_BY_LANG[responseLanguage]
+    if (!t) return null
+    const v = typeof t[key] === 'function' ? t[key](s) : t[key]
+    return v
+  }
   if (name === 'music') {
     const s = String(args?.title || args?.query || '').trim()
-    return s ? `在找《${s}》了，稍等一下～` : '在找了，稍等一下～'
+    if (s) return pick('music_s', s) || `在找《${s}》了，稍等一下～`
+    return pick('music') || '在找了，稍等一下～'
   }
-  if (name === 'generate_image') return '在画了，稍等一下～'
-  if (name === 'generate_music' || name === 'generate_lyrics') return '在创作了，稍等一下～'
+  if (name === 'generate_image') return pick('generate_image') || '在画了，稍等一下～'
+  if (name === 'generate_music' || name === 'generate_lyrics') return pick('generate_music_lyrics') || '在创作了，稍等一下～'
   if (name === 'web_search' || name === 'web_read' || name === 'fetch_url' || name === 'browser_read' || name === 'browser_navigate' || name === 'deep_research') {
     const q = String(args?.query || args?.q || args?.url || '').trim()
-    return q ? `我查一下「${q.length > 30 ? q.slice(0, 30) + '…' : q}」～` : '我查一下～'
+    if (q) {
+      const short = q.length > 30 ? q.slice(0, 30) + '…' : q
+      return pick('web_s', short) || `我查一下「${short}」～`
+    }
+    return pick('web') || '我查一下～'
   }
-  if (name === 'exec_command') return '我跑一下～'
-  return '收到，我处理一下～'
+  if (name === 'exec_command') return pick('exec') || '我跑一下～'
+  return pick('default') || '收到，我处理一下～'
 }
 
 // ── 播放收尾静音 ──────────────────────────────────────────────────────────────

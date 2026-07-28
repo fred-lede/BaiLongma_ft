@@ -974,8 +974,12 @@ async function runTurn(input, label, msg = null) {
     }
 
     const directions = [...(injection.directions || [])]
+    const ttsConfigForLang = getTTSConfig()
+    const responseLanguageForLang = ttsConfigForLang.responseLanguage || 'auto'
     if (isUserTurn && msg) {
-      directions.unshift('Language reminder for this user turn: determine the reply language only from the user\'s current message, not from conversation history, memories, profile, interface language, location, ASR/TTS provider, or agent name. Mirror the current message language unless the user explicitly requests another output language. Proper names may keep their original spelling, but the surrounding sentence must still use the current message language.')
+      if (responseLanguageForLang === 'auto') {
+        directions.unshift('Language reminder for this user turn: determine the reply language only from the user\'s current message, not from conversation history, memories, profile, interface language, location, ASR/TTS provider, or agent name. Mirror the current message language unless the user explicitly requests another output language. Proper names may keep their original spelling, but the surrounding sentence must still use the current message language.')
+      }
     }
     if (isTick) {
       const startupSelfCheckDirections = awakeningManager.buildStartupSelfCheckDirections(state.startupSelfCheck)
@@ -1007,12 +1011,19 @@ async function runTurn(input, label, msg = null) {
       directions.push('If the user asks you to read, repeat, or output exact text for recording, reply with the exact text as normal chat text. Do not call the speak tool; this voice channel already turns assistant text into audio automatically. Do not paraphrase, summarize, shorten, or add commentary.')
       directions.push('If the voice input is clearly a speech recognition error (meaningless noise, garbled syllables, random characters) OR appears to be ambient speech not directed at you — such as someone nearby talking to another person, background conversation, or utterances with no plausible intent to address an AI assistant — treat it as noise and stay genuinely silent. Do NOT call send_message or any other tool. Critically, do NOT write any spoken sentence about it either: on a voice/local turn your plain text reply is read aloud by TTS, so explaining "this looks like recognition noise, so I will stay silent" is self-defeating — that explanation itself becomes spoken sound, which is the opposite of silence. Instead reply with a SINGLE emoji and nothing else — prefer 👂 — with no words, punctuation, or reasoning before or after it. A lone emoji gives TTS nothing meaningful to speak, so it stays effectively silent while still showing on screen that you registered the input and deliberately chose not to act on it. Only answer normally when the input is reasonably addressed to you.')
     }
-    const ttsConfig = getTTSConfig()
-    const responseLanguage = ttsConfig.responseLanguage || 'auto'
+    const responseLanguage = responseLanguageForLang
     if (responseLanguage !== 'auto') {
       const langNames = { 'zh-cn': 'Chinese (Simplified)', 'zh-tw': 'Chinese (Traditional)', 'en': 'English', 'ja': 'Japanese', 'ko': 'Korean', 'es': 'Spanish' }
       const langName = langNames[responseLanguage] || responseLanguage
       directions.unshift(`Response language preference: The user has set their preferred response language to ${langName}. You MUST reply in ${langName}, regardless of the language the user spoke. The system will handle pronunciation automatically.`)
+      console.log(`[response-language] Injected direction for ${responseLanguage} (${langName}); isUserTurn=${isUserTurn}, channel=${msg?.channel}`)
+    } else {
+      console.log(`[response-language] responseLanguage is 'auto'; language auto-mirror enabled`)
+    }
+
+    // Telegram 渠道特殊策略：用戶看不到本地端圖片，必須走 generate_image + markdown URL
+    if (msg?.channel === 'TELEGRAM') {
+      directions.push('IMPORTANT — Telegram users cannot see local images. If the user asks you to generate an image, you MUST call the generate_image tool first and wait for its result. Do NOT send placeholder text like "在畫" or "Drawing". Once the image is generated, call send_message with the markdown image URL (e.g. ![image](/media/chat/<filename>)) embedded in the content field. The system will extract that URL and upload the photo to the chat. Bare text URLs without markdown image syntax will NOT be sent as photos.')
     }
 
     if (keyConfigFailDir) directions.unshift(keyConfigFailDir)

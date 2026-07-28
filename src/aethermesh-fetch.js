@@ -34,6 +34,6 @@ if (_netFetch) {
 }
 
 export async function aethermeshFetch(url, options = {}) {
-  if (_netFetch) return _netFetch(url, options)
+  if (_netFetch && isLocalURL(url)) return _netFetch(url, options)
   return _originalFetch(url, options)
 }

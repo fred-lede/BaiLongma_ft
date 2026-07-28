@@ -811,8 +811,11 @@ const createSettingsModal = () => `
             <div class="settings-row">
               <label class="settings-label" for="voice-lang-select">识别语言</label>
               <select class="settings-select" id="voice-lang-select">
-                <option value="zh-CN">中文（普通话）</option>
-                <option value="en-US">English (US)</option>
+                <option value="zh">中文</option>
+                <option value="en">English</option>
+                <option value="ja">日本語</option>
+                <option value="ko">한국어</option>
+                <option value="es">Español</option>
               </select>
             </div>
             <div class="settings-row">

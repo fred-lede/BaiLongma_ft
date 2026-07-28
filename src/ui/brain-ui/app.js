@@ -4334,6 +4334,8 @@ function initTTSSettings() {
         if (providerSel.value === "custom-openai" && customVoiceId?.value) currentVoice = customVoiceId.value.trim();
         else if (providerSel.value === "aethermesh" && aethermeshVoiceId?.value) currentVoice = aethermeshVoiceId.value.trim();
         if (currentVoice) { preBody.ttsVoiceId = currentVoice; activeTTSVoiceId = currentVoice; }
+        const responseLanguageEl = document.getElementById("tts-response-language");
+        if (responseLanguageEl) preBody.responseLanguage = responseLanguageEl.value;
         const minimaxKey2 = document.getElementById("tts-minimax-key")?.value?.trim();
         if (minimaxKey2) preBody.minimaxKey = minimaxKey2;
         const doubaoKey = document.getElementById("tts-doubao-key")?.value?.trim();
@@ -4362,10 +4364,21 @@ function initTTSSettings() {
           body: JSON.stringify(preBody),
         });
         if (testStatus) testStatus.textContent = "合成中…";
+        const responseLanguage = document.getElementById("tts-response-language")?.value || 'auto';
+        const testTexts = {
+          'auto': "你好，这是一段语音合成测试，听起来清晰自然吗？",
+          'zh-cn': "你好，这是一段语音合成测试，听起来清晰自然吗？",
+          'zh-tw': "你好，這是一段語音合成測試，聽起來清晰自然嗎？",
+          'en': "Hello, this is a voice synthesis test. Does it sound clear and natural?",
+          'ja': "こんにちは、これは音声合成テストです。明瞭で自然に聞こえますか？",
+          'ko': "안녕하세요, 이것은 음성 합성 테스트입니다. 명확하고 자연스럽게 들리나요?",
+          'es': "Hola, esta es una prueba de síntesis de voz. ¿Suena clara y natural?",
+        };
+        const testText = testTexts[responseLanguage] || testTexts['auto'];
         const ttsResp = await fetch(`${API}/tts/stream`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: "你好，这是一段语音合成测试，听起来清晰自然吗？" }),
+          body: JSON.stringify({ text: testText }),
         });
         if (!ttsResp.ok) {
           let errMsg = `合成失败（HTTP ${ttsResp.status}）`;

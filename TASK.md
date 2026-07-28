@@ -11,6 +11,11 @@
 - Telegram 語音消息（轉錄 + TTS 語音回覆）
 - TUI 語音輸入截斷修復（6s 靜音延遲/雙 WS flush）
 - 截圖移除 + 圖片上傳取代 + 影片上傳 + 幀提取
+- Response Language Selector（auto/zh-cn/zh-tw/en/ja/ko/es）— replace `aethermeshTranslate` checkbox
+- Response language direction 衝突修復（跳過 auto-mirror reminder 當 responseLanguage !== 'auto'）
+- Slow-ack 文案本地化（en/ja/ko/es，cover "我查一下"/"在画了"/"我跑一下"/etc.）
+- Telegram 圖片生成 direction 還原（upstream refactor 移除後手機收不到照片）
+- `sendTelegramMessage` bare-path fallback（防 LLM 偶爾沒包 markdown）
 
 ## Confirmed Working
 - AetherMesh 語音合成已通（POST /v1/audio/speech, xtts-v2 model）
@@ -20,6 +25,7 @@
 - 編譯後 EHOSTUNREACH 修復（smart global fetch patch）
 - 影片幀提取流程（ffmpeg 自動下載 + multipart 上傳 → frame extraction → data URL）
 - multipart 解析修正（以 boundary 為基準避免二進位誤判）
+- Response Language Selector + Telegram 圖片生成修復（commit `ca8f216` 之後使用者實測通過）
 
 ## Pending
 - AetherMesh ASR WebSocket（ws://192.168.1.200:8001）在編譯 app 中仍 EHOSTUNREACH

@@ -388,6 +388,23 @@ AetherMesh 也提供语音识别（ASR）服务。Bailongma 使用其 OpenAI 兼
 
 配置方式：在 Brain UI 的人物卡片面板中，选择 TTS 服务商（如 AetherMesh），填写该角色的声音 ID 和语言代码（如 `zh-tw`、`en`、`ja` 等）。
 
+### 回复语言（Response Language）
+
+设置面板中提供全局回复语言下拉（位于 TTS 设置页），可指定 AI 的回复语言，与输入语言解耦：
+
+| 值 | 行为 |
+| --- | --- |
+| `auto`（默认） | 跟随用户当前消息的语言（mirror）。原"语言提醒"direction 会注入。 |
+| `zh-cn` / `zh-tw` / `en` / `ja` / `ko` / `es` | 不论用户使用什么语言，AI 一律以该语言回复。同时 TTS 以该语言发音。 |
+
+技术细节：
+
+- 持久化栏位：`tts.responseLanguage`（位于 `config.json`）。
+- Direction 注入点：`src/index.js` 的 `runTurn()`，放在 `directions` 陣列最前（最高優先）。
+- `auto` 与显式偏好互斥：当 `responseLanguage !== 'auto'` 时**跳过**原 auto-mirror `Language reminder`，避免两条相反方向互相冲突（fork 經驗：模型會以鏡像 direction 蓋過偏好設定）。
+- **Slow-ack 本地化**：耗时工具的"我查一下…"ack 文字原本全中文硬編碼，現在按 `responseLanguage` 回傳對應語言版本（`en`、`ja`、`ko`、`es`），覆蓋 web_search/read、generate_image、exec_command 等 ack。
+- Test 按鈕：在設置面板按"TTS 測試"按鈕時，會按當前選擇的 `responseLanguage` 發送對應語言的測試文案。
+
 ## 社交连接器
 
 ### Discord
@@ -420,6 +437,8 @@ TELEGRAM_BOT_TOKEN=<your-bot-token>
 - 消息进入主循环统一处理，回复按渠道路由返回 Telegram
 - 支持 SSE 事件流推送社交状态变化
 - **语音消息收发**：语音消息自动转文字（AetherMesh Whisper），回复以 TTS 语音返回。可通过 `/voice auto|on|off` 命令控制模式。需先配置 AetherMesh 语音服务。
+- **图像生成回传**：当用户要求"画一张…"时，注入 Telegram 专屬 direction 提示 LLM 调用 `generate_image` 工具，并以 markdown 图片语法 `![image](/media/chat/<filename>)` 包在 `send_message` content 中；`sendTelegramMessage` 解析该 markdown（或裸路径 fallback）后通过 `sendPhoto` 上传照片到聊天。
+- **回复语言**（共用所有渠道）：见 [回复语言](#回复语言-response-language) 章节。
 
 ## 数据与持久化
 

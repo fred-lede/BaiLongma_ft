@@ -74,3 +74,39 @@
 - **build:win pipeline**: Extended to `... && node scripts/postbuild-fix-win.mjs` as a final verification step.
 - **README.md**: Added cross-compile ABI mismatch explanation and new build step documentation.
 - **install-win-native.mjs**: Replaced Windows skip with Electron prebuilt download + optional electron-rebuild fallback. Backup always saved for `postbuild-fix-win.mjs`.
+
+## 2026-07-28
+
+### Fixed
+
+- **Response language not respected despite config being saved** — Two conflicting directions were injected on every user turn:
+  - `src/index.js:978` injected `"mirror the current message language"` (auto-detection by user input).
+  - `src/index.js:1015` later injected `"MUST reply in ${langName}, regardless of the language the user spoke"` when `responseLanguage !== 'auto'`.
+  - Even though the preference direction was queued ahead of the mirror reminder (higher priority), the opposing instruction confused the model — it kept replying in the user's language (Chinese voice → Chinese reply instead of configured English).
+  - **Fix**: Skip the auto-mirror Language reminder when `responseLanguage !== 'auto'`. Single source of truth for the language directive.
+  - Added `[response-language] Injected direction for ${lang} (${langName}); ...` debug log so it's easy to verify at runtime which branch fired.
+
+- **Slow-ack spoken in Chinese despite `responseLanguage: "en"`** — `src/llm.js:slowAckText()` returned hardcoded Chinese strings (`"我查一下「${q}」～"`, `"在画了，稍等一下～"`, `"我跑一下～"`, etc.) that bypassed the LLM entirely. The ack path triggers `onToolCall('send_message', { __ack: true }, ...)` which fires TTS — so the user heard `"我查一下..."` in Chinese before the final English reply.
+  - **Fix**: `slowAckText` now reads `getTTSConfig().responseLanguage` and returns localized ack text for `en/ja/ko/es`; falls back to Chinese for `auto`/`zh-cn`/`zh-tw` and unmapped languages. Added `getTTSConfig` import to `src/llm.js`.
+
+- **Telegram received no photo for generated images** — User reported: send Telegram voice `"請畫一張古裝美女"` with `responseLanguage: "en"`, TUI shows the generated image but phone gets nothing.
+  - **Root cause investigation**: Diff against old fork commit `8a8968e` (found via `git log --all --grep="photo"`) revealed that fork used to inject a Telegram-specific direction telling the LLM to call `generate_image` then embed `![image](/media/chat/<filename>)` markdown in `send_message`. Upstream refactor (`upstream/refactor/codebase`) had dropped this direction, so the LLM defaulted to the raw `generate_image` tool return (`"图片已生成（1 张）：\n/media/chat/abc.png"`) — a **bare text path** without markdown image syntax. `sendTelegramMessage`'s markdown regex (`/!\[.*?\]\(\/media\/chat\/([^)\s]+)\)/`) didn't match, and the bot fell back to `sendMessage` (text only, photo never reached the user).
+  - **Fix 1**: Restored Telegram direction in `src/index.js` (with slight improvements: bilingual placeholder examples, explicit warning that bare URLs will not be sent as photos).
+  - **Fix 2**: Added bare-path fallback regex in `sendTelegramMessage` — if markdown match fails, also match `(^|\s)\/media\/chat\/([^\s)]+?)(?=[\s)\u3000]|$)` to catch the filename. Caption strips whichever form matched.
+
+### Verification
+- **Response Language + Telegram image**: `responseLanguage: "en"` + Chinese voice `"請畫一張古裝美女"` →
+  - TUI shows the generated image (expected).
+  - Phone Telegram receives the actual photo via `sendPhoto` (fixed).
+  - First ack: `"Drawing, just a sec~"` (English, correct pronunciation).
+  - Final reply: English with the image URL embedded as markdown.
+
+### Changed
+- Added `CLAUDE.md` at repo root documenting Response Language, Telegram Image Direction, Telegram message routing (TUI display twice), voice channels, and important config quirks (post-refactor `readExistingStoredConfig`/`writeStoredConfig`).
+- Updated `docs/superpowers/plans/2026-07-27-response-language-selector.md` with a "Follow-up: Conflict Resolution & Localized Slow-ack" section.
+- Added `docs/superpowers/plans/2026-07-28-telegram-image-direction.md` documenting the regression discovery and fix.
+- Updated `README.md`: documented Telegram 图像生成回传 and added 回复语言 (Response Language) section.
+- Updated `TASK.md` Completed list with the new fixes.
+
+### Commit
+- `ca8f216 fix: response language conflicts + localized slow-ack + Telegram image direction`

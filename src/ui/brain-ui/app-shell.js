@@ -302,6 +302,11 @@ const createSettingsModal = () => `
               <span class="settings-config-info" id="settings-cfg-llm">—</span>
               <span class="settings-config-dot" id="settings-cfg-llm-dot"></span>
             </div>
+            <div class="settings-config-row">
+              <span class="settings-config-type">VLM</span>
+              <span class="settings-config-info" id="settings-cfg-vlm">—</span>
+              <span class="settings-config-dot" id="settings-cfg-vlm-dot"></span>
+            </div>
           </div>
           <div class="settings-section">
             <div class="settings-section-label">切换配置</div>
@@ -782,11 +787,16 @@ const createSettingsModal = () => `
                 </select>
               </div>
               <div class="settings-row">
-                <label class="settings-label" for="tts-aethermesh-translate">实时翻译</label>
-                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--ink2);">
-                  <input type="checkbox" id="tts-aethermesh-translate" />
-                  语音对话时自动翻译为目标语言
-                </label>
+                <label class="settings-label" for="tts-response-language">回复语言</label>
+                <select class="settings-input" id="tts-response-language">
+                  <option value="auto">自动（跟随输入语言）</option>
+                  <option value="zh-cn">中文（简体）</option>
+                  <option value="zh-tw">中文（繁体）</option>
+                  <option value="en">English</option>
+                  <option value="ja">日本語</option>
+                  <option value="ko">한국어</option>
+                  <option value="es">Español</option>
+                </select>
               </div>
             </div>
 

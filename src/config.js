@@ -28,7 +28,7 @@ export const DEFAULT_CONTEXT_MESSAGE_LIMIT = 20
 export const CONTEXT_TOOL_LIMIT_MIN = 0
 export const DEFAULT_CONTEXT_TOOL_LIMIT = 5
 
-const LEGACY_PLAYWRIGHT_BROWSER_TOOLS = Object.freeze([
+const BAILONGMA_CHROME_BROWSER_TOOLS = Object.freeze([
   'browser_navigate',
   'browser_navigate_back',
   'browser_navigate_forward',
@@ -52,11 +52,14 @@ const LEGACY_PLAYWRIGHT_BROWSER_TOOLS = Object.freeze([
 ])
 
 const LEGACY_BLOCKED_TOOL_MIGRATIONS = Object.freeze({
-  playwright_browser: LEGACY_PLAYWRIGHT_BROWSER_TOOLS,
-  web_search: LEGACY_PLAYWRIGHT_BROWSER_TOOLS,
-  web_read: LEGACY_PLAYWRIGHT_BROWSER_TOOLS,
-  fetch_url: LEGACY_PLAYWRIGHT_BROWSER_TOOLS,
-  browser_read: LEGACY_PLAYWRIGHT_BROWSER_TOOLS,
+  // Keep the former UI key readable so an existing security configuration
+  // still blocks the same public browser_* authority after the migration.
+  playwright_browser: BAILONGMA_CHROME_BROWSER_TOOLS,
+  chrome_devtools_browser: BAILONGMA_CHROME_BROWSER_TOOLS,
+  web_search: BAILONGMA_CHROME_BROWSER_TOOLS,
+  web_read: BAILONGMA_CHROME_BROWSER_TOOLS,
+  fetch_url: BAILONGMA_CHROME_BROWSER_TOOLS,
+  browser_read: BAILONGMA_CHROME_BROWSER_TOOLS,
   browser_open: ['browser_navigate'],
   browser_inspect: ['browser_snapshot', 'browser_find'],
   browser_act: [

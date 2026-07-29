@@ -1,5 +1,5 @@
 import { isExplicitAgentBrowserDataDeletionRequest } from '../../mcp/browser-data-intent.js'
-import { shutdownBuiltInPlaywright } from '../../mcp/client-manager.js'
+import { shutdownBuiltInChrome } from '../../mcp/client-manager.js'
 
 const ALLOWED_DATA_TYPES = new Set(['history', 'cookies', 'site_data', 'cache'])
 const ALLOWED_TIME_RANGES = new Set([
@@ -28,8 +28,8 @@ function normalizeArguments(args = {}) {
   if (timeRange === 'custom' && !String(args.since || '').trim()) {
     throw new TypeError('since is required when time_range is custom')
   }
-  if (dataTypes.some(value => value !== 'history') && timeRange !== 'all_time') {
-    const error = new Error('cookies, site_data, and cache require time_range=all_time; Electron cannot reliably delete them by creation time')
+  if (timeRange !== 'all_time') {
+    const error = new Error('BaiLongma dedicated Chrome data can only be cleared as all_time; it never accesses the user\'s default Chrome profile.')
     error.code = 'PROFILE_TIME_RANGE_UNSUPPORTED'
     throw error
   }
@@ -67,17 +67,16 @@ export async function execBrowserClearData(args = {}, context = {}) {
     return failure(error?.code || 'INVALID_ARGUMENTS', error?.message || String(error))
   }
 
-  const bridge = context.browserDataBridge || globalThis.bailongmaBrowserEmbedBridge
+  const bridge = context.browserDataBridge || globalThis.bailongmaChromeBridge
   if (!bridge || typeof bridge.closePage !== 'function' || typeof bridge.clearData !== 'function') {
     return failure('BROWSER_DATA_BRIDGE_UNAVAILABLE', 'The built-in browser data service is unavailable.')
   }
 
-  const shutdown = context.shutdownBuiltInPlaywrightFn || shutdownBuiltInPlaywright
+  const shutdown = context.shutdownBuiltInChromeFn || shutdownBuiltInChrome
   try {
-    // Detach MCP before destroying its CDP target. The persistent Electron
-    // partition is deliberately left intact until the explicit clearData call.
-    await shutdown({ role: 'interactive' })
-    await shutdown({ role: 'reader' })
+    // Detach only BaiLongma's DevTools MCP before removing its dedicated
+    // profile. The user's system/default Chrome is never a target here.
+    await shutdown()
     await bridge.closePage()
     const cleared = await bridge.clearData(request)
     return JSON.stringify({
@@ -90,8 +89,8 @@ export async function execBrowserClearData(args = {}, context = {}) {
         mode: context.browserDisplayState?.mode === 'window' ? 'window' : 'card',
         state: 'closed',
         action: 'browser_clear_data',
-        native_view: true,
-        page_destroyed: true,
+        renderer: 'webcontentsview',
+        surface: 'bailongma_live_browser',
       },
     }, null, 2)
   } catch (error) {

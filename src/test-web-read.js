@@ -1,7 +1,7 @@
 // Regression contract after removing the legacy in-process web tools.
 //
 // The old names must remain unavailable to the model/executor while the
-// built-in Microsoft Playwright MCP keeps native browser_* tools usable.
+// built-in Chrome DevTools MCP keeps the stable browser_* tools usable.
 //
 // Run: node src/test-web-read.js
 
@@ -15,7 +15,7 @@ process.env.BAILONGMA_USER_DIR = tempUserDir
 process.env.BAILONGMA_RESOURCES_DIR = process.cwd()
 
 const LEGACY_WEB_TOOLS = ['web_search', 'web_read', 'fetch_url', 'browser_read']
-const FORBIDDEN_PLAYWRIGHT_TOOLS = [
+const FORBIDDEN_CHROME_TOOLS = [
   'browser_run_code_unsafe',
   'browser_evaluate',
   'browser_file_upload',
@@ -36,7 +36,7 @@ const {
 
 const advertisedTools = [
   {
-    name: 'browser_navigate',
+    name: 'navigate_page',
     description: 'Navigate to a URL',
     inputSchema: {
       type: 'object',
@@ -46,12 +46,12 @@ const advertisedTools = [
     annotations: { readOnlyHint: false, destructiveHint: true },
   },
   {
-    name: 'browser_snapshot',
+    name: 'take_snapshot',
     description: 'Capture accessibility snapshot',
     inputSchema: { type: 'object', properties: {} },
     annotations: { readOnlyHint: true, destructiveHint: false },
   },
-  ...FORBIDDEN_PLAYWRIGHT_TOOLS.map(name => ({
+  ...FORBIDDEN_CHROME_TOOLS.map(name => ({
     name,
     description: `Forbidden ${name}`,
     inputSchema: { type: 'object', properties: {} },
@@ -81,7 +81,7 @@ class FakeClient {
     return {
       content: [{
         type: 'text',
-        text: request.name === 'browser_snapshot'
+        text: request.name === 'take_snapshot'
           ? '### Page\n- Page URL: https://example.com/\n### Snapshot\n- heading "Example Domain" [ref=e1]'
           : `called:${request.name}`,
       }],
@@ -96,12 +96,10 @@ class FakeClient {
 const mcpDeps = {
   ClientClass: FakeClient,
   TransportClass: FakeTransport,
+  chromeBridge: { ensureEndpoint: async () => 'http://127.0.0.1:9222' },
   builtInOptions: {
-    cliPath: path.join(tempUserDir, 'playwright-mcp-cli.js'),
+    cliPath: path.join(tempUserDir, 'chrome-devtools-mcp.js'),
     command: '/fake/node',
-    resourcesDir: process.cwd(),
-    userDir: tempUserDir,
-    sandboxDir: path.join(tempUserDir, 'sandbox'),
     electronRuntime: false,
   },
 }
@@ -129,11 +127,11 @@ try {
   await reconcileMcpClients([], mcpDeps)
   const tools = listMcpTools()
   assert.ok(tools.some(tool => tool.name === 'browser_navigate' && tool.builtIn === true),
-    'built-in Playwright navigation remains model-visible under its native name')
+    'built-in dedicated-Chrome navigation remains model-visible under its native name')
   assert.ok(tools.some(tool => tool.name === 'browser_snapshot' && tool.builtIn === true),
-    'built-in Playwright snapshot remains model-visible under its native name')
-  assert.ok(FORBIDDEN_PLAYWRIGHT_TOOLS.every(name => !tools.some(tool => tool.name === name)),
-    'forbidden upstream Playwright tools stay outside the exposed catalog')
+    'built-in dedicated-Chrome snapshot remains model-visible under its native name')
+  assert.ok(FORBIDDEN_CHROME_TOOLS.every(name => !tools.some(tool => tool.name === name)),
+    'forbidden upstream Chrome tools stay outside the exposed catalog')
   assert.equal(
     evaluateToolPolicy('browser_navigate', { url: 'https://example.com' }, { autonomous: true }).allowed,
     false,
@@ -145,13 +143,13 @@ try {
       startupSelfCheck: { active: true },
     }).allowed,
     true,
-    'startup self-check has a narrow built-in Playwright navigation exception',
+    'startup self-check has a narrow built-in dedicated-Chrome navigation exception',
   )
 
   assert.deepEqual(
     getToolSchemas([...LEGACY_WEB_TOOLS, 'browser_snapshot']).map(schema => schema.function.name),
     ['browser_snapshot'],
-    'schema loading replaces removed web tools with the native Playwright tool',
+    'schema loading replaces removed web tools with the native dedicated-Chrome tool',
   )
 
   const snapshot = JSON.parse(await executeTool(
@@ -163,7 +161,7 @@ try {
   assert.equal(snapshot.remote_tool, 'browser_snapshot')
   assert.match(snapshot.content?.[0]?.text || '', /Example Domain/)
 
-  console.log('test-web-read passed: legacy web tools removed; Playwright MCP remains usable')
+  console.log('test-web-read passed: legacy web tools removed; Chrome DevTools MCP remains usable')
 } finally {
   await shutdownMcpClients()
   fs.rmSync(tempUserDir, { recursive: true, force: true })

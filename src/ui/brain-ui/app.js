@@ -5,6 +5,7 @@ import { initChat, friendlyChannelLabel } from "./chat.js";
 import { initPanelCollapse } from "./panel-collapse.js";
 import { ThoughtStream } from "./thought-stream.js";
 import { initVoicePanel } from "./voice-panel.js";
+import { shouldHandlePttKeyEvent } from "./voice-ptt.js";
 import { initHotspot, toggleHotspot, setHotspotMode, moveVoicePanelToBody, restoreVoicePanel } from "./hotspot.js";
 import { initWorldcup, toggleWorldcup, setWorldcupMode } from "./worldcup.js";
 import { initTyphoon, toggleTyphoon, setTyphoonMode } from "./typhoon.js";
@@ -1203,11 +1204,10 @@ const cognitionStateEl = document.getElementById("cognition-state");
 const l3StateEl = document.getElementById("l3-state");
 const cognitionEmptyEl = document.getElementById("cognition-empty");
 const BROWSER_PREVIEW_TRANSITION_MS = 480;
-const browserEmbedBridge = window.bailongma?.isElectron
-  && typeof window.bailongma?.browserEmbed?.update === "function"
-  && typeof window.bailongma?.browserEmbed?.hide === "function"
-  ? window.bailongma.browserEmbed
-  : null;
+// The native WebContentsView is the actual page controlled by the browser MCP.
+// It is layered into this DOM slot by the main process, so compact mode remains
+// live and interactive instead of displaying a periodically refreshed image.
+const browserEmbedBridge = window.bailongma?.browserEmbed || null;
 let browserPreviewObjectUrl = "";
 let browserPreviewLoadToken = 0;
 let browserPreviewActive = false;
@@ -1392,7 +1392,7 @@ function browserEmbedPayload() {
     },
     radius: Math.round(radius * rendererZoom),
     ...(browserPreviewNativeUrl ? { url: browserPreviewNativeUrl } : {}),
-    interactive: false,
+    interactive: true,
   };
 }
 
@@ -1545,7 +1545,7 @@ function prepareBrowserPreview(data = {}) {
     void showNativeBrowserPreview({ ...data, transition: true });
     return;
   }
-  // Once the live page is visible, keep it on screen while Playwright clicks,
+  // Once the card preview is visible, keep it on screen while Chrome actions
   // types, scrolls, or navigates. Only the very first load waits off-screen;
   // browser_close owns the later decision to dismiss the surface.
   if (!browserPreviewActive) concealBrowserPreviewForAction();
@@ -1702,12 +1702,11 @@ async function loadBrowserPreviewImage(data = {}) {
 }
 
 function handleBrowserPreviewEvent(data = {}) {
-  if (data.mode === "window" && browserEmbedBridge) {
-    if (data.state === "closed" || data.state === "failed") {
-      hideBrowserPreview();
-    } else if (data.state === "ready") {
-      void showNativeBrowserWindow(data);
-    }
+  if (data.mode === "window") {
+    // Large mode detaches the same live WebContentsView into its own window;
+    // no reload, screenshot swap, or browser-profile handoff is involved.
+    if (browserEmbedBridge && data.state === "ready") void showNativeBrowserWindow(data);
+    else hideBrowserPreview();
     return;
   }
   if (data.mode !== "card") return;
@@ -4451,7 +4450,7 @@ function initTTSSettings() {
 
   lanAddressSelect?.addEventListener("change", showSelectedLanAccessEntry);
 
-  const PLAYWRIGHT_BROWSER_TOOL_NAMES = [
+  const BAILONGMA_CHROME_BROWSER_TOOL_NAMES = [
     "browser_navigate", "browser_navigate_back", "browser_navigate_forward", "browser_reload", "browser_snapshot", "browser_find",
     "browser_click", "browser_type", "browser_fill_form", "browser_select_option",
     "browser_press_key", "browser_hover", "browser_drag", "browser_wait_for",
@@ -4468,8 +4467,8 @@ function initTTSSettings() {
       restartSecurityBtn?.classList.add("hidden");
       document.querySelectorAll(".security-blocked-tool").forEach(cb => {
         const blocked = security.blockedTools || [];
-        cb.checked = cb.value === "playwright_browser"
-          ? PLAYWRIGHT_BROWSER_TOOL_NAMES.every(name => blocked.includes(name))
+        cb.checked = cb.value === "chrome_devtools_browser"
+          ? BAILONGMA_CHROME_BROWSER_TOOL_NAMES.every(name => blocked.includes(name))
           : blocked.includes(cb.value);
       });
     } catch {}
@@ -6262,14 +6261,10 @@ initTyphoon();
   // Push-to-talk：按住空格说话；Agent 正在说话时按下空格直接打断
   (() => {
     let pttHeld = false;
-    const isSpace = (e) => e.code === "Space" || e.key === " " || e.key === "Spacebar";
-    const isTypingTarget = (t) =>
-      !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
+    const messageInput = document.getElementById("msg-input");
 
     window.addEventListener("keydown", (e) => {
-      if (!isSpace(e)) return;
-      if (isTypingTarget(e.target)) return;
-      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+      if (!shouldHandlePttKeyEvent(e, messageInput)) return;
       e.preventDefault();
       if (e.repeat) return;
       if (pttHeld) return;
@@ -6281,7 +6276,8 @@ initTyphoon();
     }, { capture: true });
 
     window.addEventListener("keyup", (e) => {
-      if (!isSpace(e)) return;
+      const isSpace = e.code === "Space" || e.key === " " || e.key === "Spacebar";
+      if (!isSpace) return;
       if (!pttHeld) return;
       pttHeld = false;
       document.body.classList.remove("ptt-active");

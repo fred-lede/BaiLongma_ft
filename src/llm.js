@@ -376,8 +376,19 @@ function isAuthenticationError(err) {
 function abortableSleep(ms, signal) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(Object.assign(new Error('Aborted'), { name: 'AbortError' }))
-    const timer = setTimeout(resolve, ms)
-    const onAbort = () => { clearTimeout(timer); reject(Object.assign(new Error('Aborted'), { name: 'AbortError' })) }
+    let settled = false
+    const cleanup = () => signal?.removeEventListener('abort', onAbort)
+    const finish = (callback) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      callback()
+    }
+    const timer = setTimeout(() => finish(resolve), ms)
+    const onAbort = () => finish(() => {
+      clearTimeout(timer)
+      reject(Object.assign(new Error('Aborted'), { name: 'AbortError' }))
+    })
     signal?.addEventListener('abort', onAbort, { once: true })
   })
 }
@@ -1020,6 +1031,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
   let actionClaimNudgeUsed = false
   let actionCompletionNudgeUsed = false
   let actionContractEvidence = null
+  const actionContractSuccessfulTools = new Set()
   // 层 3：本 turn 是否已发过"不确定回退"软检查点（一 turn 一次，见 buildUncertaintyCheckpointNudge）。
   let uncertaintyNudgeUsed = false
   const toolLoopState = createToolLoopState()
@@ -1184,7 +1196,9 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
           allContent = fixedReply
           break
         }
-        const completionIssue = actionContractCompletionIssue(actionContract, allContent)
+        const completionIssue = actionContractCompletionIssue(actionContract, allContent, {
+          successfulToolNames: actionContractSuccessfulTools,
+        })
         if (completionIssue) {
           if (!actionCompletionNudgeUsed) {
             if (content) messages.push({ role: 'assistant', content })
@@ -1377,7 +1391,9 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
           && !actionContractSatisfied
           && (!actionContractAttempted || containsUnsupportedCompletionClaim(normalizedArgs.content))
         const actionContractCompletionProblem = tc.name === 'send_message' && actionContractSatisfied
-          ? actionContractCompletionIssue(actionContract, normalizedArgs.content)
+          ? actionContractCompletionIssue(actionContract, normalizedArgs.content, {
+              successfulToolNames: actionContractSuccessfulTools,
+            })
           : ''
         if (actionContractCompletionProblem) {
           actionContractSendSuppressed = true
@@ -1462,6 +1478,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
             actionContractAttempted = true
             if (actionContractToolSucceeded(actionContract, tc.name, result)) {
               actionContractSatisfied = true
+              actionContractSuccessfulTools.add(tc.name)
               actionContractEvidence = { name: tc.name, args: normalizedArgs, result }
             }
           }

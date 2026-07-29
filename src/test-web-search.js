@@ -19,6 +19,7 @@ const REQUIRED_SEARCH_CHAIN = [
   'browser_snapshot',
   'browser_find',
   'browser_click',
+  'browser_type',
 ]
 
 function capabilityContext(messageBody) {
@@ -42,7 +43,7 @@ assert.ok(!listCapabilities().some(capability => capability.id === 'web'),
 
 for (const messageBody of [
   '搜一下 vLLM 最新版本',
-  'search the web for the current Playwright MCP documentation',
+  'search the web for the current Chrome DevTools MCP documentation',
   '总结网页正文 https://example.com/article',
   '读取这个 JavaScript 动态网页正文',
 ]) {
@@ -59,22 +60,25 @@ for (const messageBody of [
 const discovered = findCapabilitiesByQuery('上网搜索').find(capability => capability.id === 'interactive-browser')
 assert.ok(discovered, 'find_tool discovery resolves web search to the interactive-browser capability')
 assert.deepEqual(discovered.tools, BROWSER_CAPABILITY_TOOLS,
-  'discovery returns the fixed native Playwright allowlist plus display-mode switching')
+  'discovery returns the fixed dedicated-Chrome allowlist plus display-mode switching')
 
-const context = capabilityContextBlocks(capabilityContext('帮我上网搜索 Playwright MCP'))
+const context = capabilityContextBlocks(capabilityContext('帮我上网搜索 Chrome DevTools MCP'))
   .join('\n')
 assert.match(context, /browser_navigate/)
-assert.match(context, /bing\.com\/search\?q=/)
+assert.match(context, /https:\/\/www\.baidu\.com/)
 assert.match(context, /browser_snapshot/)
 assert.match(context, /browser_click/)
-assert.match(context, /automatically return a fresh accessibility snapshot/)
+assert.match(context, /browser_type/)
+assert.match(context, /Do not put keywords in a search-engine URL/)
+assert.doesNotMatch(context, /bing\.com\/search\?q=/)
+assert.match(context, /actions return a fresh accessibility snapshot/)
 assert.match(context, /instead of routinely calling browser_snapshot/)
 assert.match(context, /CAPTCHA\/challenge page/)
 assert.match(context, /hard stop for automated web access in the current user turn/)
 assert.match(context, /Do not navigate to another provider/)
 assert.match(context, /Continue only in a new user turn after the user confirms/)
-assert.match(context, /pass the raw target value "e36"/)
-assert.match(context, /share the same persistent browser profile/)
+assert.match(context, /Chrome DevTools uid values[\s\S]*latest raw uid/)
+assert.match(context, /dedicated Chrome profile/)
 assert.match(context, /do not replace it with model memory for current\/latest\/recent facts/)
 assert.match(context, /Count and name only sources that actually loaded/)
 for (const name of LEGACY_WEB_TOOLS) {
@@ -90,4 +94,4 @@ const sparse = selectTools({
 assert.ok(BROWSER_TOOLS.every(name => !sparse.includes(name)),
   'browser tools are not injected into an unrelated sparse turn')
 
-console.log('test-web-search passed: search/read intents route exclusively through Playwright MCP')
+console.log('test-web-search passed: search/read intents route exclusively through Chrome DevTools MCP')

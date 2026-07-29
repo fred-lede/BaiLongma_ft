@@ -5,23 +5,18 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js'
 import { config } from '../config.js'
+import { createMergedAbortSignal } from '../capabilities/abort-utils.js'
 import { assertWebUrlAllowed } from '../capabilities/tools/web/url-policy.js'
 import { getRuntimeMcpServers } from './config.js'
 import {
-  BUILTIN_PLAYWRIGHT_ALLOWED_TOOLS,
-  BUILTIN_PLAYWRIGHT_INTERACTIVE_ID,
-  BUILTIN_PLAYWRIGHT_READER_ID,
-  createBuiltInEmbeddedPlaywrightConfig,
-  getBuiltInMcpServers,
-  getBuiltInPlaywrightServer,
-  getBuiltInPlaywrightToolDescriptor,
-  isBuiltInPlaywrightToolAllowed,
-} from './playwright-server.js'
-import {
-  connectEmbeddedPlaywright,
-  getEmbeddedBrowserBridge,
-  resolveEmbeddedBrowserTarget,
-} from './embedded-playwright-connection.js'
+  BUILTIN_BROWSER_ALLOWED_TOOLS,
+  BUILTIN_CHROME_DEVTOOLS_ID,
+  adaptBrowserToolCall,
+  createBuiltInChromeDevtoolsServer,
+  getBuiltInBrowserToolDescriptor,
+  isBuiltInBrowserToolAllowed,
+  isProtectedLoginUrl,
+} from './chrome-devtools-server.js'
 import {
   createBrowserPreviewFilename,
   isCardBrowserDisplayMode,
@@ -30,12 +25,8 @@ import {
 } from './browser-display.js'
 
 const MAX_TOOL_RESULT_CHARS = 100_000
-const MAX_TEXT_CONTENT_CHARS = 60_000
-const MAX_AUTO_SNAPSHOT_CHARS = 50_000
-const MAX_AUTO_SNAPSHOT_BYTES = 200_000
-const PLAYWRIGHT_SNAPSHOT_LINK_RE = /^[ \t]*(?:-[ \t]*)?\[Snapshot\]\(([^)\r\n]+)\)[ \t]*$/gim
-const PLAYWRIGHT_SNAPSHOT_FILE_RE = /^page-[A-Za-z0-9_.:-]+\.ya?ml$/i
-const PLAYWRIGHT_PREVIEW_ACTIONS = new Set([
+const MAX_TEXT_CONTENT_CHARS = 90_000
+const BROWSER_PREVIEW_ACTIONS = new Set([
   'browser_navigate',
   'browser_navigate_back',
   'browser_navigate_forward',
@@ -59,7 +50,23 @@ const connections = new Map()
 const toolsByAlias = new Map()
 const pendingConnections = new Map()
 let shuttingDown = false
-let builtInPlaywrightProfileQueue = Promise.resolve()
+let builtInChromeQueue = Promise.resolve()
+
+async function callToolWithScopedSignal(client, request, { timeout, signal } = {}) {
+  // The MCP SDK may retain an abort listener until its complete timeout path
+  // settles. Never hand a turn-long shared signal directly to dozens of tool
+  // calls; give each call a scoped child and detach it immediately afterward.
+  const scoped = createMergedAbortSignal(signal)
+  try {
+    return await client.callTool(
+      request,
+      undefined,
+      { timeout, ...(scoped?.signal ? { signal: scoped.signal } : {}) },
+    )
+  } finally {
+    scoped?.cleanup()
+  }
+}
 
 function shortHash(value) {
   return crypto.createHash('sha256').update(String(value)).digest('hex').slice(0, 10)
@@ -135,15 +142,15 @@ function rebuildToolCatalog() {
         allowAutonomousReadOnly: connection.config.allowAutonomousReadOnly === true,
         timeoutMs: connection.config.timeoutMs,
         builtIn: connection.config.builtIn === true,
-        playwrightRole: connection.config.playwrightRole || '',
+        chromeDevtools: connection.config.chromeDevtools === true,
       })
     }
   }
 }
 
 function isRemoteToolAllowed(server, remoteName) {
-  if (server?.builtIn === true && server?.playwrightRole) {
-    return isBuiltInPlaywrightToolAllowed(remoteName)
+  if (server?.builtIn === true && server?.chromeDevtools === true) {
+    return isBuiltInBrowserToolAllowed(remoteName)
       && Array.isArray(server.allowedTools)
       && server.allowedTools.includes(remoteName)
   }
@@ -169,34 +176,7 @@ async function listAllTools(client, timeoutMs) {
 async function closeConnection(connection) {
   if (!connection) return
   connection.intentionalClose = true
-  if (
-    connection.embedded !== true
-    &&
-    connection.status === 'connected'
-    && connection.config?.builtIn === true
-    && connection.config?.playwrightRole
-    && connection.remoteTools?.some(tool => tool.name === 'browser_close')
-  ) {
-    try {
-      // Closing only the MCP transport terminates Chromium too abruptly for
-      // session-only cookies and the last tab session to be written reliably.
-      // Ask the official server to close its browser context first; together
-      // with --restore-last-session this provides a complete profile handoff.
-      const closeBrowser = () => connection.client.callTool(
-        { name: 'browser_close', arguments: {} },
-        undefined,
-        { timeout: Math.min(connection.config.timeoutMs, 10_000) },
-      )
-      const resultPromise = connection.callQueue.catch(() => {}).then(closeBrowser)
-      connection.callQueue = resultPromise.then(() => undefined, () => undefined)
-      await resultPromise
-    } catch {}
-  }
-  if (connection.embeddedHandle?.close) {
-    try { await connection.embeddedHandle.close() } catch {}
-  } else {
-    try { await connection.client?.close() } catch {}
-  }
+  try { await connection.client?.close() } catch {}
   connection.status = 'disconnected'
 }
 
@@ -289,110 +269,21 @@ async function connectServer(server, { ClientClass = Client, TransportClass = St
   return connection
 }
 
-function embeddedBridgeForDeps(deps = {}) {
-  if (Object.prototype.hasOwnProperty.call(deps, 'embeddedBrowserBridge')) {
-    return getEmbeddedBrowserBridge({ bridge: deps.embeddedBrowserBridge })
-  }
-  return getEmbeddedBrowserBridge()
+function chromeBridgeForDeps(deps = {}) {
+  const bridge = deps.chromeBridge || globalThis.bailongmaChromeBridge
+  return bridge && typeof bridge.ensureEndpoint === 'function' ? bridge : null
 }
 
-async function connectEmbeddedServer(server, deps = {}) {
-  const connection = {
-    config: server,
-    client: null,
-    transport: null,
-    status: 'connecting',
-    error: '',
-    remoteTools: [],
-    intentionalClose: false,
-    callQueue: Promise.resolve(),
-    updatedAt: new Date().toISOString(),
-    embedded: true,
-    embeddedHandle: null,
-    embeddedTarget: null,
-  }
-  connections.set(server.id, connection)
-
-  try {
-    const bridge = embeddedBridgeForDeps(deps)
-    if (!bridge) throw new Error('embedded browser bridge is unavailable')
-    const target = deps.resolvedEmbeddedTarget
-      || await (deps.resolveEmbeddedBrowserTargetFn || resolveEmbeddedBrowserTarget)({ bridge })
-    if (!target) throw new Error('embedded browser target is unavailable')
-    const builtInOptions = deps.builtInOptions || {}
-    const mcpConfig = createBuiltInEmbeddedPlaywrightConfig({
-      resourcesDir: builtInOptions.resourcesDir,
-      sandboxDir: builtInOptions.sandboxDir,
-      allowPrivateNetwork: server.allowPrivateNetwork === true,
-      nativeNetworkGuard: target.nativeNetworkGuard === true,
-    })
-    // Keep automatic snapshot artifacts under the same trusted output root
-    // used by the built-in interactive server/result hydrator.
-    mcpConfig.outputDir = server.cwd
-    const handle = await (deps.connectEmbeddedPlaywrightFn || connectEmbeddedPlaywright)({
-      target,
-      mcpConfig,
-      ...(deps.embeddedPlaywrightOptions || {}),
-    })
-    connection.client = handle.client
-    connection.transport = handle.transport
-    connection.embeddedHandle = handle
-    connection.embeddedTarget = handle.target || target
-
-    const client = handle.client
-    client.onerror = err => {
-      connection.error = err?.message || String(err)
-      connection.updatedAt = new Date().toISOString()
-    }
-    client.onclose = () => {
-      connection.status = 'disconnected'
-      connection.updatedAt = new Date().toISOString()
-      if (!connection.intentionalClose && !shuttingDown) {
-        connection.error ||= 'embedded Playwright MCP connection closed'
-      }
-      rebuildToolCatalog()
-    }
-    client.setNotificationHandler(ToolListChangedNotificationSchema, async () => {
-      await refreshConnectionTools(connection)
-    })
-    connection.status = 'connected'
-    connection.remoteTools = await listAllTools(client, server.timeoutMs)
-    connection.updatedAt = new Date().toISOString()
-    rebuildToolCatalog()
-    console.log(`[mcp:${server.id}] connected to embedded browser (${connection.remoteTools.length} tools)`)
-  } catch (err) {
-    connection.error = err?.message || String(err)
-    connection.updatedAt = new Date().toISOString()
-    connection.intentionalClose = true
-    try { await connection.embeddedHandle?.close?.() } catch {}
-    connection.status = 'error'
-    rebuildToolCatalog()
-    console.warn(`[mcp:${server.id}] embedded connection failed: ${connection.error}`)
-  }
-  return connection
-}
-
-function desiredMcpServers(servers, { includeBuiltIns = true, builtInOptions = {} } = {}) {
-  const desired = [...(Array.isArray(servers) ? servers : [])]
-  if (includeBuiltIns) desired.push(...getBuiltInMcpServers(builtInOptions))
-  const reader = connections.get(BUILTIN_PLAYWRIGHT_READER_ID)
-  if (includeBuiltIns && reader && !desired.some(server => server.id === BUILTIN_PLAYWRIGHT_READER_ID)) {
-    desired.push(reader.config)
-  }
-  return desired
+// Built-in Chrome is intentionally lazy: merely opening a tool catalog must
+// not launch a visible browser or create its dedicated profile.
+function desiredMcpServers(servers) {
+  return [...(Array.isArray(servers) ? servers : [])]
 }
 
 async function connectServerOnce(server, deps = {}) {
   const pending = pendingConnections.get(server.id)
   if (pending) return pending
-  const useEmbedded = (
-    server.id === BUILTIN_PLAYWRIGHT_INTERACTIVE_ID
-    && embeddedBridgeForDeps(deps)
-  )
-  const promise = (useEmbedded
-    ? connectEmbeddedServer(server, deps)
-    : connectServer(server, deps)
-  ).finally(() => pendingConnections.delete(server.id))
+  const promise = connectServer(server, deps).finally(() => pendingConnections.delete(server.id))
   pendingConnections.set(server.id, promise)
   return promise
 }
@@ -401,30 +292,11 @@ export async function reconcileMcpClients(servers = getRuntimeMcpServers(), deps
   shuttingDown = false
   const allServers = desiredMcpServers(servers, deps)
   const desired = new Map(allServers.filter(server => server.enabled).map(server => [server.id, server]))
-  const activeBuiltInPlaywrightId = [
-    BUILTIN_PLAYWRIGHT_INTERACTIVE_ID,
-    BUILTIN_PLAYWRIGHT_READER_ID,
-  ].find(id => connections.get(id)?.status === 'connected')
   const closing = []
   for (const [id, connection] of connections) {
     const next = desired.get(id)
     const currentHash = JSON.stringify(connection.config)
     const nextHash = next ? JSON.stringify(next) : ''
-    const isInactiveSharedProfilePeer = (
-      id !== activeBuiltInPlaywrightId
-      && [BUILTIN_PLAYWRIGHT_INTERACTIVE_ID, BUILTIN_PLAYWRIGHT_READER_ID].includes(id)
-      && connection.status !== 'connected'
-      && !!activeBuiltInPlaywrightId
-      && !!next
-    )
-    if (isInactiveSharedProfilePeer) {
-      // Preserve the trusted native schema without starting a second Chromium
-      // process against the same user-data-dir. The next call for this mode
-      // will replace this dormant connection with its current configuration.
-      connection.config = next
-      desired.delete(id)
-      continue
-    }
     if (!next || currentHash !== nextHash || connection.status !== 'connected') {
       connections.delete(id)
       closing.push(closeConnection(connection))
@@ -433,16 +305,7 @@ export async function reconcileMcpClients(servers = getRuntimeMcpServers(), deps
     }
   }
   await Promise.allSettled(closing)
-  // Built-in Playwright schemas are trusted and exposed from the fixed
-  // descriptors below, so merely loading the tool catalog must not start a
-  // browser. This is especially important on macOS: creating the persistent
-  // browser profile can ask for Keychain access. Connect built-ins lazily only
-  // when executeBuiltInPlaywrightTool handles a real tool call.
-  const eagerServers = [...desired.values()].filter(server => ![
-    BUILTIN_PLAYWRIGHT_INTERACTIVE_ID,
-    BUILTIN_PLAYWRIGHT_READER_ID,
-  ].includes(server.id))
-  await Promise.all(eagerServers.map(server => connectServerOnce(server, deps)))
+  await Promise.all([...desired.values()].map(server => connectServerOnce(server, deps)))
   rebuildToolCatalog()
   return getMcpStatus()
 }
@@ -460,15 +323,15 @@ export async function shutdownMcpClients() {
   await Promise.allSettled(active.map(closeConnection))
 }
 
-function trustedBuiltInPlaywrightTool(name) {
-  const descriptor = getBuiltInPlaywrightToolDescriptor(name)
+function trustedBuiltInChromeTool(name) {
+  const descriptor = getBuiltInBrowserToolDescriptor(name)
   if (!descriptor) return null
-  const server = connections.get(BUILTIN_PLAYWRIGHT_INTERACTIVE_ID)?.config
-    || getBuiltInPlaywrightServer({ role: 'interactive' })
+  const server = connections.get(BUILTIN_CHROME_DEVTOOLS_ID)?.config
+    || { name: 'BaiLongma Dedicated Chrome', timeoutMs: 90_000 }
   return {
     alias: descriptor.name,
     remoteName: descriptor.name,
-    serverId: BUILTIN_PLAYWRIGHT_INTERACTIVE_ID,
+    serverId: BUILTIN_CHROME_DEVTOOLS_ID,
     serverName: server.name,
     description: [
       descriptor.description,
@@ -479,15 +342,15 @@ function trustedBuiltInPlaywrightTool(name) {
     allowAutonomousReadOnly: false,
     timeoutMs: server.timeoutMs,
     builtIn: true,
-    playwrightRole: 'interactive',
+    chromeDevtools: true,
   }
 }
 
 export function listMcpTools() {
   const catalog = new Map(toolsByAlias)
-  for (const name of BUILTIN_PLAYWRIGHT_ALLOWED_TOOLS) {
+  for (const name of BUILTIN_BROWSER_ALLOWED_TOOLS) {
     if (!catalog.has(name)) {
-      const fallback = trustedBuiltInPlaywrightTool(name)
+      const fallback = trustedBuiltInChromeTool(name)
       if (fallback) catalog.set(name, fallback)
     }
   }
@@ -500,7 +363,7 @@ export function listMcpTools() {
     remoteName: tool.remoteName,
     annotations: { ...tool.annotations },
     builtIn: tool.builtIn,
-    playwrightRole: tool.playwrightRole,
+    chromeDevtools: tool.chromeDevtools === true,
   }))
 }
 
@@ -515,18 +378,18 @@ export function searchMcpTools(query = '') {
 
 export function isMcpTool(name) {
   const normalized = String(name || '')
-  return toolsByAlias.has(normalized) || Boolean(trustedBuiltInPlaywrightTool(normalized))
+  return toolsByAlias.has(normalized) || Boolean(trustedBuiltInChromeTool(normalized))
 }
 
 export function getMcpToolMetadata(name) {
   const normalized = String(name || '')
-  const tool = toolsByAlias.get(normalized) || trustedBuiltInPlaywrightTool(normalized)
+  const tool = toolsByAlias.get(normalized) || trustedBuiltInChromeTool(normalized)
   return tool ? { ...tool, annotations: { ...tool.annotations }, inputSchema: structuredClone(tool.inputSchema) } : null
 }
 
 export function getMcpToolSchema(name) {
   const normalized = String(name || '')
-  const tool = toolsByAlias.get(normalized) || trustedBuiltInPlaywrightTool(normalized)
+  const tool = toolsByAlias.get(normalized) || trustedBuiltInChromeTool(normalized)
   if (!tool) return null
   return {
     type: 'function',
@@ -571,84 +434,15 @@ function compactContentItem(item = {}) {
   return { type: String(item.type || 'unknown'), value: String(item.text || '').slice(0, 2000) }
 }
 
-function pathIsWithin(root, target) {
-  const relative = path.relative(root, target)
-  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative))
-}
-
-function readPlaywrightSnapshotFile(snapshotRoot, linkedPath) {
-  try {
-    const root = fs.realpathSync(String(snapshotRoot || ''))
-    const raw = decodeURI(String(linkedPath || '').trim().replace(/^<|>$/g, ''))
-    if (!raw || raw.includes('\0')) return null
-    const candidates = path.isAbsolute(raw)
-      ? [path.normalize(raw)]
-      : [
-          path.resolve(root, raw),
-          // Playwright MCP 0.0.78 can emit macOS absolute paths without the
-          // first slash. Trying that spelling is safe because the realpath
-          // containment check below is identical for every candidate.
-          ...(path.sep === '/' && raw.includes(path.sep)
-            ? [path.normalize(`${path.sep}${raw}`)]
-            : []),
-        ]
-    let resolved = ''
-    for (const candidate of candidates) {
-      if (!PLAYWRIGHT_SNAPSHOT_FILE_RE.test(path.basename(candidate))) continue
-      try {
-        const realCandidate = fs.realpathSync(candidate)
-        if (pathIsWithin(root, realCandidate)) {
-          resolved = realCandidate
-          break
-        }
-      } catch {}
-    }
-    if (!resolved) return null
-    const stat = fs.statSync(resolved)
-    if (!stat.isFile()) return null
-    const bytesToRead = Math.min(stat.size, MAX_AUTO_SNAPSHOT_BYTES)
-    const handle = fs.openSync(resolved, 'r')
-    let buffer
-    try {
-      buffer = Buffer.alloc(bytesToRead)
-      const bytesRead = fs.readSync(handle, buffer, 0, bytesToRead, 0)
-      buffer = buffer.subarray(0, bytesRead)
-    } finally {
-      fs.closeSync(handle)
-    }
-    const decoded = buffer.toString('utf8').replace(/^\uFEFF/, '')
-    const text = decoded.slice(0, MAX_AUTO_SNAPSHOT_CHARS)
-    const truncated = stat.size > bytesToRead || decoded.length > MAX_AUTO_SNAPSHOT_CHARS
-    return `${text}${truncated
-      ? '\n# Snapshot truncated by Bailongma; use browser_find or browser_snapshot with a narrower target.'
-      : ''}`
-  } catch {
-    return null
-  }
-}
-
-function inlinePlaywrightSnapshotLinks(text, snapshotRoot) {
-  if (!snapshotRoot || !String(text || '').includes('[Snapshot](')) return String(text || '')
-  return String(text || '').replace(PLAYWRIGHT_SNAPSHOT_LINK_RE, (match, linkedPath) => {
-    const snapshot = readPlaywrightSnapshotFile(snapshotRoot, linkedPath)
-    return snapshot === null ? match : `\`\`\`yaml\n${snapshot}\n\`\`\``
-  })
-}
 
 function formatMcpToolResult(tool, result, {
   serverConfig = null,
   browserPreview = null,
   browserLifecycle = null,
 } = {}) {
-  const isBuiltInPlaywright = serverConfig?.builtIn === true && !!serverConfig?.playwrightRole
+  const isBuiltInChrome = serverConfig?.builtIn === true && serverConfig?.chromeDevtools === true
   const rawContent = Array.isArray(result?.content) ? result.content : []
-  const hydratedContent = isBuiltInPlaywright
-    ? rawContent.map(item => (
-      item?.type === 'text'
-        ? { ...item, text: inlinePlaywrightSnapshotLinks(item.text, serverConfig.cwd) }
-        : item
-    ))
-    : rawContent
+  const hydratedContent = isBuiltInChrome ? rawContent : rawContent
   const payload = {
     ok: result?.isError !== true,
     source: 'mcp',
@@ -686,23 +480,10 @@ function formatMcpToolResult(tool, result, {
   }, null, 2)
 }
 
-async function finalizeEmbeddedBrowserClose(connection, tool, context = {}) {
-  const bridge = embeddedBridgeForDeps(context.mcpDeps || {})
-  if (!bridge || typeof bridge.closePage !== 'function') {
-    throw new Error('embedded browser host does not provide a real close operation')
-  }
-  if (connections.get(tool.serverId) === connection) connections.delete(tool.serverId)
-  await closeConnection(connection)
-  rebuildToolCatalog()
-  const state = await bridge.closePage()
-  return {
-    page_destroyed: true,
-    profile_data_preserved: true,
-    persistent_partition: state?.partition || connection.embeddedTarget?.partition || '',
-  }
-}
-
-function extractPlaywrightPageMetadata(result = {}) {
+function extractChromePageMetadata(result = {}) {
+  const pages = Array.isArray(result?.structuredContent?.pages) ? result.structuredContent.pages : []
+  const selected = pages.find(page => page?.selected === true) || pages[0]
+  if (selected?.url) return { url: String(selected.url), title: String(selected.title || '') }
   const text = (Array.isArray(result?.content) ? result.content : [])
     .filter(item => item?.type === 'text')
     .map(item => String(item.text || ''))
@@ -713,162 +494,53 @@ function extractPlaywrightPageMetadata(result = {}) {
   }
 }
 
+function extractChromePages(result = {}) {
+  const structured = Array.isArray(result?.structuredContent?.pages)
+    ? result.structuredContent.pages
+    : []
+  const fromStructured = structured
+    .map(page => ({ id: Number(page?.id), selected: page?.selected === true, url: String(page?.url || '') }))
+    .filter(page => Number.isInteger(page.id) && page.id >= 0)
+  if (fromStructured.length) return fromStructured
+  const pages = []
+  for (const line of textFromMcpResult(result).split(/\r?\n/)) {
+    const match = line.match(/^\s*(\d+):\s+(.+?)(?:\s+\[selected\])?\s*$/i)
+    if (!match) continue
+    pages.push({
+      id: Number(match[1]),
+      selected: /\[selected\]\s*$/i.test(line),
+      url: match[2].match(/\((https?:\/\/[^)]+)\)/)?.[1] || '',
+    })
+  }
+  return pages
+}
+
+async function bindEmbeddedBrowserPage(connection, bridge, context = {}) {
+  if (!connection || connection.status !== 'connected' || typeof bridge?.getTarget !== 'function') return null
+  const target = await bridge.getTarget()
+  if (!target?.webContentsId) return null
+  const listResult = await callToolWithScopedSignal(connection.client,
+    { name: 'list_pages', arguments: {} },
+    { timeout: Math.min(connection.config.timeoutMs, 15_000), signal: context.signal },
+  )
+  const pages = extractChromePages(listResult)
+  const expectedUrls = new Set([target.debugUrl, target.url].filter(Boolean).map(String))
+  const page = pages.find(candidate => expectedUrls.has(candidate.url))
+  if (!page) {
+    throw new Error(`BaiLongma live browser target was not found in DevTools pages (${target.targetId || 'unknown target'})`)
+  }
+  await callToolWithScopedSignal(connection.client,
+    { name: 'select_page', arguments: { pageId: page.id, bringToFront: false } },
+    { timeout: Math.min(connection.config.timeoutMs, 15_000), signal: context.signal },
+  )
+  connection.embeddedPageId = page.id
+  connection.embeddedTarget = target
+  return target
+}
+
 function browserDisplayModeForContext(context = {}) {
   const liveMode = context.browserDisplayState?.mode
   return isCardBrowserDisplayMode(liveMode ?? context.browserDisplayMode) ? 'card' : 'window'
-}
-
-function playwrightRoleForContext(context = {}) {
-  if (context.browserDisplayState && typeof context.browserDisplayState === 'object') {
-    return browserDisplayModeForContext(context) === 'card' ? 'reader' : 'interactive'
-  }
-  return String(context.playwrightRole || context.mode || 'interactive').trim().toLowerCase()
-}
-
-async function capturePlaywrightBrowserPreview(connection, tool, primaryResult, context = {}) {
-  if (connection?.embedded === true) {
-    const mode = browserDisplayModeForContext(context)
-    const target = connection.embeddedTarget || {}
-    if (tool.remoteName === 'browser_close') {
-      return {
-        mode,
-        state: 'closed',
-        action: tool.remoteName,
-        native_view: true,
-        web_contents_id: target.webContentsId,
-      }
-    }
-    if (!PLAYWRIGHT_PREVIEW_ACTIONS.has(tool.remoteName)) return null
-    if (primaryResult?.isError === true) {
-      return {
-        mode,
-        state: 'failed',
-        action: tool.remoteName,
-        native_view: true,
-        error: 'Playwright action failed',
-      }
-    }
-    const page = extractPlaywrightPageMetadata(primaryResult)
-    const livePage = connection.embeddedHandle?.page
-    let liveUrl = ''
-    let liveTitle = ''
-    try { liveUrl = String(livePage?.url?.() || '') } catch {}
-    try { liveTitle = String(await livePage?.title?.() || '') } catch {}
-    return {
-      mode,
-      state: 'ready',
-      action: tool.remoteName,
-      native_view: true,
-      renderer: 'webcontentsview',
-      revision: `${Date.now()}-${target.webContentsId || 0}`,
-      web_contents_id: target.webContentsId,
-      url: page.url || liveUrl,
-      title: page.title || liveTitle,
-    }
-  }
-
-  if (
-    browserDisplayModeForContext(context) !== 'card'
-    || connection?.config?.playwrightRole !== 'reader'
-  ) return null
-
-  if (tool.remoteName === 'browser_close') {
-    return { mode: 'card', state: 'closed', action: tool.remoteName }
-  }
-  if (!PLAYWRIGHT_PREVIEW_ACTIONS.has(tool.remoteName)) return null
-  if (primaryResult?.isError === true) {
-    return { mode: 'card', state: 'failed', action: tool.remoteName }
-  }
-
-  const filename = createBrowserPreviewFilename()
-  const filePath = resolveBrowserPreviewFile(filename)
-  if (!filePath) return null
-  try {
-    const result = await connection.client.callTool(
-      {
-        name: 'browser_take_screenshot',
-        arguments: { filename, type: 'png', scale: 'css' },
-      },
-      undefined,
-      { timeout: Math.min(connection.config.timeoutMs, 30_000), signal: context.signal },
-    )
-    if (result?.isError === true) throw new Error('Playwright preview screenshot failed')
-    const stat = fs.statSync(filePath)
-    if (!stat.isFile() || stat.size <= 0) throw new Error('Playwright preview screenshot was not written')
-    pruneBrowserPreviewFiles({ keep: 6 })
-    const page = extractPlaywrightPageMetadata(primaryResult)
-    return {
-      mode: 'card',
-      state: 'ready',
-      action: tool.remoteName,
-      image_url: `/browser-preview?file=${encodeURIComponent(filename)}`,
-      revision: `${Math.round(stat.mtimeMs)}-${stat.size}`,
-      url: page.url,
-      title: page.title,
-    }
-  } catch (error) {
-    return {
-      mode: 'card',
-      state: 'failed',
-      action: tool.remoteName,
-      error: error?.message || String(error),
-    }
-  }
-}
-
-async function reconcileEmbeddedWindowOpenNavigation(connection, tool, result, context = {}) {
-  if (connection?.embedded !== true || tool.remoteName !== 'browser_click') return result
-  const bridge = embeddedBridgeForDeps(context.mcpDeps || {})
-  if (!bridge || typeof bridge.consumeWindowOpenNavigation !== 'function') return result
-  const takeover = await bridge.consumeWindowOpenNavigation()
-  if (!takeover) return result
-
-  if (takeover.ok !== true) {
-    return {
-      ...result,
-      isError: true,
-      content: [
-        ...(Array.isArray(result?.content) ? result.content : []),
-        {
-          type: 'text',
-          text: `New-window navigation was blocked by Bailongma URL policy: ${takeover.error || 'unsafe target'}`,
-        },
-      ],
-      structuredContent: {
-        ...(result?.structuredContent && typeof result.structuredContent === 'object'
-          ? result.structuredContent
-          : {}),
-        window_open_takeover: takeover,
-      },
-    }
-  }
-
-  // The popup itself was denied and its validated target finished loading in
-  // the one managed page. Ask the official MCP server for the semantic state
-  // now, so browser_click returns the real final URL and fresh refs instead of
-  // a premature "click succeeded" snapshot from before the takeover.
-  const snapshot = await connection.client.callTool(
-    { name: 'browser_snapshot', arguments: {} },
-    undefined,
-    { timeout: tool.timeoutMs, signal: context.signal },
-  )
-  return {
-    ...result,
-    isError: snapshot?.isError === true,
-    content: [
-      {
-        type: 'text',
-        text: `New-window target was safely opened in the current managed page.\n- Page URL: ${takeover.finalUrl}`,
-      },
-      ...(Array.isArray(snapshot?.content) ? snapshot.content : []),
-    ],
-    structuredContent: {
-      ...(snapshot?.structuredContent && typeof snapshot.structuredContent === 'object'
-        ? snapshot.structuredContent
-        : {}),
-      window_open_takeover: takeover,
-    },
-  }
 }
 
 async function callMcpTool(tool, args = {}, context = {}) {
@@ -877,73 +549,21 @@ async function callMcpTool(tool, args = {}, context = {}) {
     return JSON.stringify({ ok: false, source: 'mcp', server_id: tool.serverId, tool: tool.alias, error: 'MCP server is not connected' })
   }
   try {
-    if (
-      connection.embedded === true
-      && tool.remoteName === 'browser_tabs'
-      && ['new', 'close'].includes(String(args?.action || '').toLowerCase())
-    ) {
-      throw new Error('embedded browser owns one persistent tab; creating or closing tabs is disabled')
-    }
     const invoke = async () => {
-      const primaryResult = await connection.client.callTool(
+      const result = await callToolWithScopedSignal(connection.client,
         { name: tool.remoteName, arguments: args || {} },
-        undefined,
         { timeout: tool.timeoutMs, signal: context.signal },
       )
-      const result = await reconcileEmbeddedWindowOpenNavigation(
-        connection,
-        tool,
-        primaryResult,
-        context,
-      )
-      const browserPreview = await capturePlaywrightBrowserPreview(connection, tool, result, context)
-      return { result, browserPreview }
+      return result
     }
     const resultPromise = connection.callQueue.catch(() => {}).then(invoke)
     connection.callQueue = resultPromise.then(() => undefined, () => undefined)
-    const { result, browserPreview } = await resultPromise
-    const browserLifecycle = connection.embedded === true && tool.remoteName === 'browser_close'
-      ? await finalizeEmbeddedBrowserClose(connection, tool, context)
-      : null
-    if (browserLifecycle && browserPreview) Object.assign(browserPreview, browserLifecycle)
+    const result = await resultPromise
     return formatMcpToolResult(tool, result, {
       serverConfig: connection.config,
-      browserPreview,
-      browserLifecycle,
     })
   } catch (err) {
     if (err?.name === 'AbortError') throw err
-    if (connection.embedded === true && tool.remoteName === 'browser_close') {
-      try {
-        const browserLifecycle = await finalizeEmbeddedBrowserClose(connection, tool, context)
-        return JSON.stringify({
-          ok: true,
-          source: 'mcp',
-          server_id: tool.serverId,
-          tool: tool.alias,
-          remote_tool: tool.remoteName,
-          content: [],
-          browser_preview: {
-            mode: browserDisplayModeForContext(context),
-            state: 'closed',
-            action: tool.remoteName,
-            native_view: true,
-            ...browserLifecycle,
-          },
-          ...browserLifecycle,
-          upstream_warning: err?.message || String(err),
-        }, null, 2)
-      } catch (closeError) {
-        return JSON.stringify({
-          ok: false,
-          source: 'mcp',
-          server_id: tool.serverId,
-          tool: tool.alias,
-          remote_tool: tool.remoteName,
-          error: closeError?.message || String(closeError),
-        }, null, 2)
-      }
-    }
     return JSON.stringify({
       ok: false,
       source: 'mcp',
@@ -955,49 +575,14 @@ async function callMcpTool(tool, args = {}, context = {}) {
   }
 }
 
-const PLAYWRIGHT_TARGET_ARG_KEYS = new Set([
-  'target',
-  'ref',
-  'startTarget',
-  'endTarget',
-  'startRef',
-  'endRef',
-])
-
-function unwrapPlaywrightSnapshotRef(value) {
-  if (typeof value !== 'string') return value
-  const trimmed = value.trim()
-  const wrapped = trimmed.match(/^ref\s*=\s*([a-z][a-z0-9_-]{0,127})$/i)
-    || trimmed.match(/^\[\s*ref\s*=\s*([a-z][a-z0-9_-]{0,127})\s*\]$/i)
-  return wrapped ? wrapped[1] : value
-}
-
-function normalizePlaywrightTargetTree(value) {
-  if (Array.isArray(value)) return value.map(item => normalizePlaywrightTargetTree(item))
-  if (!value || typeof value !== 'object') return value
-  const normalized = {}
-  for (const [key, item] of Object.entries(value)) {
-    normalized[key] = PLAYWRIGHT_TARGET_ARG_KEYS.has(key)
-      ? unwrapPlaywrightSnapshotRef(item)
-      : normalizePlaywrightTargetTree(item)
-  }
-  return normalized
-}
-
-function normalizeBuiltInPlaywrightArgs(remoteName, args = {}) {
-  if (!isBuiltInPlaywrightToolAllowed(remoteName)) return args
-  return normalizePlaywrightTargetTree(args || {})
-}
-
-async function validateBuiltInPlaywrightArgs(remoteName, args = {}, context = {}) {
-  const normalizedArgs = normalizeBuiltInPlaywrightArgs(remoteName, args)
-  if (remoteName !== 'browser_navigate') return { ok: true, args: normalizedArgs }
+async function validateBuiltInChromeArgs(remoteName, args = {}, context = {}) {
+  if (remoteName !== 'browser_navigate') return { ok: true, args: args || {} }
   try {
-    const url = await assertWebUrlAllowed(normalizedArgs?.url, {
+    const url = await assertWebUrlAllowed(args?.url, {
       allowPrivateNetwork: () => config.security?.browserPrivateNetwork === true,
       ...(context.webUrlPolicyOptions || {}),
     })
-    return { ok: true, args: { ...normalizedArgs, url } }
+    return { ok: true, args: { ...args, url } }
   } catch (error) {
     return {
       ok: false,
@@ -1012,226 +597,397 @@ async function validateBuiltInPlaywrightArgs(remoteName, args = {}, context = {}
   }
 }
 
-export async function executeMcpTool(name, args = {}, context = {}) {
-  const normalizedName = String(name || '')
-  const tool = toolsByAlias.get(normalizedName)
-  if (!tool && getBuiltInPlaywrightToolDescriptor(normalizedName)) {
-    return executeBuiltInPlaywrightTool(normalizedName, args, context)
-  }
-  if (!tool) return JSON.stringify({ ok: false, source: 'mcp', error: `unknown or disconnected MCP tool "${name}"` })
-  let safeArgs = args
-  if (tool.builtIn === true && tool.playwrightRole) {
-    const validation = await validateBuiltInPlaywrightArgs(tool.remoteName, args, context)
-    if (!validation.ok) return validation.result
-    safeArgs = validation.args
-    const useEmbedded = Boolean(embeddedBridgeForDeps(context.mcpDeps || {}))
-    const effectiveServerId = useEmbedded
-      ? BUILTIN_PLAYWRIGHT_INTERACTIVE_ID
-      : browserDisplayModeForContext(context) === 'card'
-      ? BUILTIN_PLAYWRIGHT_READER_ID
-      : tool.serverId
-    return withBuiltInPlaywrightProfile(
-      effectiveServerId,
-      context.mcpDeps || {},
-      async connection => {
-        if (!connection || connection.status !== 'connected') {
-          return JSON.stringify({
-            ok: false,
-            source: 'mcp',
-            server_id: effectiveServerId,
-            tool: name,
-            error: connection?.error || 'Playwright MCP server is not connected',
-          }, null, 2)
-        }
-        const effectiveTool = effectiveServerId !== tool.serverId
-          ? {
-              ...tool,
-              serverId: effectiveServerId,
-              serverName: connection.config.name,
-              playwrightRole: connection.config.playwrightRole,
-            }
-          : tool
-        return callMcpTool(effectiveTool, safeArgs, context)
-      },
-    )
-  }
-  return callMcpTool(tool, safeArgs, context)
+function textFromMcpResult(result = {}) {
+  return (Array.isArray(result.content) ? result.content : [])
+    .filter(item => item?.type === 'text')
+    .map(item => String(item.text || ''))
+    .join('\n')
 }
 
-function playwrightServerIdForContext(context = {}) {
-  if (embeddedBridgeForDeps(context.mcpDeps || {})) return BUILTIN_PLAYWRIGHT_INTERACTIVE_ID
-  const requested = playwrightRoleForContext(context)
-  return requested === 'reader' ? BUILTIN_PLAYWRIGHT_READER_ID : BUILTIN_PLAYWRIGHT_INTERACTIVE_ID
+function resultContainsProtectedLogin(result) {
+  const values = []
+  const visit = value => {
+    if (typeof value === 'string') values.push(value)
+    else if (Array.isArray(value)) value.forEach(visit)
+    else if (value && typeof value === 'object') Object.values(value).forEach(visit)
+  }
+  visit(result?.content)
+  visit(result?.structuredContent)
+  const text = values.join('\n')
+  const urls = text.match(/https?:\/\/[^\s)\]"']+/g) || []
+  return urls.some(isProtectedLoginUrl)
 }
 
-async function ensureBuiltInPlaywrightConnectionUnlocked(serverId, deps = {}) {
-  const embeddedBridge = embeddedBridgeForDeps(deps)
-  let resolvedEmbeddedTarget = null
-  if (embeddedBridge) {
-    serverId = BUILTIN_PLAYWRIGHT_INTERACTIVE_ID
-    try {
-      resolvedEmbeddedTarget = await (
-        deps.resolveEmbeddedBrowserTargetFn || resolveEmbeddedBrowserTarget
-      )({ bridge: embeddedBridge })
-    } catch (error) {
-      const connected = connections.get(serverId)
-      if (connected?.embedded === true && connected.status === 'connected') return connected
-      throw error
+const USER_ONLY_LOGIN_TOOLS = new Set([
+  'browser_click', 'browser_type', 'browser_fill_form', 'browser_select_option',
+  'browser_press_key', 'browser_handle_dialog',
+])
+
+async function resolveChromeToolSteps(name, args, connection, context = {}) {
+  if (connection?.embeddedPageId != null && name === 'browser_tabs') {
+    const action = String(args?.action || 'list').toLowerCase()
+    if (action === 'new') {
+      return {
+        steps: [{ remoteName: 'navigate_page', arguments: { type: 'url', url: String(args?.url || 'about:blank') } }, { remoteName: 'take_snapshot', arguments: {} }],
+        leadingContent: [],
+        closurePerformed: false,
+      }
+    }
+    const target = connection.embeddedTarget || {}
+    return {
+      steps: [],
+      leadingContent: [{ type: 'text', text: `## Pages\n0: ${target.url || target.debugUrl || 'about:blank'} [selected]` }],
+      closurePerformed: false,
     }
   }
-  const role = serverId === BUILTIN_PLAYWRIGHT_READER_ID ? 'reader' : 'interactive'
-  const desired = getBuiltInPlaywrightServer({
-    role,
-    ...(deps.builtInOptions || {}),
-  })
-  const otherServerId = serverId === BUILTIN_PLAYWRIGHT_READER_ID
-    ? BUILTIN_PLAYWRIGHT_INTERACTIVE_ID
-    : BUILTIN_PLAYWRIGHT_READER_ID
-  const otherPending = pendingConnections.get(otherServerId)
-  if (otherPending) await otherPending.catch(() => {})
-  const other = connections.get(otherServerId)
-  if (other?.status === 'connected') {
-    // Headless card mode and the headed window share one persistent Chromium
-    // profile. Chromium forbids concurrent ownership, so hand the profile over
-    // cleanly before starting the requested display mode.
-    await closeConnection(other)
+  if (connection?.embeddedPageId != null && name === 'browser_close') {
+    return { steps: [], leadingContent: [], closurePerformed: true }
   }
-  const current = connections.get(serverId)
-  if (
-    current?.status === 'connected'
-    && JSON.stringify(current.config) === JSON.stringify(desired)
-    && (
-      !embeddedBridge
-        ? current.embedded !== true
-        : current.embedded === true
-          && current.embeddedTarget?.cdpEndpoint === resolvedEmbeddedTarget?.cdpEndpoint
-          && current.embeddedTarget?.targetId === resolvedEmbeddedTarget?.targetId
-    )
-  ) return current
-  if (current) {
-    connections.delete(serverId)
-    await closeConnection(current)
+  if (name !== 'browser_close' || Number.isInteger(Number(args?.page_id))) {
+    return { steps: adaptBrowserToolCall(name, args), leadingContent: [], closurePerformed: name === 'browser_close' }
   }
-  return connectServerOnce(desired, {
-    ...deps,
-    ...(resolvedEmbeddedTarget ? { resolvedEmbeddedTarget } : {}),
-  })
+  const listResult = await callToolWithScopedSignal(connection.client,
+    { name: 'list_pages', arguments: {} },
+    { timeout: connection.config.timeoutMs, signal: context.signal },
+  )
+  const pages = extractChromePages(listResult)
+  const selected = pages.find(page => page.selected) || pages[0]
+  if (!selected) {
+    return {
+      steps: adaptBrowserToolCall(name, args),
+      leadingContent: Array.isArray(listResult?.content) ? listResult.content : [],
+      closurePerformed: false,
+    }
+  }
+  // Chrome DevTools MCP refuses to close its final tab. Preserve the public
+  // browser_close contract by first creating a blank replacement tab, then
+  // closing the selected logical page. This never kills a user-owned Chrome
+  // process and never deletes the dedicated profile.
+  return {
+    steps: [
+      ...(pages.length <= 1 ? [{ remoteName: 'new_page', arguments: { url: 'about:blank' } }] : []),
+      { remoteName: 'close_page', arguments: { pageId: selected.id } },
+      { remoteName: 'list_pages', arguments: {} },
+    ],
+    leadingContent: Array.isArray(listResult?.content) ? listResult.content : [],
+    closurePerformed: true,
+  }
 }
 
-async function withBuiltInPlaywrightProfile(serverId, deps, operation) {
-  const run = builtInPlaywrightProfileQueue
-    .catch(() => {})
-    .then(async () => {
-      const connection = await ensureBuiltInPlaywrightConnectionUnlocked(serverId, deps)
-      return operation(connection)
-    })
-  builtInPlaywrightProfileQueue = run.then(() => undefined, () => undefined)
+async function ensureBuiltInChromeConnectionUnlocked(deps = {}) {
+  const bridge = chromeBridgeForDeps(deps)
+  if (!bridge) throw new Error('BaiLongma dedicated Chrome service is unavailable. Restart BaiLongma and try again.')
+  const endpoint = await bridge.ensureEndpoint()
+  const desired = createBuiltInChromeDevtoolsServer({
+    endpoint,
+    ...(deps.builtInOptions || {}),
+  })
+  const current = connections.get(BUILTIN_CHROME_DEVTOOLS_ID)
+  if (current?.status === 'connected' && JSON.stringify(current.config) === JSON.stringify(desired)) {
+    await bindEmbeddedBrowserPage(current, bridge)
+    return current
+  }
+  if (current) {
+    connections.delete(BUILTIN_CHROME_DEVTOOLS_ID)
+    await closeConnection(current)
+  }
+  const connection = await connectServerOnce(desired, deps)
+  await bindEmbeddedBrowserPage(connection, bridge)
+  return connection
+}
+
+async function withBuiltInChrome(deps, operation) {
+  const run = builtInChromeQueue.catch(() => {}).then(async () => {
+    const connection = await ensureBuiltInChromeConnectionUnlocked(deps)
+    return operation(connection)
+  })
+  builtInChromeQueue = run.then(() => undefined, () => undefined)
   return run
 }
 
-export async function executeBuiltInPlaywrightTool(remoteName, args = {}, context = {}) {
-  const name = String(remoteName || '')
-  if (!isBuiltInPlaywrightToolAllowed(name)) {
-    return JSON.stringify({
-      ok: false,
-      source: 'mcp',
-      server_id: playwrightServerIdForContext(context),
-      remote_tool: name,
-      error: `Playwright MCP tool "${name}" is not allowed`,
-    }, null, 2)
+function writeChromePreviewImage(result) {
+  const image = (Array.isArray(result?.content) ? result.content : [])
+    .find(item => item?.type === 'image' && typeof item?.data === 'string')
+  if (!image) return ''
+  const filename = createBrowserPreviewFilename()
+  const filePath = resolveBrowserPreviewFile(filename)
+  if (!filePath) return ''
+  try {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true })
+    fs.writeFileSync(filePath, Buffer.from(image.data, 'base64'), { mode: 0o600 })
+    pruneBrowserPreviewFiles({ keep: 6 })
+    return `/browser-preview?file=${encodeURIComponent(filename)}`
+  } catch {
+    return ''
   }
-
-  const validation = await validateBuiltInPlaywrightArgs(name, args, context)
-  if (!validation.ok) return validation.result
-  const safeArgs = validation.args
-
-  const serverId = playwrightServerIdForContext(context)
-  const embeddedBridge = embeddedBridgeForDeps(context.mcpDeps || {})
-  if (name === 'browser_close' && embeddedBridge && typeof embeddedBridge.peekTarget === 'function') {
-    const liveTarget = await embeddedBridge.peekTarget()
-    if (!liveTarget) {
-      const staleConnection = connections.get(serverId)
-      if (staleConnection?.embedded === true) {
-        connections.delete(serverId)
-        await closeConnection(staleConnection)
-        rebuildToolCatalog()
-      }
-      return JSON.stringify({
-        ok: true,
-        source: 'mcp',
-        server_id: serverId,
-        remote_tool: name,
-        already_closed: true,
-        page_destroyed: true,
-        profile_data_preserved: true,
-        content: [],
-        browser_preview: {
-          mode: browserDisplayModeForContext(context),
-          state: 'closed',
-          action: name,
-          native_view: true,
-          page_destroyed: true,
-          profile_data_preserved: true,
-        },
-      }, null, 2)
-    }
-  }
-  if (
-    serverId === BUILTIN_PLAYWRIGHT_READER_ID
-    && name === 'browser_close'
-    && connections.get(serverId)?.status !== 'connected'
-  ) {
-    return JSON.stringify({
-      ok: true,
-      source: 'mcp',
-      server_id: serverId,
-      remote_tool: name,
-      already_closed: true,
-      content: [],
-    }, null, 2)
-  }
-  return withBuiltInPlaywrightProfile(
-    serverId,
-    context.mcpDeps || {},
-    async connection => {
-      if (!connection || connection.status !== 'connected') {
-        return JSON.stringify({
-          ok: false,
-          source: 'mcp',
-          server_id: serverId,
-          remote_tool: name,
-          error: connection?.error || 'Playwright MCP server is not connected',
-        }, null, 2)
-      }
-      const remoteTool = connection.remoteTools.find(tool => tool.name === name)
-      if (!remoteTool || !isRemoteToolAllowed(connection.config, name)) {
-        return JSON.stringify({
-          ok: false,
-          source: 'mcp',
-          server_id: serverId,
-          remote_tool: name,
-          error: `Playwright MCP server does not provide allowed tool "${name}"`,
-        }, null, 2)
-      }
-      return callMcpTool({
-        alias: connection.config.exposeRemoteNames ? name : `internal__${name}`,
-        remoteName: name,
-        serverId,
-        serverName: connection.config.name,
-        timeoutMs: connection.config.timeoutMs,
-      }, safeArgs, context)
-    },
-  )
 }
 
-export async function shutdownBuiltInPlaywright({ role = 'reader' } = {}) {
-  const serverId = role === 'interactive'
-    ? BUILTIN_PLAYWRIGHT_INTERACTIVE_ID
-    : BUILTIN_PLAYWRIGHT_READER_ID
-  const pending = pendingConnections.get(serverId)
+async function captureChromeBrowserPreview(connection, tool, result, context = {}) {
+  const mode = browserDisplayModeForContext(context)
+  if (tool.remoteName === 'browser_close') {
+    const actuallyClosed = tool.closurePerformed === true
+    return {
+      mode,
+      state: actuallyClosed ? 'closed' : 'ready',
+      action: tool.remoteName,
+      surface: 'bailongma_live_browser',
+      visible_window: mode === 'window',
+      profile: 'dedicated',
+      ...(actuallyClosed ? { page_closed: true } : { page_reset: true }),
+    }
+  }
+  if (!BROWSER_PREVIEW_ACTIONS.has(tool.remoteName) || result?.isError === true) return null
+  const page = extractChromePageMetadata(result)
+  const bridge = chromeBridgeForDeps(context.mcpDeps || {})
+  if (typeof bridge?.getTarget === 'function') {
+    const target = await bridge.getTarget()
+    if (target?.webContentsId) {
+      connection.embeddedTarget = target
+      const liveUrl = [page.url, target.url]
+        .map(value => String(value || ''))
+        .find(value => /^https?:\/\//i.test(value)) || ''
+      return {
+        mode,
+        state: 'ready',
+        action: tool.remoteName,
+        renderer: 'webcontentsview',
+        surface: 'bailongma_live_browser',
+        native_view: true,
+        web_contents_id: target.webContentsId,
+        visible_window: mode === 'window',
+        url: liveUrl,
+        title: page.title || '',
+      }
+    }
+  }
+  if (mode === 'window') {
+    return {
+      mode,
+      state: 'ready',
+      action: tool.remoteName,
+      renderer: 'google-chrome',
+      surface: 'bailongma_chrome',
+      visible_window: true,
+      url: page.url,
+      title: page.title,
+    }
+  }
+  try {
+    const screenshot = await callToolWithScopedSignal(connection.client,
+      { name: 'take_screenshot', arguments: { format: 'png' } },
+      { timeout: Math.min(connection.config.timeoutMs, 30_000), signal: context.signal },
+    )
+    const imageUrl = writeChromePreviewImage(screenshot)
+    return {
+      mode: 'card',
+      state: imageUrl ? 'ready' : 'failed',
+      action: tool.remoteName,
+      ...(imageUrl ? { image_url: imageUrl } : { error: 'Chrome preview screenshot was unavailable' }),
+      renderer: 'google-chrome',
+      surface: 'bailongma_chrome',
+      visible_window: true,
+      url: page.url,
+      title: page.title,
+    }
+  } catch (error) {
+    return { mode: 'card', state: 'failed', action: tool.remoteName, error: error?.message || String(error) }
+  }
+}
+
+async function activePageRequiresUser(connection) {
+  const result = await callToolWithScopedSignal(connection.client,
+    { name: 'list_pages', arguments: {} },
+    { timeout: Math.min(connection.config.timeoutMs, 15_000) },
+  )
+  return resultContainsProtectedLogin(result)
+}
+
+export async function executeBuiltInChromeTool(remoteName, args = {}, context = {}) {
+  const name = String(remoteName || '')
+  if (!isBuiltInBrowserToolAllowed(name)) {
+    return JSON.stringify({ ok: false, source: 'mcp', server_id: BUILTIN_CHROME_DEVTOOLS_ID, remote_tool: name, error: `Chrome browser tool "${name}" is not allowed` }, null, 2)
+  }
+  const validation = await validateBuiltInChromeArgs(name, args, context)
+  if (!validation.ok) return validation.result
+  const safeArgs = validation.args
+  const failureResult = error => JSON.stringify({
+    ok: false,
+    source: 'mcp',
+    server_id: BUILTIN_CHROME_DEVTOOLS_ID,
+    remote_tool: name,
+    code: /closed|disconnect|endpoint/i.test(String(error?.message || error)) ? 'MCP_DISCONNECTED' : 'CHROME_MCP_FAILED',
+    error: `${error?.message || String(error)} Recovery: confirm BaiLongma dedicated Chrome is still open, then retry the browser action.`,
+  }, null, 2)
+  try {
+    return await withBuiltInChrome(context.mcpDeps || {}, async connection => {
+    if (!connection || connection.status !== 'connected') {
+      return JSON.stringify({ ok: false, source: 'mcp', server_id: BUILTIN_CHROME_DEVTOOLS_ID, remote_tool: name, error: connection?.error || 'Chrome DevTools MCP is not connected' }, null, 2)
+    }
+    const invoke = async () => {
+      if (USER_ONLY_LOGIN_TOOLS.has(name) && await activePageRequiresUser(connection)) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: 'This is an account, Google OAuth, or X login page. BaiLongma opened its dedicated visible Google Chrome for you; complete every account, password, MFA, CAPTCHA, and consent step yourself, then ask me to take a snapshot to verify the resulting X page.' }],
+          structuredContent: { code: 'USER_LOGIN_REQUIRED', user_action_required: true },
+        }
+      }
+      let stepPlan
+      try { stepPlan = await resolveChromeToolSteps(name, safeArgs, connection, context) } catch (error) {
+        return { isError: true, content: [{ type: 'text', text: error?.message || String(error) }] }
+      }
+      const { steps, closurePerformed = false } = stepPlan
+      const parts = [...(stepPlan.leadingContent || [])]
+      let finalResult = { content: [] }
+      const bridge = chromeBridgeForDeps(context.mcpDeps || {})
+      const beforeActionTarget = name === 'browser_click' && typeof bridge?.getTarget === 'function'
+        ? await bridge.getTarget()
+        : null
+      let recoverableClickError = null
+      for (const step of steps) {
+        const available = connection.remoteTools.some(tool => tool.name === step.remoteName)
+        if (!available) throw new Error(`Chrome DevTools MCP does not provide required tool "${step.remoteName}"`)
+        const pageScoped = !['list_pages', 'select_page', 'new_page', 'close_page'].includes(step.remoteName)
+        const stepArguments = pageScoped && connection.embeddedPageId != null
+          ? { ...step.arguments, pageId: connection.embeddedPageId }
+          : step.arguments
+        let result
+        try {
+          result = await callToolWithScopedSignal(connection.client,
+            { name: step.remoteName, arguments: stepArguments },
+            {
+              // Chrome DevTools MCP's click waits for navigation. On some
+              // cross-origin pages the commit succeeds but network-idle never
+              // arrives. Bound only the click; the mandatory next snapshot and
+              // native WebContents URL decide whether navigation really won.
+              timeout: step.remoteName === 'click'
+                ? Math.min(connection.config.timeoutMs, 20_000)
+                : connection.config.timeoutMs,
+              signal: context.signal,
+            },
+          )
+        } catch (error) {
+          if (name !== 'browser_click' || step.remoteName !== 'click') throw error
+          recoverableClickError = error
+          parts.push({
+            type: 'text',
+            text: `Click navigation wait ended early; verifying the live page: ${error?.message || String(error)}`,
+          })
+          continue
+        }
+        parts.push(...(Array.isArray(result?.content) ? result.content : []))
+        finalResult = result || finalResult
+        if (result?.isError === true) break
+      }
+      // Add machine-verifiable viewport state to every live-page result. This
+      // makes PageDown and other scrolling tests deterministic without using a
+      // screenshot, while preserving the accessibility snapshot as the main
+      // page representation.
+      if (
+        finalResult?.isError !== true
+        && connection.remoteTools.some(tool => tool.name === 'evaluate_script')
+        && connection.embeddedPageId != null
+        && BROWSER_PREVIEW_ACTIONS.has(name)
+      ) {
+        const viewportResult = await callToolWithScopedSignal(connection.client,
+          {
+            name: 'evaluate_script',
+            arguments: {
+              function: `() => ({
+                url: location.href,
+                title: document.title,
+                scrollX: window.scrollX,
+                scrollY: window.scrollY,
+                viewportWidth: window.innerWidth,
+                viewportHeight: window.innerHeight,
+                documentWidth: Math.max(document.documentElement.scrollWidth, document.body?.scrollWidth || 0),
+                documentHeight: Math.max(document.documentElement.scrollHeight, document.body?.scrollHeight || 0)
+              })`,
+              pageId: connection.embeddedPageId,
+            },
+          },
+          { timeout: Math.min(connection.config.timeoutMs, 15_000), signal: context.signal },
+        )
+        parts.push({ type: 'text', text: '## Viewport state' })
+        parts.push(...(Array.isArray(viewportResult?.content) ? viewportResult.content : []))
+      }
+      if (recoverableClickError) {
+        const afterActionTarget = typeof bridge?.getTarget === 'function'
+          ? await bridge.getTarget()
+          : null
+        const beforeUrl = String(beforeActionTarget?.url || beforeActionTarget?.debugUrl || '')
+        const afterUrl = String(afterActionTarget?.url || afterActionTarget?.debugUrl || '')
+        if (!afterUrl || afterUrl === beforeUrl) {
+          return {
+            isError: true,
+            content: parts.concat({
+              type: 'text',
+              text: `Click did not produce a confirmed navigation or page-state change: ${recoverableClickError?.message || String(recoverableClickError)}`,
+            }),
+          }
+        }
+        parts.push({
+          type: 'text',
+          text: `Click navigation confirmed by live WebContents URL: ${afterUrl}`,
+        })
+      }
+      const combined = {
+        ...finalResult,
+        content: parts,
+        __bailongmaClosurePerformed: closurePerformed && finalResult?.isError !== true,
+      }
+      if (combined.__bailongmaClosurePerformed === true) {
+        const bridge = chromeBridgeForDeps(context.mcpDeps || {})
+        await bridge?.closePage?.()
+        connection.embeddedPageId = null
+        connection.embeddedTarget = null
+      }
+      if (resultContainsProtectedLogin(combined)) {
+        combined.content.push({ type: 'text', text: 'Google/X authentication is now awaiting the user in the visible BaiLongma dedicated Chrome window. Do not type credentials, MFA codes, CAPTCHA responses, or OAuth consent. After the user finishes or cancels, use browser_snapshot to verify the real page state.' })
+        combined.structuredContent = { ...(combined.structuredContent || {}), user_action_required: true, login_verification_required: true }
+      }
+      return combined
+    }
+    const resultPromise = connection.callQueue.catch(() => {}).then(invoke)
+    try {
+      const result = await resultPromise
+      const publicTool = {
+        alias: name,
+        remoteName: name,
+        serverId: BUILTIN_CHROME_DEVTOOLS_ID,
+        serverName: connection.config.name,
+        timeoutMs: connection.config.timeoutMs,
+        inputArgs: safeArgs,
+        closurePerformed: result.__bailongmaClosurePerformed === true,
+      }
+      // Keep screenshot capture in the same per-Chrome queue. The DevTools MCP
+      // has one selected target, so another action must not slip between an
+      // action result and the card preview it is meant to represent.
+      const formattedPromise = captureChromeBrowserPreview(connection, publicTool, result, context)
+        .then(browserPreview => formatMcpToolResult(publicTool, result, { serverConfig: connection.config, browserPreview }))
+      connection.callQueue = formattedPromise.then(() => undefined, () => undefined)
+      return await formattedPromise
+    } catch (error) {
+      return failureResult(error)
+    }
+    })
+  } catch (error) {
+    return failureResult(error)
+  }
+}
+
+export async function executeMcpTool(name, args = {}, context = {}) {
+  const normalizedName = String(name || '')
+  if (getBuiltInBrowserToolDescriptor(normalizedName)) return executeBuiltInChromeTool(normalizedName, args, context)
+  const tool = toolsByAlias.get(normalizedName)
+  if (!tool) return JSON.stringify({ ok: false, source: 'mcp', error: `unknown or disconnected MCP tool "${name}"` })
+  return callMcpTool(tool, args, context)
+}
+
+export async function shutdownBuiltInChrome() {
+  const pending = pendingConnections.get(BUILTIN_CHROME_DEVTOOLS_ID)
   if (pending) await pending.catch(() => {})
-  const connection = connections.get(serverId)
-  connections.delete(serverId)
+  const connection = connections.get(BUILTIN_CHROME_DEVTOOLS_ID)
+  connections.delete(BUILTIN_CHROME_DEVTOOLS_ID)
   await closeConnection(connection)
   rebuildToolCatalog()
 }
@@ -1243,7 +999,7 @@ function serverStatus(server) {
     name: server.name,
     enabled: server.enabled,
     builtIn: server.builtIn === true,
-    playwrightRole: server.playwrightRole || '',
+    chromeDevtools: server.chromeDevtools === true,
     persistent: server.persistent === true,
     headed: server.headed === true,
     lazy: server.lazy === true,
@@ -1259,16 +1015,20 @@ function serverStatus(server) {
 
 export function getMcpStatus() {
   const configured = getRuntimeMcpServers()
-  const interactive = getBuiltInPlaywrightServer({ role: 'interactive' })
-  const reader = connections.get(BUILTIN_PLAYWRIGHT_READER_ID)?.config
-    || getBuiltInPlaywrightServer({ role: 'reader' })
-  const servers = [...configured, interactive, reader].map(serverStatus)
+  const builtIn = connections.get(BUILTIN_CHROME_DEVTOOLS_ID)?.config || {
+    id: BUILTIN_CHROME_DEVTOOLS_ID,
+    name: 'BaiLongma Dedicated Chrome',
+    enabled: true,
+    builtIn: true,
+    chromeDevtools: true,
+    persistent: true,
+    headed: true,
+    lazy: true,
+  }
+  const servers = [...configured, builtIn].map(serverStatus)
   return {
     servers,
-    builtInPlaywright: {
-      interactive: servers.find(server => server.id === BUILTIN_PLAYWRIGHT_INTERACTIVE_ID),
-      reader: servers.find(server => server.id === BUILTIN_PLAYWRIGHT_READER_ID),
-    },
+    builtInChrome: servers.find(server => server.id === BUILTIN_CHROME_DEVTOOLS_ID),
     toolCount: toolsByAlias.size,
   }
 }
@@ -1279,15 +1039,12 @@ export const __internal = {
   compactContentItem,
   createToolAlias,
   formatMcpToolResult,
-  inlinePlaywrightSnapshotLinks,
-  capturePlaywrightBrowserPreview,
-  extractPlaywrightPageMetadata,
-  embeddedBridgeForDeps,
+  captureChromeBrowserPreview,
+  extractChromePages,
+  extractChromePageMetadata,
+  chromeBridgeForDeps,
   isRemoteToolAllowed,
   normalizeInputSchema,
-  pathIsWithin,
-  readPlaywrightSnapshotFile,
   serverStatus,
-  normalizeBuiltInPlaywrightArgs,
-  validateBuiltInPlaywrightArgs,
+  validateBuiltInChromeArgs,
 }

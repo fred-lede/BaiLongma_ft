@@ -87,6 +87,9 @@ try {
     '"你的浏览器" means Bailongma compact card')
   assert(inferBrowserSurface('用我的浏览器打开这个视频') === 'window',
     '"我的浏览器" means Bailongma large window')
+  assert(inferBrowserSurface('请打开白龙马专用 Chrome 让我自己登录') === 'chrome'
+    && inferBrowserDisplayMode('请打开白龙马专用 Chrome 让我自己登录') === 'window',
+  'BaiLongma dedicated Chrome is an explicit controllable surface and uses its visible window')
   assert(inferBrowserDisplayMode('看视频') === 'window',
     'video normally prefers the large Bailongma window')
   assert(inferBrowserDisplayMode('用你的小窗口浏览器看视频') === 'card',
@@ -104,6 +107,16 @@ try {
       `computer-browser intent is recognized: ${phrase}`)
     assert(isSystemBrowserRequest(phrase) === true,
       `computer-browser action is recognized: ${phrase}`)
+  }
+  for (const phrase of [
+    '不要用系统浏览器，就用你的浏览器登录',
+    '不用电脑浏览器，继续当前页面',
+    '不要使用默认浏览器',
+  ]) {
+    assert(isSystemBrowserIntent(phrase) === false,
+      `a negated computer-browser phrase is not treated as system-browser intent: ${phrase}`)
+    assert(isSystemBrowserRequest(phrase) === false,
+      `a negated computer-browser phrase is not treated as system-browser action: ${phrase}`)
   }
   assert(isExplicitBrowserDisplayModeRequest('用大的窗口打开') === true,
     'the real failed spoken phrase requires an observable display switch')

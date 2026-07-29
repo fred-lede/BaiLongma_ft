@@ -13,6 +13,11 @@ const EXPLICIT_WINDOW_MODE_RE = /(?:我的浏览器|大\s*(?:一\s*点\s*)?(?:�
 const DISPLAY_MODE_REQUEST_RE = /(?:(?:切换|切到|切回|换成|改成|调成|显示为|变成|放到|回到|使用|用|打开).{0,16}(?:你的浏览器|我的浏览器|小\s*(?:一\s*点\s*)?(?:的\s*)?(?:浏览器|窗口|卡片)|大\s*(?:一\s*点\s*)?(?:的\s*)?(?:浏览器|窗口)|浏览器卡片|卡片浏览器|外部浏览器|外部窗口)|(?:你的浏览器|我的浏览器|小\s*(?:一\s*点\s*)?(?:的\s*)?(?:浏览器|窗口|卡片)|大\s*(?:一\s*点\s*)?(?:的\s*)?(?:浏览器|窗口)|浏览器卡片|卡片浏览器|外部浏览器|外部窗口).{0,12}(?:打开|显示|切换|模式|一下|吧))|(?:(?:switch|change|use|open).{0,16}(?:browser|webpage).{0,12}(?:card|compact|small|window|large))/i
 const SYSTEM_BROWSER_INTENT_RE = /(?:(?:我(?:的)?\s*)?电脑\s*(?:上|里)?\s*(?:安装\s*)?(?:的\s*)?浏览器|电脑浏览器|系统\s*(?:默认\s*)?浏览器|默认浏览器|system\s+browser|default\s+browser)/i
 const SYSTEM_BROWSER_REQUEST_RE = /(?:(?:使用|用|打开|交给|放到).{0,18}(?:(?:我(?:的)?\s*)?电脑\s*(?:上|里)?\s*(?:安装\s*)?(?:的\s*)?浏览器|电脑浏览器|系统\s*(?:默认\s*)?浏览器|默认浏览器)|(?:(?:我(?:的)?\s*)?电脑\s*(?:上|里)?\s*(?:安装\s*)?(?:的\s*)?浏览器|电脑浏览器|系统\s*(?:默认\s*)?浏览器|默认浏览器).{0,12}(?:打开|访问|搜索|看|播放))|(?:(?:use|open\s+in).{0,16}(?:the\s+)?(?:system|default)\s+browser)/i
+const SYSTEM_BROWSER_NEGATION_RE = /(?:不要|别|不用|不使用|无需|不想|拒绝).{0,10}(?:(?:我(?:的)?\s*)?电脑\s*(?:上|里)?\s*(?:安装\s*)?(?:的\s*)?浏览器|电脑浏览器|系统\s*(?:默认\s*)?浏览器|默认浏览器)|(?:do\s+not|don't|avoid).{0,16}(?:system|default)\s+browser/i
+// This is a distinct, controllable browser surface. It is intentionally not
+// folded into the old card/window presentation choice: card is only a preview
+// of the dedicated Chrome page, while window means the user sees real Chrome.
+const BAILONGMA_CHROME_INTENT_RE = /(?:(?:白龙马|bailongma|agent).{0,18}(?:专用|独立|dedicated).{0,12}(?:chrome|浏览器)|(?:专用|独立|dedicated).{0,12}(?:chrome|浏览器).{0,18}(?:白龙马|bailongma|agent)|bailongma\s+(?:dedicated\s+)?chrome)/i
 const BROWSER_PREVIEW_FILE_RE = /^brain-ui-preview-\d{13}-\d+\.png$/
 let previewSequence = 0
 
@@ -29,6 +34,7 @@ export function inferBrowserDisplayMode(text = '', { autonomous = false } = {}) 
   // about task complexity. Honor it before generic interaction words or a
   // negated phrase such as "不要使用外部大窗口" can match WINDOW_MODE_RE.
   if (EXPLICIT_CARD_MODE_RE.test(value)) return BROWSER_DISPLAY_CARD
+  if (BAILONGMA_CHROME_INTENT_RE.test(value)) return BROWSER_DISPLAY_WINDOW
   if (WINDOW_MODE_RE.test(value)) return BROWSER_DISPLAY_WINDOW
   if (autonomous || CARD_MODE_RE.test(value) || FACT_LOOKUP_RE.test(value)) return BROWSER_DISPLAY_CARD
   return BROWSER_DISPLAY_CARD
@@ -45,15 +51,18 @@ export function isExplicitBrowserDisplayModeRequest(text = '') {
 }
 
 export function isSystemBrowserIntent(text = '') {
-  return SYSTEM_BROWSER_INTENT_RE.test(normalizeBrowserIntentText(text))
+  const value = normalizeBrowserIntentText(text)
+  return !SYSTEM_BROWSER_NEGATION_RE.test(value) && SYSTEM_BROWSER_INTENT_RE.test(value)
 }
 
 export function isSystemBrowserRequest(text = '') {
-  return SYSTEM_BROWSER_REQUEST_RE.test(normalizeBrowserIntentText(text))
+  const value = normalizeBrowserIntentText(text)
+  return !SYSTEM_BROWSER_NEGATION_RE.test(value) && SYSTEM_BROWSER_REQUEST_RE.test(value)
 }
 
 export function inferBrowserSurface(text = '', options = {}) {
   if (isSystemBrowserIntent(text)) return 'system'
+  if (BAILONGMA_CHROME_INTENT_RE.test(normalizeBrowserIntentText(text))) return 'chrome'
   return inferBrowserDisplayMode(text, options)
 }
 
@@ -108,7 +117,9 @@ export const __internal = {
   EXPLICIT_WINDOW_MODE_RE,
   FACT_LOOKUP_RE,
   WINDOW_MODE_RE,
+  BAILONGMA_CHROME_INTENT_RE,
   SYSTEM_BROWSER_INTENT_RE,
+  SYSTEM_BROWSER_NEGATION_RE,
   SYSTEM_BROWSER_REQUEST_RE,
   normalizeBrowserIntentText,
 }

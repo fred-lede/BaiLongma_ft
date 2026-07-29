@@ -64,7 +64,7 @@ const TASK_CTRL_OPENER  = ['set_task']  // 没任务时只暴露 set_task
 const REVIEW_TOOLS      = ['review_work']
 
 // 网页搜索、读取和交互统一由能力注册表中的 BROWSER_TOOLS（官方
-// Microsoft Playwright MCP）提供。WORLDCUP_TOOLS / SOFTWARE_INSTALL_TOOLS
+// Chrome DevTools MCP 驱动的白龙马专用 Chrome）提供。WORLDCUP_TOOLS / SOFTWARE_INSTALL_TOOLS
 // 已随能力迁出本文件。
 const FILESYSTEM_TOOLS  = ['read_file', 'write_file', 'delete_file', 'list_dir', 'make_dir']
 const EXEC_TOOLS        = ['exec_command', 'exec_quick_command', 'exec_task_command', 'exec_background_command', 'download_file', 'kill_process', 'list_processes']
@@ -297,7 +297,7 @@ export function selectTools(ctx = {}) {
   )
   const explicitLocalArtifactIntent = /(?:本地|项目内|工作区).{0,10}(?:文件|目录|代码|readme)|(?:保存|写入|导出|下载).{0,10}(?:文件|本地|目录)|(?:local|workspace|project).{0,12}(?:file|folder|directory|code|readme)|(?:save|write|export|download).{0,16}(?:file|local|folder|directory)/i.test(messageBody)
   const terseBrowserFollowup = isTerseBrowserFollowup(messageBody)
-  const recentPlaywrightAction = Array.isArray(recentActionLog)
+  const recentDedicatedChromeAction = Array.isArray(recentActionLog)
     && recentActionLog.some(entry => BROWSER_TOOLS.includes(String(entry?.tool || '')))
   const out = new Set(CORE_TOOLS)
   // 被显式抑制的工具名:ActionLog 保活 / installed 列表 / fallback 兜底都要跳过,
@@ -346,7 +346,7 @@ export function selectTools(ctx = {}) {
   }
   if (hits(body, MEDIA_TRIGGERS)) {
     for (const t of MEDIA_TOOLS) out.add(t)
-    // 媒体场景常需要先联网找链接——尤其视频要用 Playwright MCP 搜到可嵌入的 B 站 BV 才能播。
+    // 媒体场景常需要先联网找链接——尤其视频要用专用 Chrome 搜到可嵌入的 B 站 BV 才能播。
     // 不注入浏览器的话，模型会误以为"没有联网搜索"而直接放弃找视频。
     // （这是"找的视频不能播放/找不到视频"的一个隐藏根因）。音乐用不到也无妨。
     if (!systemBrowserIntent) {
@@ -365,7 +365,7 @@ export function selectTools(ctx = {}) {
   if (hits(body, TICKER_TRIGGERS) || isTick) {
     for (const t of TICKER_TOOLS) out.add(t)
   }
-  // —— 能力注册表：已迁能力（Playwright web / hotspot / worldcup / software-install）的工具注入 ——
+  // —— 能力注册表：已迁能力（dedicated Chrome web / hotspot / worldcup / software-install）的工具注入 ——
   // 每个能力用自己的 toolWhen 门（浏览器=网页意图、hotspot/worldcup=不自动、
   // software-install=isSoftwareInstallRequest），保留与旧分支等价的解耦语义。
   const capCtx = { text: body, rawText: messageBody, isTick, mmCaps, hasTask }
@@ -419,7 +419,7 @@ export function selectTools(ctx = {}) {
       const name = entry?.tool
       if (name === 'browser_clear_data' && !isExplicitAgentBrowserDataDeletionRequest(messageBody)) continue
       if (name === 'person_card_mode') continue
-      // Stateful Playwright continuity must restore the complete safe group
+      // Stateful dedicated-Chrome continuity must restore the complete safe group
       // below, never a single stranded action schema on an unrelated turn.
       if (typeof name === 'string' && (BROWSER_TOOLS.includes(name) || BROWSER_DISPLAY_TOOLS.includes(name))) continue
       if (typeof name === 'string' && name && !suppressed.has(name)) out.add(name)
@@ -436,15 +436,15 @@ export function selectTools(ctx = {}) {
   }
 
   // The official MCP server owns browser lifecycle, so there is no separate
-  // Bailongma session registry to inspect. A recent official Playwright action
+  // Bailongma session registry to inspect. A recent dedicated-Chrome action
   // plus a terse follow-up is the continuity signal; restore the whole safe
   // allowlist rather than only the one tool found in ActionLog.
-  const browserContinuity = terseBrowserFollowup && recentPlaywrightAction
+  const browserContinuity = terseBrowserFollowup && recentDedicatedChromeAction
   if (browserContinuity) {
     for (const name of BROWSER_CAPABILITY_TOOLS) out.add(name)
   }
 
-  // All current web intents get the complete safe Playwright group. There is no
+  // All current web intents get the complete safe dedicated-Chrome group. There is no
   // stateless search/read fallback to restore from ActionLog.
   if (webAccessIntent || browserContinuity) {
     for (const name of BROWSER_CAPABILITY_TOOLS) out.add(name)

@@ -1285,7 +1285,9 @@ async function runTurn(input, label, msg = null) {
     const browserDisplayState = { mode: browserDisplayMode }
     toolContext.browserDisplayMode = browserDisplayMode
     toolContext.browserDisplayState = browserDisplayState
-    toolContext.playwrightRole = browserDisplayMode === 'card' ? 'reader' : 'interactive'
+    // Card/window are two presentations of the same live WebContentsView;
+    // browser actions remain attached to its stable DevTools target.
+    toolContext.browserSurface = 'bailongma_chrome'
     const browserModeForEvent = (name, args = {}) => {
       if (name === 'browser_set_display_mode') {
         const requested = String(args?.mode || '').trim().toLowerCase()
@@ -1301,7 +1303,9 @@ async function runTurn(input, label, msg = null) {
     // (`[ID] timestamp [channel] body`).  Classify the raw body so envelope
     // metadata is never mistaken for a second task (notably after browser_close).
     const actionContract = isUserTurn && !silentSignal
-      ? classifyActionContract(toolContext.currentUserMessage || semanticInput || '')
+      ? classifyActionContract(toolContext.currentUserMessage || semanticInput || '', {
+          conversationWindow: injection.conversationWindow || [],
+        })
       : null
     if (actionContract) {
       toolContext.actionContract = actionContract

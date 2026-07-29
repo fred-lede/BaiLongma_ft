@@ -17,7 +17,7 @@ export function execBrowserSetDisplayMode({ mode, reason = '' } = {}, context = 
   const state = context.browserDisplayState
   if (state && typeof state === 'object') state.mode = normalizedMode
   context.browserDisplayMode = normalizedMode
-  context.playwrightRole = normalizedMode === 'card' ? 'reader' : 'interactive'
+  context.browserSurface = 'bailongma_chrome'
 
   return JSON.stringify({
     ok: true,
@@ -28,7 +28,10 @@ export function execBrowserSetDisplayMode({ mode, reason = '' } = {}, context = 
       mode: normalizedMode,
       state: 'ready',
       action: 'browser_set_display_mode',
+      renderer: 'webcontentsview',
+      surface: 'bailongma_live_browser',
       native_view: true,
+      visible_window: normalizedMode === 'window',
       transition: true,
     },
   })

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createPttController } from './ui/brain-ui/voice-ptt.js';
+import { createPttController, shouldHandlePttKeyEvent } from './ui/brain-ui/voice-ptt.js';
 
 function createFakeTimers() {
   let now = 0;
@@ -59,6 +59,17 @@ function createCore() {
 }
 
 async function run() {
+  const messageInput = { tagName: 'TEXTAREA', value: '', disabled: false, readOnly: false };
+  assert.equal(shouldHandlePttKeyEvent({ code: 'Space', target: messageInput }, messageInput), true,
+    '空消息框获得焦点时，按住空格必须启动 PTT');
+  messageInput.value = '正在输入';
+  assert.equal(shouldHandlePttKeyEvent({ code: 'Space', target: messageInput }, messageInput), false,
+    '消息框已有文字时，空格必须保持普通输入行为');
+  assert.equal(shouldHandlePttKeyEvent({ code: 'Space', target: { tagName: 'INPUT', value: '' } }, messageInput), false,
+    '其他表单控件不能意外启动 PTT');
+  assert.equal(shouldHandlePttKeyEvent({ code: 'Space', target: { tagName: 'BODY' } }, messageInput), true);
+  assert.equal(shouldHandlePttKeyEvent({ code: 'Space', target: { tagName: 'BODY' }, metaKey: true }, messageInput), false);
+
   const timers = createFakeTimers();
   const realSetTimeout = globalThis.setTimeout;
   const realClearTimeout = globalThis.clearTimeout;

@@ -820,7 +820,7 @@ function execSetTask({ description, steps = [] }, context) {
 }
 
 // 收尾软门（2026-06-10）：complete_task 照常执行（不拦截——第一原则），但 runtime 查一眼
-// action_log——任务期间产出过文件/执行过命令、却没有任何验证类动作（Playwright navigation /
+// action_log——任务期间产出过文件/执行过命令、却没有任何验证类动作（dedicated Chrome navigation /
 // snapshot / review_work）时，把这个事实作为证据附在返回值里。实测失败模式：写完文件却没检查
 // 做好了，页面 404 两次都是用户先发现的。
 // With snapshot-mode=full, browser_navigate itself carries the rendered page
@@ -848,7 +848,7 @@ function unverifiedDeliveryNotice() {
       if (t === 'exec_command' && /curl|invoke-webrequest|invoke-restmethod|--check|--test/i.test(summary)) return ''
       if (t === 'read_file') return ''   // 读回产物也算一种核对
     }
-    return '注意：本任务产出了文件/起了服务，但收尾前没有任何验证动作（Playwright browser_navigate 自动页面快照、browser_snapshot/browser_find、review_work 或读回产物）。任务已照常收尾——如果你还没亲自确认成果真的能跑，现在就去验证；发现问题立刻修复并如实告知用户，别等用户先发现。'
+    return '注意：本任务产出了文件/起了服务，但收尾前没有任何验证动作（白龙马专用 Chrome browser_navigate 自动页面快照、browser_snapshot/browser_find、review_work 或读回产物）。任务已照常收尾——如果你还没亲自确认成果真的能跑，现在就去验证；发现问题立刻修复并如实告知用户，别等用户先发现。'
   } catch {
     return ''
   }
@@ -1158,10 +1158,10 @@ function agentDocsHint(agent) {
   const hint = {}
   if (agent.docs_url) {
     hint.docs_url = agent.docs_url
-    hint.docs_hint = `调用失败。建议用 Microsoft Playwright MCP 的 browser_navigate 打开 "${agent.docs_url}" 并读取其结果自动附带的页面快照；需要定向查找时再用 browser_find，查阅 ${agent.name} 当前版本（${agent.version || 'unknown'}）的使用文档，确认正确的参数格式后重试。`
+    hint.docs_hint = `调用失败。建议用白龙马专用 Google Chrome 的 browser_navigate 打开 "${agent.docs_url}" 并读取其结果自动附带的页面快照；需要定向查找时再用 browser_find，查阅 ${agent.name} 当前版本（${agent.version || 'unknown'}）的使用文档，确认正确的参数格式后重试。`
   } else if (agent.docs_search_query) {
     hint.docs_search_query = agent.docs_search_query
-    hint.docs_hint = `调用失败。建议用 Microsoft Playwright MCP 的 browser_navigate 打开搜索引擎查询 "${agent.docs_search_query}"，读取其结果自动附带的页面快照；需要定向查找时再用 browser_find，查找 ${agent.name} 当前版本（${agent.version || 'unknown'}）的使用文档，确认正确的调用方式后重试。`
+    hint.docs_hint = `调用失败。建议用白龙马专用 Google Chrome 的 browser_navigate 打开搜索引擎查询 "${agent.docs_search_query}"，读取其结果自动附带的页面快照；需要定向查找时再用 browser_find，查找 ${agent.name} 当前版本（${agent.version || 'unknown'}）的使用文档，确认正确的调用方式后重试。`
   }
   return hint
 }

@@ -11,6 +11,28 @@
 //   toggleVoice()    常开会话开关（开麦 + 接 ASR）——与点球/按钮共用同一入口
 //   cancelAutoSend() 取消常开策略已排程的自动发送计时器
 
+export function shouldHandlePttKeyEvent(event, messageInput = null) {
+  const isSpace = event?.code === 'Space' || event?.key === ' ' || event?.key === 'Spacebar';
+  if (!isSpace || event?.ctrlKey || event?.metaKey || event?.altKey || event?.shiftKey) return false;
+  if (event?.isComposing) return false;
+
+  const target = event?.target;
+  const isTypingTarget = Boolean(
+    target
+    && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable),
+  );
+  if (!isTypingTarget) return true;
+
+  // The compact chat explicitly tells the user to hold Space for voice. When
+  // its message box is focused but empty, honour that instruction. Once text
+  // exists, Space remains an ordinary typing key. Other form controls never
+  // start PTT.
+  return target === messageInput
+    && !target.disabled
+    && !target.readOnly
+    && String(target.value || '').length === 0;
+}
+
 export function createPttController(core, { toggleVoice, cancelAutoSend }) {
   // release 后给云端留出固定收尾时间。不能看到已有 interim 就立刻发送：
   // 用户松手时声音虽已录完，最后几个字仍可能在 ASR 服务端排队识别。

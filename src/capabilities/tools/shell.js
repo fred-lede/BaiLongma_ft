@@ -354,9 +354,9 @@ export async function execCommand(args, context = {}) {
     const obj = JSON.parse(result)
     obj.runtime_url_check = probe
     if (!probe.ok) {
-      obj.hint = `⚠ 你刚把这个页面打开给用户看，但 runtime 实测它异常（${probe.status ? `HTTP ${probe.status}，正文：${probe.body_preview || '(空)'}` : probe.error}）。用户现在看到的是坏页面。先修复，再用 Microsoft Playwright MCP 的 browser_navigate 并检查其自动页面快照，亲自确认正常后才向用户说做好了。`
+      obj.hint = `⚠ 你刚把这个页面打开给用户看，但 runtime 实测它异常（${probe.status ? `HTTP ${probe.status}，正文：${probe.body_preview || '(空)'}` : probe.error}）。用户现在看到的是坏页面。先修复，再用白龙马专用 Google Chrome 的 browser_navigate 并检查其自动页面快照，亲自确认正常后才向用户说做好了。`
     } else {
-      obj.hint = `${obj.hint ? obj.hint + ' ' : ''}runtime 已替你 GET 过该页面：HTTP ${probe.status}。注意这只证明入口可达，页面内部 JS 是否报错仍需你自己用 Microsoft Playwright MCP 的 browser_navigate 并检查该结果自动附带的页面快照来确认。`
+      obj.hint = `${obj.hint ? obj.hint + ' ' : ''}runtime 已替你 GET 过该页面：HTTP ${probe.status}。注意这只证明入口可达，页面内部 JS 是否报错仍需你自己用白龙马专用 Google Chrome 的 browser_navigate 并检查该结果自动附带的页面快照来确认。`
     }
     return JSON.stringify(obj, null, 2)
   } catch {

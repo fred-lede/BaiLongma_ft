@@ -1,11 +1,14 @@
 const path = require('path')
+const fs = require('fs')
 
 const PLAYWRIGHT_BROWSER_RESOURCE_DIR = 'playwright-browsers'
+const NODE_RUNTIME_RESOURCE_DIR = 'node-runtime'
 
 function packagedHostPlatform(platform = process.platform, arch = process.arch) {
   if (platform === 'win32' && arch === 'x64') return 'win64'
   if (platform === 'darwin' && arch === 'x64') return 'mac15'
   if (platform === 'darwin' && arch === 'arm64') return 'mac15-arm64'
+  if (platform === 'linux' && arch === 'x64') return 'ubuntu24.04-x64'
   throw new Error(`Unsupported packaged Playwright target: ${platform}-${arch}`)
 }
 
@@ -29,8 +32,90 @@ function configurePackagedPlaywright({
   return env.PLAYWRIGHT_BROWSERS_PATH
 }
 
+function bundledBrowserTarget(platform = process.platform, arch = process.arch) {
+  if (platform === 'win32' && arch === 'x64') return 'win-x64'
+  if (platform === 'darwin' && arch === 'x64') return 'mac-x64'
+  if (platform === 'darwin' && arch === 'arm64') return 'mac-arm64'
+  if (platform === 'linux' && arch === 'x64') return 'linux-x64'
+  throw new Error(`Unsupported bundled browser target: ${platform}-${arch}`)
+}
+
+function bundledNodeRuntimeTarget(platform = process.platform, arch = process.arch) {
+  if (platform === 'win32' && arch === 'x64') return 'win-x64'
+  if (platform === 'darwin' && arch === 'x64') return 'mac-x64'
+  if (platform === 'darwin' && arch === 'arm64') return 'mac-arm64'
+  if (platform === 'linux' && arch === 'x64') return 'linux-x64'
+  throw new Error(`Unsupported bundled Node runtime target: ${platform}-${arch}`)
+}
+
+function resolveBundledNodeExecutable({
+  isPackaged,
+  resourcesPath = process.resourcesPath,
+  projectRoot,
+  platform = process.platform,
+  arch = process.arch,
+  existsSync = fs.existsSync,
+} = {}) {
+  const filename = platform === 'win32' ? 'node.exe' : 'node'
+  const root = isPackaged
+    ? path.join(resourcesPath, NODE_RUNTIME_RESOURCE_DIR)
+    : path.join(projectRoot, 'build', NODE_RUNTIME_RESOURCE_DIR, bundledNodeRuntimeTarget(platform, arch))
+  const executable = path.join(root, filename)
+  return existsSync(executable) ? executable : null
+}
+
+function bundledBrowserRoot({
+  isPackaged,
+  resourcesPath = process.resourcesPath,
+  projectRoot,
+  platform = process.platform,
+  arch = process.arch,
+} = {}) {
+  if (isPackaged) return path.join(resourcesPath, PLAYWRIGHT_BROWSER_RESOURCE_DIR)
+  if (!projectRoot) throw new Error('projectRoot is required in development mode')
+  return path.join(projectRoot, 'build', PLAYWRIGHT_BROWSER_RESOURCE_DIR, bundledBrowserTarget(platform, arch))
+}
+
+function resolveBundledChromiumExecutable({
+  root,
+  platform = process.platform,
+  arch = process.arch,
+  existsSync = fs.existsSync,
+  readdirSync = fs.readdirSync,
+} = {}) {
+  if (!root || !existsSync(root)) return null
+  let revisions
+  try {
+    revisions = readdirSync(root, { withFileTypes: true })
+      .filter(entry => entry.isDirectory() && /^chromium-\d+$/.test(entry.name))
+      .map(entry => entry.name)
+      .sort((a, b) => Number(b.slice(9)) - Number(a.slice(9)))
+  } catch {
+    return null
+  }
+  const relative = platform === 'darwin'
+    ? path.join(`chrome-mac-${arch === 'arm64' ? 'arm64' : 'x64'}`, 'Google Chrome for Testing.app', 'Contents', 'MacOS', 'Google Chrome for Testing')
+    : platform === 'win32'
+      ? path.join('chrome-win64', 'chrome.exe')
+      : platform === 'linux' && arch === 'x64'
+        ? path.join('chrome-linux64', 'chrome')
+        : null
+  if (!relative) return null
+  for (const revision of revisions) {
+    const executable = path.join(root, revision, relative)
+    if (existsSync(executable)) return executable
+  }
+  return null
+}
+
 module.exports = {
+  NODE_RUNTIME_RESOURCE_DIR,
   PLAYWRIGHT_BROWSER_RESOURCE_DIR,
+  bundledBrowserRoot,
+  bundledBrowserTarget,
+  bundledNodeRuntimeTarget,
   configurePackagedPlaywright,
   packagedHostPlatform,
+  resolveBundledChromiumExecutable,
+  resolveBundledNodeExecutable,
 }

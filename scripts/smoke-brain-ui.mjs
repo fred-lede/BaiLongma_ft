@@ -362,7 +362,40 @@ try {
   await page.waitForFunction(() => window.d3 && document.querySelector('#agent-brand-name')?.textContent.includes('SmokeLongma'))
   await page.waitForSelector('#heartbeat-state[data-state="alive"]')
   await page.waitForFunction(() => document.querySelector('#heartbeat-state-label')?.textContent === '20 分钟')
+
+  await page.evaluate(() => {
+    window.__pttSmoke = { start: 0, end: 0 }
+    window.bailongmaVoice.pttStart = () => { window.__pttSmoke.start += 1 }
+    window.bailongmaVoice.pttEnd = () => { window.__pttSmoke.end += 1 }
+  })
   await page.focus('#msg-input')
+  await page.keyboard.down('Space')
+  const heldPttState = await page.evaluate(() => ({
+    ...window.__pttSmoke,
+    activeClass: document.body.classList.contains('ptt-active'),
+    value: document.querySelector('#msg-input')?.value,
+  }))
+  if (heldPttState.start !== 1 || heldPttState.end !== 0 || !heldPttState.activeClass || heldPttState.value !== '') {
+    throw new Error(`empty focused message input did not start PTT: ${JSON.stringify(heldPttState)}`)
+  }
+  await page.keyboard.up('Space')
+  const releasedPttState = await page.evaluate(() => ({
+    ...window.__pttSmoke,
+    activeClass: document.body.classList.contains('ptt-active'),
+  }))
+  if (releasedPttState.start !== 1 || releasedPttState.end !== 1 || releasedPttState.activeClass) {
+    throw new Error(`PTT did not release cleanly: ${JSON.stringify(releasedPttState)}`)
+  }
+  await page.fill('#msg-input', '正常输入')
+  await page.keyboard.press('Space')
+  const typedSpaceState = await page.evaluate(() => ({
+    ...window.__pttSmoke,
+    value: document.querySelector('#msg-input')?.value,
+  }))
+  if (typedSpaceState.start !== 1 || typedSpaceState.end !== 1 || typedSpaceState.value !== '正常输入 ') {
+    throw new Error(`Space in a non-empty message input did not remain text: ${JSON.stringify(typedSpaceState)}`)
+  }
+  await page.fill('#msg-input', '')
   await page.click('#chat-pin-button')
   await page.mouse.move(0, 0)
   await page.waitForTimeout(180)
@@ -758,7 +791,7 @@ try {
     || nativeBrowserPreview.renderer !== 'native'
     || nativeBrowserPreview.actionLogHidden !== true
     || nativeBrowserPreview.imageSrc
-    || nativeBrowserPreview.latest?.interactive !== false
+    || nativeBrowserPreview.latest?.interactive !== true
     || nativeBrowserPreview.latest?.url !== 'https://example.com/docs'
     || nativeBrowserPreview.slotBoxShadow !== 'none'
     || nativeBrowserPreview.slotBackground !== nativeBrowserPreview.bezelColor
@@ -1159,7 +1192,13 @@ try {
     && !document.querySelector('.action-log-module')?.dataset.browserPhase
     && !document.querySelector('#action-log')?.hidden
   ))
-  await nativePage.waitForTimeout(70)
+  await nativePage.waitForFunction(() => {
+    const xs = (window.__browserEmbedCalls || [])
+      .filter(call => call.method === 'update' && call.payload?.mode === 'card')
+      .map(call => call.payload.bounds?.x)
+      .filter(Number.isFinite)
+    return xs.length >= 2 && xs.at(-1) > xs.at(-2)
+  })
   const browserExitMotion = await nativePage.evaluate(() => {
     const moduleRect = document.querySelector('.action-log-module')?.getBoundingClientRect()
     const actionRect = document.querySelector('.action-log-surface')?.getBoundingClientRect()

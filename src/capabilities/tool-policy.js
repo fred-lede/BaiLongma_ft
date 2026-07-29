@@ -1,6 +1,7 @@
 import { config } from '../config.js'
 import { getMcpToolMetadata, isMcpTool } from '../mcp/client-manager.js'
 import { isExplicitAgentBrowserDataDeletionRequest } from '../mcp/browser-data-intent.js'
+import { isSystemBrowserRequest } from '../mcp/browser-display.js'
 import {
   explicitlyKeepsBrowserOpen,
   isLocalFileToolCallBlocked,
@@ -89,7 +90,7 @@ const TOOL_RISK = {
   set_security: 'high',
 }
 
-// Upstream annotates these Playwright MCP tools as non-read-only. Keep an
+// Chrome DevTools MCP exposes these actions as browser mutations. Keep an
 // explicit local backstop as well, so an autonomous Tick cannot gain mutation
 // authority from missing/incorrect remote metadata.
 const BROWSER_MUTATING_TOOLS = [
@@ -178,6 +179,13 @@ export function evaluateToolPolicy(name, args = {}, context = {}) {
   if (blockedTools.includes(canonicalName)) {
     return { allowed: false, risk, reason: `工具 "${name}" 已被安全策略禁用` }
   }
+  if (name === 'system_browser_open' && !isSystemBrowserRequest(currentUserMessage)) {
+    return {
+      allowed: false,
+      risk,
+      reason: 'opening the computer default browser requires an explicit current user request for the system/default browser',
+    }
+  }
   if (name === 'browser_close' && explicitlyKeepsBrowserOpen(currentUserMessage)) {
     return {
       allowed: false,
@@ -206,7 +214,7 @@ export function evaluateToolPolicy(name, args = {}, context = {}) {
     && context.startupSelfCheck?.active === true
     && STARTUP_SELF_CHECK_BROWSER_TOOLS.has(name)
     && getMcpToolMetadata(name)?.builtIn === true
-    && getMcpToolMetadata(name)?.playwrightRole === 'interactive'
+    && getMcpToolMetadata(name)?.chromeDevtools === true
   if (context.autonomous && isMcpTool(name) && !context.allowHighRiskAutonomy && !startupBrowserCheck) {
     const mcpTool = getMcpToolMetadata(name)
     const explicitlyAllowed = mcpTool?.allowAutonomousReadOnly === true

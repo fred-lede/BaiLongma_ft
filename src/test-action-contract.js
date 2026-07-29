@@ -30,6 +30,31 @@ try {
   const displayContract = classifyActionContract('切换到大浏览器')
   assert.equal(displayContract?.id, 'browser_display_mode')
   assert.deepEqual(displayContract.requiredTools, ['browser_set_display_mode'])
+  const browserLoginContract = classifyActionContract('需要你帮我登录我的 X 账号')
+  assert.equal(browserLoginContract?.id, 'browser_interaction')
+  assert(browserLoginContract.requiredTools.includes('browser_snapshot'))
+  assert(browserLoginContract.requiredTools.includes('browser_type'))
+  const browserContinuationContract = classifyActionContract('没有被墙，它能走', {
+    conversationWindow: [
+      { role: 'user', content: '需要你帮我登录我的 X 账号' },
+      { role: 'jarvis', content: '我正在用浏览器打开 X 登录页。' },
+    ],
+  })
+  assert.equal(browserContinuationContract?.id, 'browser_interaction')
+  assert.equal(classifyActionContract('没有被墙，它能走'), null,
+    'an isolated assertion remains ordinary conversation without browser continuity')
+  assert.match(actionContractCompletionIssue(
+    browserLoginContract,
+    'X 登录页已打开，用户名填好了，已经到密码页了。',
+    { successfulToolNames: new Set(['browser_snapshot']) },
+  ), /navigation|input|later login page/i,
+    'a snapshot cannot be laundered into navigation/form completion')
+  assert.match(actionContractCompletionIssue(
+    browserLoginContract,
+    '页面加载出来了，X 登录页正常显示。',
+    { successfulToolNames: new Set(['browser_snapshot']) },
+  ), /navigation/i,
+    'a snapshot cannot be laundered into a page-load claim')
   const closeBrowserContract = classifyActionContract('关掉你的浏览器')
   assert.equal(closeBrowserContract?.id, 'browser_close')
   assert.deepEqual(closeBrowserContract.requiredTools, ['browser_close'])
@@ -330,6 +355,60 @@ try {
   })
   assert.equal(snapshotExecuted.includes('browser_snapshot'), false,
     'Agent does not mechanically call browser_snapshot after an action that already returned inline YAML')
+
+  // Regression for the installed-app failure: when a login continuation only
+  // produces prose, the runtime must suppress it, insist on a real browser
+  // action, and reject the same fabricated claims after a mere snapshot.
+  let loginRounds = 0
+  const loginExecuted = []
+  const loginResult = await callLLM({
+    systemPrompt: 'Follow the current browser task.',
+    message: '没有被墙，它能走',
+    tools: browserLoginContract.requiredTools,
+    mustReply: true,
+    localReply: true,
+    toolContext: {
+      currentTargetId: 'ID:000001',
+      actionContract: browserContinuationContract,
+    },
+    _streamOnceForTest: async ({ messages }) => {
+      loginRounds += 1
+      if (loginRounds === 1) {
+        return {
+          content: '页面加载出来了，用户名填好了，已经到密码页了。',
+          reasoningContent: '', aborted: false, toolCalls: [],
+        }
+      }
+      if (loginRounds === 2) {
+        assert(messages.some(m => String(m.content || '').includes('No matching action has actually run')))
+        return {
+          content: '', reasoningContent: '', aborted: false,
+          toolCalls: [{ id: 'login-snapshot', name: 'browser_snapshot', arguments: '{}' }],
+        }
+      }
+      if (loginRounds === 3) {
+        return {
+          content: '页面加载出来了，用户名填好了，已经到密码页了。',
+          reasoningContent: '', aborted: false, toolCalls: [],
+        }
+      }
+      assert(messages.some(m => String(m.content || '').includes('Reply from verified evidence only')))
+      return {
+        content: '我已检查当前页面；尚未执行输入或提交，也不能确认已登录。',
+        reasoningContent: '', aborted: false, toolCalls: [],
+      }
+    },
+    _executeToolForTest: async name => {
+      loginExecuted.push(name)
+      if (name === 'browser_snapshot') return JSON.stringify({ ok: true, content: [{ type: 'text', text: 'X login page' }] })
+      if (name === 'send_message') return JSON.stringify({ ok: true, delivered: true, message_sent: true })
+      return JSON.stringify({ ok: false, error: 'unexpected tool' })
+    },
+  })
+  assert.equal(loginRounds, 4)
+  assert.deepEqual(loginExecuted, ['browser_snapshot', 'send_message'])
+  assert.match(loginResult.content, /尚未执行输入或提交/)
+  assert.doesNotMatch(loginResult.content, /密码页|填好了/)
 
   let realBrowserCloseCalls = 0
   let keepOpenRounds = 0

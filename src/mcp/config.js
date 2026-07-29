@@ -7,7 +7,7 @@ const STORE_VERSION = 1
 const MASKED_SECRET = '[configured]'
 const SERVER_ID_RE = /^[a-z][a-z0-9_-]{0,39}$/
 const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
-const RESERVED_SERVER_IDS = new Set(['builtin_playwright', 'builtin_playwright_reader'])
+const RESERVED_SERVER_IDS = new Set(['builtin_chrome_devtools', 'builtin_playwright', 'builtin_playwright_reader'])
 
 function readStore() {
   try {

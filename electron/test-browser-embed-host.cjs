@@ -6,6 +6,7 @@ const {
   BROWSER_EMBED_PARTITION,
   createBrowserEmbedHost,
   isAllowedWebUrl,
+  isTrustedGoogleOauthPopupUrl,
   normalizeBounds,
 } = require('./browser-embed-host.cjs')
 
@@ -30,6 +31,9 @@ class FakeWebContents extends EventEmitter {
     this.session = new FakeSession()
     this.url = ''
     this.loadCalls = []
+    this.insertCssCalls = []
+    this.removedCssKeys = []
+    this.nextCssKey = 0
     this.destroyed = false
   }
 
@@ -39,10 +43,18 @@ class FakeWebContents extends EventEmitter {
   getTitle() { return this.title || '' }
   async loadURL(url) {
     this.loadCalls.push(url)
+    this.emit('did-start-navigation', {}, url, false, true)
     this.url = url
     this.emit('did-navigate', {}, url)
+    this.emit('did-finish-load')
     this.emit('did-stop-loading')
   }
+  async insertCSS(css, options) {
+    const key = `css-${++this.nextCssKey}`
+    this.insertCssCalls.push({ css, options, key })
+    return key
+  }
+  async removeInsertedCSS(key) { this.removedCssKeys.push(key) }
   setZoomFactor(value) { this.zoomFactor = value }
   close() { this.destroyed = true }
 }
@@ -138,6 +150,9 @@ async function run() {
   assert.equal(isAllowedWebUrl('http://127.0.0.1:3721/'), true)
   assert.equal(isAllowedWebUrl('file:///tmp/private'), false)
   assert.equal(isAllowedWebUrl('javascript:alert(1)'), false)
+  assert.equal(isTrustedGoogleOauthPopupUrl('https://accounts.google.com/gsi/select?client_id=test'), true)
+  assert.equal(isTrustedGoogleOauthPopupUrl('https://accounts.google.evil.example/gsi/select'), false)
+  assert.equal(isTrustedGoogleOauthPopupUrl('http://accounts.google.com/gsi/select'), false)
   assert.deepEqual(
     normalizeBounds({ x: 10.25, y: 20.5, width: 300.25, height: 200 }, { width: 1000, height: 700 }),
     { x: 10, y: 20, width: 301, height: 201 },
@@ -170,6 +185,7 @@ async function run() {
     View: FakeView,
     BaseWindow: FakeBaseWindow,
     logger: { warn: (...args) => warnings.push(args) },
+    platform: 'win32',
     onNavigation: entry => navigations.push(entry),
     nativeRequestGuard: true,
     onDiagnosticInput: input => {
@@ -193,7 +209,7 @@ async function run() {
   assert.equal(primedState.zoomFactor, 1)
   assert.deepEqual(
     FakeWebContentsView.instances[0].webContents.loadCalls,
-    ['about:blank'],
+    ['about:blank#bailongma-browser-42'],
     'prime must commit a renderer before Playwright attaches over CDP',
   )
   const cardState = await host.update(mainWindow, {
@@ -217,6 +233,13 @@ async function run() {
   assert.equal(cardState.url, 'https://example.com/')
   assert.equal(cardState.zoomFactor, 0.5)
   assert.equal(view.webContents.zoomFactor, 0.5)
+  assert.equal(view.webContents.insertCssCalls.length, 2,
+    'Windows card mode reapplies its compact scrollbar style after navigation')
+  assert.equal(view.webContents.insertCssCalls.at(-1).options.cssOrigin, 'user')
+  assert.match(view.webContents.insertCssCalls.at(-1).css, /::-webkit-scrollbar/)
+  assert.match(view.webContents.insertCssCalls.at(-1).css, /display: none !important/)
+  assert.match(view.webContents.insertCssCalls.at(-1).css, /width: 0 !important/)
+  assert.match(view.webContents.insertCssCalls.at(-1).css, /height: 0 !important/)
   assert.equal(view.visible, true)
   assert.equal(view.radius, 20)
   assert.equal(mainWindow.contentView.children[0], view)
@@ -278,6 +301,7 @@ async function run() {
     webContentsId: 42,
     partition: BROWSER_EMBED_PARTITION,
     url: 'https://example.com/',
+    debugUrl: 'https://example.com/',
     mode: 'card',
     visible: true,
     nativeNetworkGuard: true,
@@ -319,6 +343,20 @@ async function run() {
   assert.equal(view.webContents.getURL(), popupTakeover.finalUrl,
     'a safe target=_blank URL navigates the current managed page in place')
 
+  const googlePopupDecision = view.webContents.windowOpenHandler({
+    url: 'https://accounts.google.com/gsi/select?client_id=test',
+    disposition: 'new-popup',
+  })
+  assert.equal(googlePopupDecision.action, 'allow',
+    'Google OAuth keeps its opener-preserving user-operated popup')
+  assert.equal(googlePopupDecision.overrideBrowserWindowOptions.webPreferences.partition, BROWSER_EMBED_PARTITION)
+  assert.equal(googlePopupDecision.overrideBrowserWindowOptions.webPreferences.nodeIntegration, false)
+  const googlePopup = await host.consumeWindowOpenNavigation()
+  assert.equal(googlePopup.kind, 'google_oauth_popup')
+  assert.equal(googlePopup.ok, true)
+  assert.equal(view.webContents.getURL(), popupTakeover.finalUrl,
+    'opening Google OAuth does not replace the managed X page')
+
   for (const dangerousUrl of [
     'javascript:alert(1)',
     'file:///etc/passwd',
@@ -331,6 +369,8 @@ async function run() {
       'a rejected popup target leaves the controlled page unchanged')
   }
 
+  const cardScrollbarCssKey = view.webContents.insertCssCalls.at(-1).key
+  const cardScrollbarInsertCount = view.webContents.insertCssCalls.length
   const windowState = await host.update(mainWindow, {
     mode: 'window',
     visible: true,
@@ -340,6 +380,10 @@ async function run() {
   })
   assert.equal(FakeWebContentsView.instances.length, 1, 'large mode must reuse the same WebContentsView')
   assert.equal(FakeBaseWindow.instances.length, 1)
+  assert.equal(FakeBaseWindow.instances[0].options.frame, true)
+  assert.equal(FakeBaseWindow.instances[0].options.titleBarStyle, 'default')
+  assert.equal(FakeBaseWindow.instances[0].options.closable, true)
+  assert.equal(FakeBaseWindow.instances[0].options.movable, true)
   assert.equal(mainWindow.contentView.children.includes(view), false)
   assert.equal(FakeBaseWindow.instances[0].contentView.children[0], view)
   assert.equal(FakeBaseWindow.instances[0].visible, true)
@@ -347,6 +391,8 @@ async function run() {
   assert.equal(windowState.radius, 0)
   assert.equal(windowState.zoomFactor, 1)
   assert.equal(view.webContents.zoomFactor, 1)
+  assert.deepEqual(view.webContents.removedCssKeys, [cardScrollbarCssKey],
+    'large-window mode restores the normal page scrollbar')
   assert.equal(windowState.transitioning, false)
   assert.deepEqual(FakeBaseWindow.instances[0].contentBoundsCalls.slice(0, 2), [
     {
@@ -359,6 +405,25 @@ async function run() {
     },
   ], 'card-to-window transition starts at the card screen rectangle and expands natively')
   assert.equal(view.webContents.loadCalls.length, 3, 'switching hosts must not reload the page')
+
+  let closePrevented = false
+  FakeBaseWindow.instances[0].emit('close', {
+    preventDefault() { closePrevented = true },
+  })
+  const dismissedWindowState = host.getState(mainWindow)
+  assert.equal(closePrevented, true, 'the native close button must dismiss instead of destroying the page')
+  assert.equal(FakeBaseWindow.instances[0].visible, false)
+  assert.equal(dismissedWindowState.visible, false)
+  assert.equal(dismissedWindowState.webContentsId, windowState.webContentsId)
+  assert.equal(view.webContents.isDestroyed(), false)
+
+  await host.update(mainWindow, {
+    mode: 'window',
+    visible: true,
+    interactive: true,
+  })
+  assert.equal(FakeBaseWindow.instances[0].visible, true, 'the same large browser can be shown again')
+  assert.equal(host.getState(mainWindow).webContentsId, windowState.webContentsId)
 
   FakeBaseWindow.instances[0].setContentBounds({ x: 70, y: 55, width: 1080, height: 720 })
 
@@ -374,6 +439,8 @@ async function run() {
   assert.equal(mainWindow.contentView.children[0], view)
   assert.equal(FakeBaseWindow.instances[0].visible, false)
   assert.equal(view.webContents.zoomFactor, 500 / 1280)
+  assert.equal(view.webContents.insertCssCalls.length, cardScrollbarInsertCount + 1,
+    'returning to the card restores the compact scrollbar without reloading')
   assert.deepEqual(FakeBaseWindow.instances[0].contentBoundsCalls.at(-1), {
     bounds: { x: 100, y: 80, width: 500, height: 300 },
     animate: true,

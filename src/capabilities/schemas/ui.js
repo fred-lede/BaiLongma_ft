@@ -6,7 +6,7 @@ export const uiSchemas = {
     type: 'function',
     function: {
       name: 'browser_clear_data',
-      description: 'Destructively clear selected persistent data from Bailongma\'s own built-in browser (the shared compact/large browser profile). This tool is forbidden unless the CURRENT user message explicitly asks to delete/clear Bailongma\'s, the Agent\'s, or "your" browser data. Never call it when closing the browser, switching sizes, recovering from an error, signing out of a website, or doing routine cleanup. browser_close already destroys the live page without deleting profile data. History supports exact time ranges; Electron only supports all-time deletion for cookies, login/site data, and cache. Ask a clarifying question when the requested data types or time range are ambiguous.',
+      description: 'Destructively clear selected data from BaiLongma dedicated Google Chrome only. It never accesses the user\'s computer/default Chrome profile. This tool is forbidden unless the CURRENT user message explicitly asks to delete/clear Bailongma\'s, the Agent\'s, or "your" browser data. Never call it when closing the browser, switching sizes, recovering from an error, signing out of a website, or doing routine cleanup. browser_close does not delete profile data. Dedicated-Chrome deletion is all-time only; ask a clarifying question when the requested data types or time range are ambiguous.',
       parameters: {
         type: 'object',
         properties: {
@@ -20,7 +20,7 @@ export const uiSchemas = {
           time_range: {
             type: 'string',
             enum: ['last_hour', 'last_day', 'last_7_days', 'last_30_days', 'all_time', 'custom'],
-            description: 'Exact range for history. cookies/site_data/cache require all_time because Electron has no reliable per-creation-time deletion API.',
+            description: 'Must be all_time for BaiLongma dedicated Chrome. The user\'s default browser is never in scope.',
           },
           since: {
             type: 'string',
@@ -46,7 +46,7 @@ export const uiSchemas = {
     type: 'function',
     function: {
       name: 'system_browser_open',
-      description: 'Open an HTTP(S) URL in the browser installed on the user\'s computer (the macOS/Windows/Linux default browser). This is the third, user-owned browser surface and is completely separate from Bailongma\'s compact card ("你的浏览器") and large window ("我的浏览器"). Use it only when the user explicitly says "用我电脑上的浏览器", "电脑浏览器", "系统/默认浏览器", or an equivalent phrase. Bailongma cannot inspect, click, or continue controlling that external browser after opening it, and its cookies/history are not shared with the Bailongma browser. Do not use browser_navigate or browser_set_display_mode as a substitute for this explicit request.',
+      description: 'Open an HTTP(S) URL in the browser installed on the user\'s computer (the macOS/Windows/Linux default browser). This user-owned surface is completely separate from BaiLongma\'s managed live WebContentsView in card/window mode. Use it only when the user explicitly says "用我电脑上的浏览器", "电脑浏览器", "系统/默认浏览器", or an equivalent phrase. Bailongma cannot inspect, click, or continue controlling that external browser after opening it, and their cookies/history are not shared. Do not use browser_navigate or browser_set_display_mode as a substitute for this explicit request.',
       parameters: {
         type: 'object',
         properties: {
@@ -64,14 +64,14 @@ export const uiSchemas = {
     type: 'function',
     function: {
       name: 'browser_set_display_mode',
-      description: 'Switch Bailongma\'s existing live browser between the compact Brain UI card ("你的浏览器", small browser) and the large interactive window ("我的浏览器", large browser) without navigating, reloading, closing, or losing page state. These two modes share one page/profile. They are not the browser installed on the computer; an explicit "电脑浏览器" request must use system_browser_open instead. You MUST call this tool whenever the user explicitly asks for the Bailongma large/big/small/compact browser or window, even if it already appears to be in that mode. You may also switch to window for user takeover, QR login, CAPTCHA, video, or careful interaction, and use card for lightweight observation/research. Honor an explicit request to keep video or another task in the compact card. Do not bounce modes unnecessarily.',
+      description: 'Switch the presentation of BaiLongma\'s single live managed WebContentsView without navigating or reloading it. card embeds the live page in Brain UI; window moves the exact same page into a draggable native window with standard controls. URL, history, title, and webContents id remain continuous. Neither mode is the computer\'s default browser. You MUST call this tool whenever the user explicitly asks for the Bailongma large/big/small/compact browser or window, even if it already appears to be in that mode. Use window for user takeover, account login, Google OAuth, QR login, CAPTCHA, video, and careful interaction. The Agent must never enter credentials, MFA, CAPTCHA, or OAuth consent.',
       parameters: {
         type: 'object',
         properties: {
           mode: {
             type: 'string',
             enum: ['card', 'window'],
-            description: 'card shows the compact browser inside the Brain UI action-log card; window shows the same live page in the large external browser window.',
+            description: 'card embeds the live managed WebContentsView in Brain UI; window moves that same view into its native window.',
           },
           reason: {
             type: 'string',
@@ -175,7 +175,7 @@ export const uiSchemas = {
     type: 'function',
     function: {
       name: 'person_card_mode',
-      description: 'Control the person-card panel. Use only when the user says they do not know someone, asks who someone is or why they are popular, or when the current conversation truly needs a public-figure explanation. Do not proactively open it for ordinary Q&A. Basic profile data can update the card.',
+      description: 'Intent-gated control for the person-card panel. Call only when the user intent is to identify or understand a named real public figure (for example: who they are, why they are known, their biography), or when the user explicitly asks to show, update, or close the person card. Do not call merely because a person is mentioned. Do not call for feature discussions, code or bug reports about the person-card system, projects, products, fictional/unknown targets, writing requests, or ordinary Q&A. If the intent is uncertain, answer normally without opening the card. Basic verified profile data may update an already intended card.',
       parameters: {
         type: 'object',
         properties: {

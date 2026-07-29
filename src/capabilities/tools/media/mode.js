@@ -22,7 +22,7 @@ export function execMediaMode(args = {}) {
         emitEvent('action', { tool: 'media_mode', summary: 'YouTube 链接已挡回（CN→改用 B 站）', detail: u.slice(0, 60) })
         return JSON.stringify({
           ok: false, tool: 'media_mode', error: 'youtube_not_embeddable_cn',
-          guide: '当前网络在中国大陆，YouTube 视频经常无法嵌入播放（用户会看到"此视频不能观看"）。不要用 YouTube 链接。请改用 Microsoft Playwright MCP 浏览器在 Bilibili 上搜同一主题的视频，拿到形如 https://www.bilibili.com/video/BVxxxxxxxxxx 的链接后，再用 media_mode(mode="video") 重新播放。优先选官方/高播放量的稿件，确认是可正常播放的完整视频而不是合集/直播回放。',
+          guide: '当前网络在中国大陆，YouTube 视频经常无法嵌入播放（用户会看到"此视频不能观看"）。不要用 YouTube 链接。请改用白龙马专用 Google Chrome 在 Bilibili 上搜同一主题的视频，拿到形如 https://www.bilibili.com/video/BVxxxxxxxxxx 的链接后，再用 media_mode(mode="video") 重新播放。优先选官方/高播放量的稿件，确认是可正常播放的完整视频而不是合集/直播回放。',
         })
       }
     }

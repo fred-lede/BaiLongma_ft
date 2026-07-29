@@ -155,12 +155,12 @@ function ctx(rawText, isTick = false) {
     '3c2) 台风 → Typhoon Monitoring Panel 块')
   assert(capabilityContextBlocks(ctx('安装微信')).some(b => b.includes('Software Install Workflow')),
     '3d) 安装 → Software Install Workflow 块')
-  const browserContext = capabilityContextBlocks(ctx('打开网页并点击登录')).find(b => b.includes('Microsoft Playwright MCP Only')) || ''
+  const browserContext = capabilityContextBlocks(ctx('打开网页并点击登录')).find(b => b.includes('BaiLongma Built-in Chromium')) || ''
   assert(browserContext.includes('browser_navigate') && browserContext.includes('browser_snapshot')
-    && browserContext.includes('automatically return a fresh accessibility snapshot')
+    && browserContext.includes('actions return a fresh accessibility snapshot')
     && browserContext.includes('instead of routinely calling browser_snapshot')
-    && browserContext.includes('relative filename') && browserContext.includes('browser_run_code_unsafe'),
-  '3e) 浏览器工作流说明官方自动 snapshot、显式兜底、安全截图和禁用工具')
+    && browserContext.includes('Chrome DevTools uid values') && browserContext.includes('browser_run_code_unsafe'),
+  '3e) 浏览器工作流说明专用 Chrome 自动 snapshot、显式兜底、安全截图和禁用工具')
   assert(['browser_sessions', 'session_id', 'page_id', 'ref epoch'].every(term => !browserContext.includes(term))
     && !/(^|[^A-Za-z0-9_])browser_open([^A-Za-z0-9_]|$)/.test(browserContext),
     '3f) 浏览器工作流不再提示自研会话/profile/epoch 模型')

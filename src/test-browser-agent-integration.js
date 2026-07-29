@@ -10,7 +10,7 @@ import {
 } from './capabilities/capability-registry.js'
 import { selectTools } from './memory/tool-router.js'
 import { classifyTool, evaluateToolPolicy } from './capabilities/tool-policy.js'
-import { BUILTIN_PLAYWRIGHT_ALLOWED_TOOLS } from './mcp/playwright-server.js'
+import { BUILTIN_BROWSER_ALLOWED_TOOLS } from './mcp/chrome-devtools-server.js'
 import {
   buildToolAuditRecord,
   sanitizeToolAuditArgs,
@@ -84,8 +84,8 @@ const LEGACY_BROWSER_TOOLS = ['browser_sessions', 'browser_open', 'browser_inspe
 const REMOVED_WEB_AND_BROWSER_TOOLS = [...STATELESS_WEB_TOOLS, ...LEGACY_BROWSER_TOOLS]
 
 assert.deepEqual(BROWSER_TOOLS, EXPECTED_BROWSER_TOOLS,
-  'browser capability uses official Playwright MCP remote names in a fixed safe allowlist')
-assert.deepEqual([...BROWSER_TOOLS].sort(), [...BUILTIN_PLAYWRIGHT_ALLOWED_TOOLS].sort(),
+  'browser capability preserves stable public names in a fixed safe allowlist')
+assert.deepEqual([...BROWSER_TOOLS].sort(), [...BUILTIN_BROWSER_ALLOWED_TOOLS].sort(),
   'router allowlist matches the built-in MCP process boundary')
 assert.ok(FORBIDDEN_BROWSER_TOOLS.every(name => !BROWSER_TOOLS.includes(name)),
   'legacy browser tools, arbitrary JavaScript, and local-file ingress are not exposed')
@@ -103,7 +103,7 @@ assert.deepEqual(BROWSER_DATA_TOOLS, ['browser_clear_data'])
 assert.ok(TOOL_SCHEMAS.browser_clear_data,
   'persistent browser data deletion has a separate high-risk built-in schema')
 assert.deepEqual(findCapabilitiesByQuery('fill form')[0]?.tools, BROWSER_CAPABILITY_TOOLS,
-  'find_tool discovery loads Playwright plus the presentation-only display switch')
+  'find_tool discovery loads dedicated Chrome plus the presentation-only display switch')
 
 for (const messageBody of [
   '切换到小浏览器', '切换到大浏览器', '换成浏览器卡片', '改成外部浏览器',
@@ -128,7 +128,7 @@ for (const messageBody of [
   assert.ok(routed.includes('system_browser_open'),
     `computer browser request injects its dedicated tool: ${messageBody}`)
   assert.ok(BROWSER_CAPABILITY_TOOLS.every(name => !routed.includes(name)),
-    `computer browser request does not inject Bailongma Playwright tools: ${messageBody}`)
+    `computer browser request does not inject BaiLongma dedicated-Chrome tools: ${messageBody}`)
 }
 
 for (const messageBody of [
@@ -153,7 +153,7 @@ for (const messageBody of [
   'go to definition in the editor', 'visit pattern implementation',
 ]) {
   const routed = selectTools({ messageBody, isTick: false })
-  assert.ok(BROWSER_TOOLS.every(name => !routed.includes(name)), `non-browser term does not trigger Playwright: ${messageBody}`)
+  assert.ok(BROWSER_TOOLS.every(name => !routed.includes(name)), `non-browser term does not trigger dedicated Chrome: ${messageBody}`)
   assert.ok(REMOVED_WEB_AND_BROWSER_TOOLS.every(name => !routed.includes(name)),
     `ordinary technical term does not trigger removed web/browser tools: ${messageBody}`)
 }
@@ -165,7 +165,7 @@ for (const messageBody of [
 ]) {
   const routed = selectTools({ messageBody, isTick: false })
   assert.ok(BROWSER_TOOLS.every(name => routed.includes(name)),
-    `one-shot body read injects official Playwright: ${messageBody}`)
+    `one-shot body read injects the dedicated Chrome contract: ${messageBody}`)
   assert.ok(REMOVED_WEB_AND_BROWSER_TOOLS.every(name => !routed.includes(name)),
     `one-shot body read excludes removed tools: ${messageBody}`)
 }
@@ -176,7 +176,7 @@ const combined = selectTools({
 })
 assert.ok(BROWSER_TOOLS.every(name => combined.includes(name))
   && REMOVED_WEB_AND_BROWSER_TOOLS.every(name => !combined.includes(name)),
-  'combined search + interaction uses only official Playwright tools')
+  'combined search + interaction uses only dedicated Chrome public tools')
 
 assert.ok(BROWSER_TOOLS.every(name => !selectTools({
   messageBody: 'click',
@@ -189,7 +189,7 @@ const continued = selectTools({
   recentActionLog: [{ tool: 'browser_snapshot' }],
 })
 assert.ok(BROWSER_TOOLS.every(name => continued.includes(name)),
-  'a recent official Playwright action restores the complete safe group for a terse follow-up')
+  'a recent dedicated Chrome action restores the complete safe group for a terse follow-up')
 assert.ok([...FORBIDDEN_BROWSER_TOOLS, ...STATELESS_WEB_TOOLS].every(name => !continued.includes(name)),
   'browser continuity cannot restore legacy, unsafe, or removed web tools')
 
@@ -215,8 +215,8 @@ const browserContext = capabilityContextBlocks({
   text: '打开网页并点击登录',
   rawText: '打开网页并点击登录',
   isTick: false,
-}).find(block => block.includes('Microsoft Playwright MCP Only')) || ''
-assert.match(browserContext, /browser_navigate[\s\S]*automatically return a fresh accessibility snapshot/)
+}).find(block => block.includes('BaiLongma Built-in Chromium')) || ''
+assert.match(browserContext, /browser_navigate[\s\S]*actions return a fresh accessibility snapshot/)
 assert.match(browserContext, /instead of routinely calling browser_snapshot/)
 assert.match(browserContext, /browser_navigate_forward[\s\S]*browser_reload/)
 assert.match(browserContext, /Never reopen the current URL with browser_navigate[\s\S]*"forward" or "reload"/)
@@ -225,16 +225,15 @@ assert.match(browserContext, /Match search results against the user's full meani
 assert.match(browserContext, /remote GitHub page[\s\S]*Do not switch to read_file, list_dir, find_tool for local files/)
 assert.match(browserContext, /Final replies should report only the key result and real failures/)
 assert.match(browserContext, /browser_find/)
-assert.match(browserContext, /relative filename/)
 assert.match(browserContext, /browser_snapshot rather than a screenshot/)
 assert.match(browserContext, /CAPTCHA\/challenge page is a hard stop[\s\S]*Do not navigate to another provider/)
-assert.match(browserContext, /snapshot shows \[ref=e36\][\s\S]*raw target value "e36"/)
+assert.match(browserContext, /Chrome DevTools uid values[\s\S]*latest raw uid/)
 assert.match(browserContext, /no automatic timeout[\s\S]*stays visible after the response and across later turns/)
 assert.match(browserContext, /asks to open, show, browse, watch, or keep a page[\s\S]*do not call browser_close/)
 assert.match(browserContext, /one-shot lookup or extraction[\s\S]*call browser_close[\s\S]*only when the page is no longer useful/)
 assert.match(browserContext, /intent is ambiguous, prefer leaving the page visible/)
-assert.match(browserContext, /browser_close really closes and destroys the live browser page/)
-assert.match(browserContext, /Closing a page never deletes browser data[\s\S]*durable visit history/)
+assert.match(browserContext, /browser_close closes\/resets the active dedicated-Chrome page/)
+assert.match(browserContext, /Closing a page never deletes browser data[\s\S]*dedicated Chrome profile/)
 assert.match(browserContext, /browser_clear_data is the only operation allowed[\s\S]*current user message explicitly asks/)
 assert.match(browserContext, /browser_set_display_mode[\s\S]*mode="card"[\s\S]*mode="window"/)
 assert.match(browserContext, /must not navigate or reload/)
@@ -263,6 +262,12 @@ assert.equal(evaluateToolPolicy('browser_set_display_mode', {}, { autonomous: tr
 assert.equal(classifyTool('system_browser_open'), 'medium')
 assert.equal(evaluateToolPolicy('system_browser_open', {}, { autonomous: true }).allowed, false,
   'an autonomous Tick cannot open a user-owned desktop browser')
+assert.equal(evaluateToolPolicy('system_browser_open', { url: 'https://www.baidu.com' }, {
+  currentUserMessage: '在百度搜索一下 MCP',
+}).allowed, false, 'ordinary web search cannot fall back to the user-owned desktop browser')
+assert.equal(evaluateToolPolicy('system_browser_open', { url: 'https://www.baidu.com' }, {
+  currentUserMessage: '用电脑默认浏览器打开百度',
+}).allowed, true, 'an explicit current request may open the user-owned desktop browser')
 
 for (const currentUserMessage of [
   '不要关闭浏览器',
@@ -342,26 +347,26 @@ assert.equal(evaluateToolPolicy('browser_clear_data', {
 }, { currentUserMessage: '删除agent自带浏览器最近一小时的历史数据', autonomous: true }).allowed, false)
 
 const clearCalls = []
-const shutdownRoles = []
+const shutdownCalls = []
 const clearResult = JSON.parse(await execBrowserClearData(
-  { data_types: ['history'], time_range: 'last_hour' },
+  { data_types: ['history'], time_range: 'all_time' },
   {
-    currentUserMessage: '删除agent自带浏览器最近一小时的历史数据',
-    shutdownBuiltInPlaywrightFn: async ({ role }) => shutdownRoles.push(role),
+    currentUserMessage: '删除agent自带浏览器所有历史数据',
+    shutdownBuiltInChromeFn: async () => shutdownCalls.push('chrome'),
     browserDataBridge: {
       closePage: async () => clearCalls.push({ action: 'closePage' }),
       clearData: async request => {
         clearCalls.push(request)
-        return { historyEntriesRemoved: 3, profileDataCleared: [] }
+        return { scope: 'bailongma_dedicated_chrome_only', profile_deleted: true }
       },
     },
   },
 ))
 assert.equal(clearResult.ok, true)
-assert.deepEqual(shutdownRoles, ['interactive', 'reader'])
+assert.deepEqual(shutdownCalls, ['chrome'])
 assert.deepEqual(clearCalls, [
   { action: 'closePage' },
-  { dataTypes: ['history'], timeRange: 'last_hour' },
+  { dataTypes: ['history'], timeRange: 'all_time' },
 ])
 assert.equal(JSON.parse(await execBrowserClearData(
   { data_types: ['history'], time_range: 'all_time' },

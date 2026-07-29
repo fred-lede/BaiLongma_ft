@@ -10,10 +10,18 @@ const root = path.resolve(import.meta.dirname, '..')
 const productName = pkg.productName || 'Bailongma'
 const version = pkg.version
 
-const targets = [
+const supportedTargets = [
   { label: 'x64', machArch: 'x86_64' },
   { label: 'arm64', machArch: 'arm64' },
 ]
+const requestedLabels = process.argv.slice(2)
+const unknownLabels = requestedLabels.filter(label => !supportedTargets.some(target => target.label === label))
+if (unknownLabels.length > 0) {
+  throw new Error(`Unsupported mac artifact target(s): ${unknownLabels.join(', ')}`)
+}
+const targets = requestedLabels.length > 0
+  ? supportedTargets.filter(target => requestedLabels.includes(target.label))
+  : supportedTargets
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -71,6 +79,20 @@ function assertDeveloperTeam(filePath, label) {
   }
 }
 
+function assertEntitlement(filePath, entitlement, label) {
+  const result = spawnSync('codesign', ['--display', '--entitlements', ':-', filePath], {
+    cwd: root,
+    encoding: 'utf8',
+  })
+  const detail = `${result.stdout || ''}\n${result.stderr || ''}`
+  if (result.error || result.status !== 0) {
+    throw new Error(`${label} entitlements are unavailable: ${detail.trim()}`)
+  }
+  if (!new RegExp(`<key>${entitlement.replaceAll('.', '\\.')}</key>\\s*<true\\s*/>`).test(detail)) {
+    throw new Error(`${label} is missing required entitlement ${entitlement}`)
+  }
+}
+
 function mountDmg(dmgPath) {
   const mountPoint = fs.mkdtempSync(path.join(os.tmpdir(), 'bailongma-dmg-'))
   run('hdiutil', ['attach', '-readonly', '-nobrowse', '-mountpoint', mountPoint, dmgPath])
@@ -106,6 +128,12 @@ function smokeTarget(target) {
     const speechHelperPath = path.join(unpackedPath, 'build', 'native-speech-recognizer')
     const sqliteNodePath = path.join(unpackedPath, 'node_modules', 'better-sqlite3', 'build', 'Release', 'better_sqlite3.node')
     const sqliteTestExtensionPath = path.join(unpackedPath, 'node_modules', 'better-sqlite3', 'build', 'Release', 'test_extension.node')
+    const rendererHelperPath = path.join(
+      appPath,
+      'Contents',
+      'Frameworks',
+      `${productName} Helper (Renderer).app`,
+    )
 
     assertSingleArch(executablePath, target.machArch, `${target.label} app executable`)
     assertSingleArch(speechHelperPath, target.machArch, `${target.label} native speech helper`)
@@ -114,6 +142,8 @@ function smokeTarget(target) {
     assertCodeSigned(speechHelperPath, `${target.label} native speech helper`)
     assertDeveloperTeam(appPath, `${target.label} app`)
     assertDeveloperTeam(speechHelperPath, `${target.label} native speech helper`)
+    assertEntitlement(appPath, 'com.apple.security.device.audio-input', `${target.label} app`)
+    assertEntitlement(rendererHelperPath, 'com.apple.security.device.audio-input', `${target.label} renderer helper`)
 
     if (fs.existsSync(sqliteTestExtensionPath)) {
       throw new Error(`${target.label} package still includes better-sqlite3 test_extension.node`)

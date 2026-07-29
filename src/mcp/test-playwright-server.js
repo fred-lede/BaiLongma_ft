@@ -682,6 +682,27 @@ try {
   'target=_blank click reports the final in-place URL and a fresh official snapshot',
   JSON.stringify({ popupClick, popupCalls }))
 
+  pendingWindowOpenTakeover = {
+    ok: true,
+    kind: 'google_oauth_popup',
+    requestedUrl: 'https://accounts.google.com/gsi/select?client_id=test',
+    finalUrl: 'https://accounts.google.com/gsi/select?client_id=test',
+  }
+  const beforeGooglePopupClick = FakeClient.calls.length
+  const googlePopupClick = parseJson(await executeMcpTool(
+    'browser_click',
+    { element: 'Continue with Google', ref: 'e44' },
+    { browserDisplayMode: 'window', mcpDeps: embeddedDeps },
+  ))
+  const googlePopupCalls = FakeClient.calls.slice(beforeGooglePopupClick)
+  assert(googlePopupClick?.ok === true
+    && googlePopupClick?.content?.some(item => /user-operated window/.test(item?.text || ''))
+    && googlePopupClick?.structured_content?.window_open_takeover?.kind === 'google_oauth_popup'
+    && googlePopupCalls.length === 1
+    && googlePopupCalls[0]?.request?.name === 'browser_click',
+  'Google OAuth popup is handed to the user without pretending the managed X page navigated',
+  JSON.stringify({ googlePopupClick, googlePopupCalls }))
+
   pendingWindowOpenTakeover = { ok: false, error: 'Private or local network URL is disabled' }
   const blockedPopupClick = parseJson(await executeMcpTool(
     'browser_click',

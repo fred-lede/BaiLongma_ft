@@ -17,6 +17,44 @@ const BROWSER_INFORMATION_ACTION_RE = /(?:搜索|查询|查找|浏览(?!器)|阅
 const BROWSER_OPEN_TARGET_RE = /(?:打开|访问|进入|前往|加载)\s*(?:一下\s*)?(?!这个(?:网页|页面)|当前(?:网页|页面)|刚才(?:的)?(?:网页|页面)|$)[\p{L}\p{N}]/iu
 const BROWSER_OPEN_TARGET_EN_RE = /(?:open|visit|go\s+to|navigate\s+to|load)\s+(?!(?:this|the current|the previous)\s+(?:page|webpage)\b)[a-z0-9]/i
 const BROWSER_CLOSE_RE = /(?:(?:关闭|关掉|退出).{0,12}(?:你的浏览器|白龙马浏览器|agent\s*浏览器|小窗口浏览器|大窗口浏览器|小浏览器|大浏览器|当前网页|当前页面|浏览器|网页|页面)|(?:close|quit|exit)\s+(?:your|the\s+bailongma|the\s+agent|the\s+current)?\s*(?:browser|webpage|page)\b)/i
+const BROWSER_CLOSE_FILLER_RE = /(?:不用|无需|不要|别)(?:再)?(?:说话|解释|说明)|只(?:要|需)?(?:回复|回)?(?:一个)?(?:ok)?(?:的)?(?:👌)?(?:表情|图标)?|那(?:现在)?(?:怎么办)?|请|麻烦(?:你)?|帮我|帮忙|给我|现在|就|直接|真的|真正|先|再|把|将|好的?|行|可以|一下|吧|啊|呀|哦|呢|啦|谢谢(?:你)?|麻烦了|就行(?:了)?|即可|\b(?:please|now|just|simply|thanks|thank\s+you|do\s+it)\b/giu
+const BROWSER_CLOSE_PUNCTUATION_RE = /[\s，。！？、；：,.!?;:'"“”‘’（）()\[\]{}<>《》…—-]/gu
+const BROWSER_INTERACTION_TOOLS = [
+  'browser_snapshot',
+  'browser_navigate',
+  'browser_click',
+  'browser_type',
+  'browser_fill_form',
+  'browser_press_key',
+]
+const BROWSER_LOGIN_REQUEST_RE = /(?:(?:帮我|请|给我|你(?:来|帮)|现在|直接).{0,18}(?:登录|登入)(?:.{0,20}(?:账号|帐号|网站|网页|x\b|twitter|google|谷歌))?|(?:登录|登入).{0,20}(?:我的|这个|该).{0,16}(?:账号|帐号|网站|网页|x\b|twitter))/i
+const BROWSER_CONTINUATION_RE = /(?:^(?:没有|没).{0,8}(?:被墙|拦住|问题)|^(?:它|这个).{0,8}(?:能(?:走|打开|访问)|可以(?:走|打开|访问))|^(?:继续|再试|重试|接着|那就).{0,18}(?:登录|浏览器|网页|页面|操作)?$|^(?:continue|retry|go\s+on)\b)/i
+const BROWSER_CONTEXT_RE = /(?:浏览器|网页|页面|登录|登入|账号|帐号|验证码|oauth|google|谷歌|\bx\b|twitter)/i
+
+function browserInteractionContract(label = '检查并继续浏览器交互') {
+  return {
+    id: 'browser_interaction',
+    label,
+    requiredTools: [...BROWSER_INTERACTION_TOOLS],
+  }
+}
+
+function hasRecentBrowserContext(conversationWindow = []) {
+  return Array.isArray(conversationWindow)
+    && conversationWindow.slice(-6).some(item => BROWSER_CONTEXT_RE.test(String(item?.content || '')))
+}
+
+function hasAdditionalBrowserCloseTask(text = '') {
+  // Treat the close as standalone only when everything outside the matched
+  // close clause is known conversational filler. Unknown words are substantive
+  // by default, so combined tasks cannot lose their real answer merely because
+  // a new verb was absent from an enumerated intent regex.
+  const remainder = String(text || '')
+    .replace(BROWSER_CLOSE_RE, ' ')
+    .replace(BROWSER_CLOSE_FILLER_RE, ' ')
+    .replace(BROWSER_CLOSE_PUNCTUATION_RE, '')
+  return remainder.length > 0
+}
 
 function isExplicitBrowserNavigationRequest(text = '') {
   const value = String(text || '').trim()
@@ -53,12 +91,21 @@ const CONTRACTS = [
     label: '真正关闭白龙马浏览器页面',
     tools: ['browser_close'],
     match: text => !explicitlyKeepsBrowserOpen(text) && BROWSER_CLOSE_RE.test(text),
+    resolve: text => ({
+      fixedReply: hasAdditionalBrowserCloseTask(text) ? '' : '👌',
+    }),
   },
   {
     id: 'browser_display_mode',
     label: '切换浏览器显示大小',
     tools: ['browser_set_display_mode'],
     match: isExplicitBrowserDisplayModeRequest,
+  },
+  {
+    id: 'browser_interaction',
+    label: '检查并继续浏览器交互',
+    tools: BROWSER_INTERACTION_TOOLS,
+    match: text => BROWSER_LOGIN_REQUEST_RE.test(text),
   },
   {
     id: 'directory_create',
@@ -114,16 +161,22 @@ const CONTRACTS = [
   {
     id: 'ui_action',
     label: '更新界面状态',
-    tools: ['focus_banner', 'hotspot_mode', 'worldcup_mode', 'typhoon_mode', 'person_card_mode', 'ui_set'],
-    pattern: /(?:打开|关闭|显示|隐藏).{0,30}(?:专注|热点|热搜|世界杯|台风|人物卡|面板|卡片)|(?:进入|退出).{0,12}(?:专注|心流|focus)/i,
+    tools: ['focus_banner', 'hotspot_mode', 'worldcup_mode', 'typhoon_mode', 'ui_set'],
+    pattern: /(?:打开|关闭|显示|隐藏).{0,30}(?:专注|热点|热搜|世界杯|台风|面板)|(?:进入|退出).{0,12}(?:专注|心流|focus)/i,
   },
 ]
 
-export function classifyActionContract(message = '') {
+export function classifyActionContract(message = '', { conversationWindow = [] } = {}) {
   const text = String(message || '').trim()
   if (!text || META_QUESTION_RE.test(text)) return null
   // “怎么/如何做” requests an explanation, not the side effect itself.
   if (/^(?:请问[，,：:]?\s*)?(?:怎么|如何|怎样|能否|可否|what\b|how\b)/i.test(text)) return null
+
+  // “没有被墙，它能走”这类承接话没有动作动词，但在一个正在进行的登录/网页任务里
+  // 明确要求继续。把它绑定到最近的浏览器上下文，避免模型把想象中的进度当成已发生的操作。
+  if (BROWSER_CONTINUATION_RE.test(text) && hasRecentBrowserContext(conversationWindow)) {
+    return browserInteractionContract('继续当前浏览器交互')
+  }
 
   const match = CONTRACTS.find(contract => (
     typeof contract.match === 'function'
@@ -158,7 +211,48 @@ export function actionContractToolSucceeded(contract, toolName, result) {
   }
 }
 
-export function actionContractCompletionIssue(contract, text = '') {
+function hasSuccessfulBrowserTool(options, names) {
+  const successful = options?.successfulToolNames
+  if (!successful) return false
+  const values = successful instanceof Set ? successful : new Set(successful)
+  return names.some(name => values.has(name))
+}
+
+function browserInteractionCompletionIssue(text = '', options = {}) {
+  const value = String(text || '').trim()
+  if (!value) return ''
+  const explicitlyUnconfirmedLogin = /(?:尚未|未|不能|无法|未能|不(?:能|可)?确认).{0,12}(?:登录|登入)/i.test(value)
+
+  // A browser snapshot proves only that the current page was observed. It is
+  // not evidence that navigation, typing, clicking, or authentication worked.
+  if (!explicitlyUnconfirmedLogin
+      && /(?:登录|登入).{0,8}(?:成功|完成|好了|进去了)|(?:已|已经).{0,12}(?:登录|登入)(?!页)/i.test(value)) {
+    return 'A browser action did not verify that authentication succeeded. Report only the observed page state or ask the user to complete the login step.'
+  }
+  if (/(?:(?:已|已经|直接).{0,12}(?:打开|导航|跳转|加载).{0,18}(?:网页|页面|登录页|x\b|twitter)|(?:网页|页面|登录页|x\b|twitter).{0,12}(?:打开|导航|跳转|加载|显示))/i.test(value)
+      && !hasSuccessfulBrowserTool(options, ['browser_navigate'])) {
+    return 'The reply claims navigation/opening, but this turn has no successful browser_navigate result.'
+  }
+  if (/(?:已|已经).{0,12}(?:填好|填写|填入|输入).{0,18}(?:用户名|邮箱|密码|账号|帐号|输入框|字段)/i.test(value)
+      && !hasSuccessfulBrowserTool(options, ['browser_type', 'browser_fill_form', 'browser_press_key'])) {
+    return 'The reply claims form input, but this turn has no successful browser_type, browser_fill_form, or browser_press_key result.'
+  }
+  if (/(?:已|已经).{0,12}(?:点击|点了).{0,18}(?:下一步|登录|按钮|继续)/i.test(value)
+      && !hasSuccessfulBrowserTool(options, ['browser_click', 'browser_press_key'])) {
+    return 'The reply claims a click/submit, but this turn has no successful browser_click or browser_press_key result.'
+  }
+  if (/(?:到|进入|跳到).{0,12}(?:密码页|下一页|验证页)/i.test(value)
+      && !(hasSuccessfulBrowserTool(options, ['browser_snapshot'])
+        && hasSuccessfulBrowserTool(options, ['browser_click', 'browser_press_key']))) {
+    return 'The reply claims a later login page without both an observed snapshot and a successful submit/navigation action.'
+  }
+  return ''
+}
+
+export function actionContractCompletionIssue(contract, text = '', options = {}) {
+  if (contract?.id === 'browser_interaction') {
+    return browserInteractionCompletionIssue(text, options)
+  }
   if (contract?.id !== 'system_browser_open') return ''
   const value = String(text || '').trim()
   if (!value) return ''
@@ -173,6 +267,7 @@ export function actionContractCompletionIssue(contract, text = '') {
 }
 
 export function verifiedActionContractReply(contract, evidence = {}) {
+  if (contract?.id === 'browser_close') return String(contract?.fixedReply || '')
   if (contract?.id !== 'system_browser_open') return ''
   let url = String(evidence?.args?.url || '').trim()
   try {

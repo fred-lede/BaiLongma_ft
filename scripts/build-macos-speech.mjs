@@ -7,6 +7,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(__dirname, '..')
 const source = path.join(root, 'src', 'voice', 'macos-speech.swift')
 const output = path.join(root, 'build', 'native-speech-recognizer')
+const moduleCache = path.join(root, 'build', 'swift-module-cache')
 const rawArgs = process.argv.slice(2)
 const required = rawArgs.includes('--required')
 const archArgs = rawArgs.filter((arg) => !arg.startsWith('--'))
@@ -51,6 +52,7 @@ if (!supportedArchs.has(arch)) {
 }
 
 fs.mkdirSync(path.dirname(output), { recursive: true })
+fs.mkdirSync(moduleCache, { recursive: true })
 
 function compileArch(targetArch, targetOutput) {
   const target = swiftTargets[targetArch]
@@ -59,6 +61,7 @@ function compileArch(targetArch, targetOutput) {
     '--sdk', 'macosx',
     'swiftc',
     source,
+    '-module-cache-path', moduleCache,
     '-target', target,
     '-framework', 'Speech',
     '-framework', 'AVFoundation',

@@ -15,7 +15,7 @@ if (IS_WIN) {
   } catch (_) {}
 }
 
-const { app, BaseWindow, BrowserWindow, WebContentsView, View, webContents, session, safeStorage, shell, dialog, Menu, ipcMain, Tray, nativeImage, clipboard, systemPreferences } = require('electron')
+const { app, BaseWindow, BrowserWindow, WebContentsView, View, webContents, session, shell, dialog, Menu, ipcMain, Tray, nativeImage, clipboard, systemPreferences } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const net = require('net')
@@ -26,12 +26,13 @@ const { pathToFileURL } = require('url')
 const { autoUpdater } = require('electron-updater')
 const wakeWord = require('./wake-word.cjs')
 const devLight = require('./dev-board-light.cjs')
-const { configurePackagedPlaywright } = require('./playwright-runtime.cjs')
 const { BROWSER_EMBED_PARTITION, createBrowserEmbedHost } = require('./browser-embed-host.cjs')
 const { createBrowserDataStore } = require('./browser-data.cjs')
-const { createBrowserSessionCookieStore } = require('./browser-session-cookies.cjs')
 const { createSafeStorageNotice } = require('./safe-storage-notice.cjs')
-const { createNetworkDiagnostics } = require('./network-diagnostics.cjs')
+const { createBaiLongmaChromeManager } = require('./bailongma-chrome.cjs')
+const { bundledBrowserRoot, resolveBundledNodeExecutable } = require('./playwright-runtime.cjs')
+const { createTrustedWindowSenderGuard } = require('./trusted-window-senders.cjs')
+const { hasPackagedUpdaterConfig } = require('./updater-config.cjs')
 
 // The ESM backend is imported into this Electron main process. Expose the
 // main-process-only permission API without requiring ESM modules to import the
@@ -39,8 +40,6 @@ const { createNetworkDiagnostics } = require('./network-diagnostics.cjs')
 globalThis.bailongmaSystemPreferences = systemPreferences
 
 const IS_DEV = !app.isPackaged
-const NETWORK_DIAGNOSTICS_ENABLED = IS_DEV || process.env.BAILONGMA_NETWORK_DIAGNOSTICS === '1'
-configurePackagedPlaywright({ isPackaged: !IS_DEV })
 const WINDOWS_APP_USER_MODEL_ID = 'com.xiaoyuanda.bailongma'
 const WINDOWS_TITLE_BAR_HEIGHT = 38
 const WINDOWS_TITLE_BAR_THEMES = Object.freeze({
@@ -82,6 +81,12 @@ const CODE_ROOT = app.getAppPath()
 const RESOURCE_ROOT = CODE_ROOT
 const BACKEND_ENTRY = path.join(CODE_ROOT, 'src', 'index.js')
 const STARTUP_PAGE = path.join(__dirname, 'startup.html')
+const BUNDLED_NODE_EXECUTABLE = resolveBundledNodeExecutable({
+  isPackaged: app.isPackaged,
+  resourcesPath: process.resourcesPath,
+  projectRoot: CODE_ROOT,
+})
+if (BUNDLED_NODE_EXECUTABLE) process.env.BAILONGMA_MCP_NODE_PATH = BUNDLED_NODE_EXECUTABLE
 
 function isTlsBackend() {
   return Boolean(
@@ -384,18 +389,8 @@ function applyGpuPreference() {
 applyGpuPreference()
 
 let mainWindow = null
-const TEMPORARY_BROWSER_PARTITION = `bailongma-browser-temporary-${process.pid}`
-let browserStorageMode = 'unselected'
-const activeBrowserPartition = () => (
-  browserStorageMode === 'secure'
-    ? BROWSER_EMBED_PARTITION
-    : TEMPORARY_BROWSER_PARTITION
-)
-const embeddedBrowserSession = () => session.fromPartition(activeBrowserPartition())
-const browserSessionCookieStore = createBrowserSessionCookieStore({
-  backupFile: path.join(USER_DIR, 'browser', 'session-cookies.safe'),
-  getSession: embeddedBrowserSession,
-  safeStorage,
+const browserEmbedSenderGuard = createTrustedWindowSenderGuard({
+  getMainWindow: () => mainWindow,
 })
 const safeStorageNotice = createSafeStorageNotice({
   dialog,
@@ -408,70 +403,21 @@ const safeStorageNotice = createSafeStorageNotice({
 globalThis.bailongmaRequestSafeStorageAccessSync = purpose => (
   safeStorageNotice.requestSync(purpose)
 )
-let browserSessionCookieStoreReady = false
-let browserSessionCookieStoreStarting = null
-
-async function ensureBrowserSecureStorageReady() {
-  if (browserStorageMode !== 'unselected') return true
-  if (browserSessionCookieStoreStarting) return browserSessionCookieStoreStarting
-  browserSessionCookieStoreStarting = Promise.resolve().then(async () => {
-    const approved = await safeStorageNotice.request('browser-profile')
-    if (!approved) {
-      browserStorageMode = 'temporary'
-      return true
-    }
-    browserStorageMode = 'secure'
-    try {
-      await browserSessionCookieStore.restore()
-    } catch (error) {
-      // Rejecting the following macOS password dialog must not prevent basic
-      // browsing. The secure session-cookie backup simply stays unavailable.
-      console.warn('[browser-profile] unable to restore encrypted session cookies:', error?.message || error)
-    }
-    browserSessionCookieStore.start()
-    browserSessionCookieStoreReady = true
-    return true
-  }).finally(() => {
-    browserSessionCookieStoreStarting = null
-  })
-  return browserSessionCookieStoreStarting
-}
+// The dedicated profile is deliberately under BaiLongma application data and
+// never reads, imports, or attaches to the user's daily Chrome profile.
+const bailongmaChrome = createBaiLongmaChromeManager({
+  userDataDir: USER_DIR,
+  bundledBrowserRoot: bundledBrowserRoot({
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    projectRoot: CODE_ROOT,
+  }),
+})
+const embeddedBrowserSession = () => session.fromPartition(BROWSER_EMBED_PARTITION)
 const browserDataStore = createBrowserDataStore({
   historyFile: path.join(USER_DIR, 'browser', 'history.json'),
   getSession: embeddedBrowserSession,
 })
-let networkDiagnostics = null
-
-function handleNetworkDiagnosticShortcut(input) {
-  if (input?.type !== 'keyDown' || input.key !== 'F12' || input.shift !== true) return false
-  if (!NETWORK_DIAGNOSTICS_ENABLED) {
-    console.warn('[network-diagnostics] disabled; set BAILONGMA_NETWORK_DIAGNOSTICS=1 before launch')
-    return true
-  }
-  const operation = (input.control || input.meta)
-    ? networkDiagnostics?.toggle()
-    : networkDiagnostics?.openDevTools()
-  Promise.resolve(operation)
-    .then(result => {
-      if (!result?.path || !mainWindow || mainWindow.isDestroyed()) return
-      dialog.showMessageBox(mainWindow, {
-        type: 'info',
-        title: '网络诊断记录已保存',
-        message: '脱敏后的网络记录已保存。',
-        detail: result.path,
-        buttons: ['在文件夹中显示', '关闭'],
-        defaultId: 1,
-        cancelId: 1,
-        noLink: true,
-      }).then(({ response }) => {
-        if (response === 0) shell.showItemInFolder(result.path)
-      }).catch(() => {})
-    })
-    .catch(error => {
-      console.warn('[network-diagnostics]', error?.message || error)
-    })
-  return true
-}
 
 async function assertEmbeddedBrowserNavigationAllowed(url) {
   const [{ assertWebUrlAllowed }, { config: runtimeConfig }] = await Promise.all([
@@ -482,35 +428,22 @@ async function assertEmbeddedBrowserNavigationAllowed(url) {
     allowPrivateNetwork: () => runtimeConfig.security?.browserPrivateNetwork === true,
   })
 }
+
 const browserEmbedHost = createBrowserEmbedHost({
   WebContentsView,
   View,
+  BrowserWindow,
   BaseWindow,
-  getPartition: activeBrowserPartition,
   isAppQuitting: () => app.isQuiting === true,
   onNavigation: entry => browserDataStore.recordVisit(entry),
   assertNavigationAllowed: assertEmbeddedBrowserNavigationAllowed,
   nativeRequestGuard: true,
-  onDiagnosticInput: handleNetworkDiagnosticShortcut,
 })
-networkDiagnostics = createNetworkDiagnostics({
-  enabled: NETWORK_DIAGNOSTICS_ENABLED,
-  getWebContents: () => browserEmbedHost.getWebContents(),
-  outputDir: path.join(USER_DIR, 'network-audits'),
-})
-let backendPort = 0
-let tray = null
-let focusBannerWindow = null
-let terminalStreamWindow = null
-let terminalStreamWindowStreamId = null
-let wakeProbeWindow = null
-let voiceOrbWindow = null
 
 function readDevToolsActivePort() {
-  const activePortFile = path.join(USER_DIR, 'DevToolsActivePort')
   try {
-    const [portLine] = fs.readFileSync(activePortFile, 'utf8').split(/\r?\n/)
-    const port = Number(portLine)
+    const [line] = fs.readFileSync(path.join(USER_DIR, 'DevToolsActivePort'), 'utf8').split(/\r?\n/)
+    const port = Number(line)
     return Number.isInteger(port) && port > 0 && port <= 65535 ? port : null
   } catch {
     return null
@@ -519,20 +452,12 @@ function readDevToolsActivePort() {
 
 function readLocalJson(port, pathname) {
   return new Promise((resolve, reject) => {
-    const request = http.get({
-      hostname: '127.0.0.1',
-      port,
-      path: pathname,
-      timeout: 2_000,
-    }, response => {
+    const request = http.get({ hostname: '127.0.0.1', port, path: pathname, timeout: 2_000 }, response => {
       const chunks = []
       response.on('data', chunk => chunks.push(chunk))
       response.on('end', () => {
-        try {
-          resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')))
-        } catch (error) {
-          reject(error)
-        }
+        try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))) }
+        catch (error) { reject(error) }
       })
     })
     request.on('timeout', () => request.destroy(new Error('CDP target lookup timed out')))
@@ -545,7 +470,6 @@ async function resolveBrowserEmbedCdpTarget() {
   if (!target) return null
   const port = readDevToolsActivePort()
   if (!port) return { ...target, cdpEndpoint: null, targetId: null }
-
   const cdpEndpoint = `http://127.0.0.1:${port}`
   try {
     const targets = await readLocalJson(port, '/json/list')
@@ -556,16 +480,19 @@ async function resolveBrowserEmbedCdpTarget() {
           catch { return false }
         })
       : null
-    return {
-      ...target,
-      cdpEndpoint,
-      targetId: match?.id || null,
-    }
+    return { ...target, cdpEndpoint, targetId: match?.id || null }
   } catch (error) {
     console.warn('[browser-embed] unable to resolve CDP target:', error?.message || error)
     return { ...target, cdpEndpoint, targetId: null }
   }
 }
+let backendPort = 0
+let tray = null
+let focusBannerWindow = null
+let terminalStreamWindow = null
+let terminalStreamWindowStreamId = null
+let wakeProbeWindow = null
+let voiceOrbWindow = null
 
 // 后端通过 global.focusBannerBridge 控制横幅窗口
 const focusBannerBridge = new EventEmitter()
@@ -573,31 +500,21 @@ global.focusBannerBridge = focusBannerBridge
 const terminalStreamBridge = new EventEmitter()
 global.terminalStreamBridge = terminalStreamBridge
 global.getBailongmaWindowLayoutSnapshot = getBailongmaWindowLayoutSnapshot
-globalThis.bailongmaBrowserEmbedBridge = Object.freeze({
-  // Target resolution is lazy after browser_close. A fresh WebContents uses
-  // the same persistent partition, so closing really ends the live page while
-  // the next browser action still receives the user's cookies and login state.
-  getTarget: async () => {
+globalThis.bailongmaChromeBridge = Object.freeze({
+  ensureEndpoint: async () => {
     if (!browserEmbedHost.getTarget() && mainWindow && !mainWindow.isDestroyed()) {
-      await ensureBrowserSecureStorageReady()
       await browserEmbedHost.prime(mainWindow)
     }
-    return resolveBrowserEmbedCdpTarget()
-  },
-  peekTarget: () => browserEmbedHost.getTarget(),
-  closePage: () => browserEmbedHost.closePage(),
-  consumeWindowOpenNavigation: () => browserEmbedHost.consumeWindowOpenNavigation(),
-  clearData: async options => {
-    const result = await browserDataStore.clearData(options)
-    if (
-      browserSessionCookieStoreReady
-      && Array.isArray(options?.dataTypes)
-      && options.dataTypes.includes('cookies')
-    ) {
-      await browserSessionCookieStore.flush()
+    const target = await resolveBrowserEmbedCdpTarget()
+    if (!target?.cdpEndpoint || !target?.targetId) {
+      throw new Error('BaiLongma live browser DevTools target is unavailable')
     }
-    return result
+    return target.cdpEndpoint
   },
+  getTarget: async () => resolveBrowserEmbedCdpTarget(),
+  closePage: () => browserEmbedHost.closePage(),
+  clearData: options => browserDataStore.clearData(options),
+  getState: () => browserEmbedHost.getTarget(),
 })
 global.bailongmaAppControl = {
   restart() {
@@ -758,7 +675,13 @@ async function loadMainApp(targetWindow = mainWindow) {
   emitStartupProgress({ id: 'interface', status: 'done', completed: true, message: '启动完成' })
 }
 
-async function createWindow({ loadStartup = true, show = true, assignAsMain = true, bounds = null } = {}) {
+async function createWindow({
+  loadStartup = true,
+  show = true,
+  assignAsMain = true,
+  bounds = null,
+  beforeLoad = null,
+} = {}) {
   const window = new BrowserWindow({
     ...(bounds || { width: 1280, height: 840 }),
     minWidth: 320,
@@ -787,6 +710,7 @@ async function createWindow({ loadStartup = true, show = true, assignAsMain = tr
 
   // 授予麦克风权限（语音输入需要）
   if (assignAsMain) mainWindow = window
+  if (typeof beforeLoad === 'function') beforeLoad(window)
 
   window.webContents.session.setPermissionRequestHandler((webContents, permission, callback) => {
     if (permission === 'media') return callback(true)
@@ -798,17 +722,11 @@ async function createWindow({ loadStartup = true, show = true, assignAsMain = tr
   })
 
   // 窗口级快捷键（不用 globalShortcut，避免劫持其他应用的 F11/Ctrl+R 等）
-  //   F12                → 切换主界面 DevTools
-  //   Shift+F12          → 打开嵌入网页 detached DevTools（仅开发/显式诊断模式）
-  //   Ctrl/Cmd+Shift+F12 → 开始/停止嵌入网页脱敏网络记录（同上）
+  //   F12      → 切换主界面 DevTools
   //   F11      → 切换全屏
   //   Ctrl+R   → reload（仅 dev）
   window.webContents.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown') return
-    if (handleNetworkDiagnosticShortcut(input)) {
-      event.preventDefault()
-      return
-    }
     if (input.key === 'F12') {
       window.webContents.toggleDevTools()
       event.preventDefault()
@@ -882,7 +800,20 @@ async function replaceStartupWithMainApp() {
     // Keep the startup renderer visible while the main renderer navigates and
     // paints off-screen. This prevents Chromium from exposing a partial white
     // surface during the file:// -> http:// renderer swap on Windows.
-    readyWindow = await createWindow({ loadStartup: false, show: false, assignAsMain: false, bounds })
+    // Register only this exact renderer as the pending successor before its
+    // main-app page loads. The page initializes browser-embed state during
+    // did-finish-load, while the visible startup window remains mainWindow.
+    // Unrelated windows remain rejected by the sender guard.
+    readyWindow = await createWindow({
+      loadStartup: false,
+      show: false,
+      assignAsMain: false,
+      bounds,
+      beforeLoad: window => {
+        browserEmbedSenderGuard.trustReplacement(window)
+        window.once('closed', () => browserEmbedSenderGuard.revokeReplacement(window))
+      },
+    })
     await readyWindow.webContents.executeJavaScript(
       'new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))',
       true,
@@ -891,6 +822,7 @@ async function replaceStartupWithMainApp() {
     const shouldShow = !hasStartupWindow || startupWindow.isVisible()
     if (hasStartupWindow) browserEmbedHost.transferMainWindow(startupWindow, readyWindow)
     mainWindow = readyWindow
+    browserEmbedSenderGuard.revokeReplacement(readyWindow)
     if (wasFullScreen) readyWindow.setFullScreen(true)
     else if (wasMaximized) readyWindow.maximize()
     if (shouldShow) {
@@ -900,6 +832,7 @@ async function replaceStartupWithMainApp() {
 
     if (hasStartupWindow && !startupWindow.isDestroyed()) startupWindow.destroy()
   } catch (err) {
+    if (readyWindow) browserEmbedSenderGuard.revokeReplacement(readyWindow)
     if (readyWindow && !readyWindow.isDestroyed()) readyWindow.destroy()
     throw err
   }
@@ -1548,6 +1481,11 @@ function setupAutoUpdater() {
     sendUpdaterStatus({ stage: 'portable', portable: true })
     return
   }
+  if (!IS_DEV && !hasPackagedUpdaterConfig()) {
+    console.log('[updater] skipped: packaged update configuration is unavailable')
+    sendUpdaterStatus({ stage: 'unavailable', reason: 'missing-config' })
+    return
+  }
 
   autoUpdater.autoDownload = false
   // Avoid applying an already downloaded update while Windows is shutting down.
@@ -1615,26 +1553,18 @@ ipcMain.handle('window:set-title-bar-theme', (event, theme) => {
 })
 
 function requireMainWindowSender(event) {
-  if (
-    !mainWindow
-    || mainWindow.isDestroyed()
-    || event.sender !== mainWindow.webContents
-    || event.sender.isDestroyed()
-  ) {
-    throw new Error('browser embed requests are only accepted from the main window')
-  }
-  return mainWindow
+  return browserEmbedSenderGuard.requireTrustedSender(event)
 }
 
-ipcMain.handle('browser-embed:update', (event, options) => {
-  return browserEmbedHost.update(requireMainWindowSender(event), options)
-})
-ipcMain.handle('browser-embed:hide', event => {
-  return browserEmbedHost.hide(requireMainWindowSender(event))
-})
-ipcMain.handle('browser-embed:get-state', event => {
-  return browserEmbedHost.getState(requireMainWindowSender(event))
-})
+ipcMain.handle('browser-embed:update', (event, options) => (
+  browserEmbedHost.update(requireMainWindowSender(event), options)
+))
+ipcMain.handle('browser-embed:hide', event => (
+  browserEmbedHost.hide(requireMainWindowSender(event))
+))
+ipcMain.handle('browser-embed:get-state', event => (
+  browserEmbedHost.getState(requireMainWindowSender(event))
+))
 
 ipcMain.handle('system-screenshot:get-latest', async (_event, options = {}) => {
   const maxAgeMs = Number(options?.maxAgeMs || 15 * 60 * 1000)
@@ -1690,6 +1620,10 @@ ipcMain.handle('updater:check-for-updates', async () => {
   if (IS_DEV) {
     sendUpdaterStatus({ stage: 'dev' })
     return { ok: false, skipped: true, reason: 'dev' }
+  }
+  if (!hasPackagedUpdaterConfig()) {
+    sendUpdaterStatus({ stage: 'unavailable', reason: 'missing-config' })
+    return { ok: false, skipped: true, reason: 'missing-config' }
   }
   try {
     sendUpdaterStatus({ stage: 'checking' })
@@ -1749,8 +1683,7 @@ app.on('before-quit', (event) => {
   }
   const shutdowns = [
     globalThis.shutdownBailongmaMcpClients,
-    networkDiagnostics?.isRecording() ? () => networkDiagnostics.dispose() : null,
-    browserSessionCookieStoreReady ? () => browserSessionCookieStore.flush() : null,
+    () => bailongmaChrome.stopOwnedChrome(),
   ].filter(shutdown => typeof shutdown === 'function')
   if (shutdowns.length === 0) {
     browserShutdownComplete = true
@@ -1759,7 +1692,7 @@ app.on('before-quit', (event) => {
   }
   event.preventDefault()
   if (browserShutdownBeforeQuit) return
-  // The backend runs in this process. Wait for Playwright cleanup, with a hard
+  // The backend runs in this process. Wait for MCP/Chrome cleanup, with a hard
   // upper bound so a broken browser connection cannot trap the quit loop.
   let browserShutdownTimer
   browserShutdownBeforeQuit = Promise.race([

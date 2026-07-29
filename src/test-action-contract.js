@@ -30,6 +30,31 @@ try {
   const displayContract = classifyActionContract('切换到大浏览器')
   assert.equal(displayContract?.id, 'browser_display_mode')
   assert.deepEqual(displayContract.requiredTools, ['browser_set_display_mode'])
+  const browserLoginContract = classifyActionContract('需要你帮我登录我的 X 账号')
+  assert.equal(browserLoginContract?.id, 'browser_interaction')
+  assert(browserLoginContract.requiredTools.includes('browser_snapshot'))
+  assert(browserLoginContract.requiredTools.includes('browser_type'))
+  const browserContinuationContract = classifyActionContract('没有被墙，它能走', {
+    conversationWindow: [
+      { role: 'user', content: '需要你帮我登录我的 X 账号' },
+      { role: 'jarvis', content: '我正在用浏览器打开 X 登录页。' },
+    ],
+  })
+  assert.equal(browserContinuationContract?.id, 'browser_interaction')
+  assert.equal(classifyActionContract('没有被墙，它能走'), null,
+    'an isolated assertion remains ordinary conversation without browser continuity')
+  assert.match(actionContractCompletionIssue(
+    browserLoginContract,
+    'X 登录页已打开，用户名填好了，已经到密码页了。',
+    { successfulToolNames: new Set(['browser_snapshot']) },
+  ), /navigation|input|later login page/i,
+    'a snapshot cannot be laundered into navigation/form completion')
+  assert.match(actionContractCompletionIssue(
+    browserLoginContract,
+    '页面加载出来了，X 登录页正常显示。',
+    { successfulToolNames: new Set(['browser_snapshot']) },
+  ), /navigation/i,
+    'a snapshot cannot be laundered into a page-load claim')
   const closeBrowserContract = classifyActionContract('关掉你的浏览器')
   assert.equal(closeBrowserContract?.id, 'browser_close')
   assert.deepEqual(closeBrowserContract.requiredTools, ['browser_close'])
@@ -47,11 +72,28 @@ try {
   )
   assert.equal(keepOpenDisplayContract?.id, 'browser_display_mode')
   assert.deepEqual(keepOpenDisplayContract.requiredTools, ['browser_set_display_mode'])
-  for (const phrase of ['现在真正关掉你的浏览器', '关闭当前网页']) {
+  for (const phrase of [
+    '关掉浏览器',
+    '现在真正关掉你的浏览器',
+    '关闭当前网页',
+    '关掉刚才打开的浏览器',
+    '请关掉浏览器，谢谢',
+    '那现在怎么办？关掉你的小窗口浏览器',
+    '关掉浏览器，不用说话，只回一个👌图标',
+    '关掉浏览器，只回复👌',
+  ]) {
     const explicitCloseContract = classifyActionContract(phrase)
     assert.equal(explicitCloseContract?.id, 'browser_close', phrase)
     assert.deepEqual(explicitCloseContract.requiredTools, ['browser_close'])
+    assert.equal(verifiedActionContractReply(explicitCloseContract), '👌',
+      'a successful explicit browser close has one deterministic acknowledgement')
   }
+  const closeAfterResearchContract = classifyActionContract('查完 Agent Skill 后关闭浏览器并告诉我结果')
+  assert.equal(closeAfterResearchContract?.id, 'browser_close')
+  assert.equal(verifiedActionContractReply(closeAfterResearchContract), '',
+    'a close inside a larger task must not replace the substantive result')
+  assert.equal(verifiedActionContractReply(classifyActionContract('查完后关闭浏览器')), '',
+    'unknown substantive wording outside the close clause is preserved by default')
   assert.equal(classifyActionContract('退出这个网站的登录'), null,
     'website sign-out is not a browser lifecycle close')
   for (const phrase of [
@@ -99,6 +141,10 @@ try {
   assert.equal(webContract?.id, 'web')
   assert.deepEqual(webContract.requiredTools, ['browser_navigate'], 'fresh web lookup requires real Playwright navigation')
   assert.equal(webContract.requiredTools.some(name => ['web_search', 'web_read', 'fetch_url', 'browser_read'].includes(name)), false)
+  assert.equal(classifyActionContract('打开人物卡片看看'), null,
+    'person-card commands are left to model semantic intent instead of regex action contracts')
+  assert.equal(classifyActionContract('人物卡片有点问题，经常错误触发'), null,
+    'person-card feature discussions do not create a UI action contract')
 
   let rounds = 0
   const executed = []
@@ -310,6 +356,60 @@ try {
   assert.equal(snapshotExecuted.includes('browser_snapshot'), false,
     'Agent does not mechanically call browser_snapshot after an action that already returned inline YAML')
 
+  // Regression for the installed-app failure: when a login continuation only
+  // produces prose, the runtime must suppress it, insist on a real browser
+  // action, and reject the same fabricated claims after a mere snapshot.
+  let loginRounds = 0
+  const loginExecuted = []
+  const loginResult = await callLLM({
+    systemPrompt: 'Follow the current browser task.',
+    message: '没有被墙，它能走',
+    tools: browserLoginContract.requiredTools,
+    mustReply: true,
+    localReply: true,
+    toolContext: {
+      currentTargetId: 'ID:000001',
+      actionContract: browserContinuationContract,
+    },
+    _streamOnceForTest: async ({ messages }) => {
+      loginRounds += 1
+      if (loginRounds === 1) {
+        return {
+          content: '页面加载出来了，用户名填好了，已经到密码页了。',
+          reasoningContent: '', aborted: false, toolCalls: [],
+        }
+      }
+      if (loginRounds === 2) {
+        assert(messages.some(m => String(m.content || '').includes('No matching action has actually run')))
+        return {
+          content: '', reasoningContent: '', aborted: false,
+          toolCalls: [{ id: 'login-snapshot', name: 'browser_snapshot', arguments: '{}' }],
+        }
+      }
+      if (loginRounds === 3) {
+        return {
+          content: '页面加载出来了，用户名填好了，已经到密码页了。',
+          reasoningContent: '', aborted: false, toolCalls: [],
+        }
+      }
+      assert(messages.some(m => String(m.content || '').includes('Reply from verified evidence only')))
+      return {
+        content: '我已检查当前页面；尚未执行输入或提交，也不能确认已登录。',
+        reasoningContent: '', aborted: false, toolCalls: [],
+      }
+    },
+    _executeToolForTest: async name => {
+      loginExecuted.push(name)
+      if (name === 'browser_snapshot') return JSON.stringify({ ok: true, content: [{ type: 'text', text: 'X login page' }] })
+      if (name === 'send_message') return JSON.stringify({ ok: true, delivered: true, message_sent: true })
+      return JSON.stringify({ ok: false, error: 'unexpected tool' })
+    },
+  })
+  assert.equal(loginRounds, 4)
+  assert.deepEqual(loginExecuted, ['browser_snapshot', 'send_message'])
+  assert.match(loginResult.content, /尚未执行输入或提交/)
+  assert.doesNotMatch(loginResult.content, /密码页|填好了/)
+
   let realBrowserCloseCalls = 0
   let keepOpenRounds = 0
   await callLLM({
@@ -339,6 +439,99 @@ try {
   })
   assert.equal(realBrowserCloseCalls, 0,
     'an erroneous model browser_close is rejected before the real close implementation runs')
+
+  let closeReplyRounds = 0
+  const closeReplyMessages = []
+  const closeReplyResult = await callLLM({
+    systemPrompt: 'Follow the current user request.',
+    message: '关掉浏览器',
+    tools: ['browser_close', 'send_message'],
+    mustReply: true,
+    localReply: true,
+    toolContext: {
+      currentTargetId: 'ID:000001',
+      currentUserMessage: '关掉浏览器',
+      actionContract: closeBrowserContract,
+    },
+    _streamOnceForTest: async () => {
+      closeReplyRounds += 1
+      if (closeReplyRounds === 1) {
+        return {
+          content: '', reasoningContent: '', aborted: false,
+          toolCalls: [{ id: 'close-browser', name: 'browser_close', arguments: '{}' }],
+        }
+      }
+      return {
+        content: '关掉了。Bing 搜索页面已关闭，profile 数据保留着。',
+        reasoningContent: '',
+        aborted: false,
+        toolCalls: [],
+      }
+    },
+    _executeToolForTest: async (name, args) => {
+      if (name === 'browser_close') return JSON.stringify({ ok: true, closed: true })
+      if (name === 'send_message') {
+        closeReplyMessages.push(args.content)
+        return JSON.stringify({ ok: true, delivered: true, message_sent: true })
+      }
+      return JSON.stringify({ ok: false, error: 'unexpected tool' })
+    },
+  })
+  assert.deepEqual(closeReplyMessages, ['👌'],
+    'runtime fallback replaces a verbose browser-close draft with one emoji')
+  assert.equal(closeReplyResult.content, '👌')
+  assert.equal(closeReplyRounds, 1,
+    'a successful standalone close does not spend another provider round on narration')
+
+  let externalCloseRounds = 0
+  const externalCloseMessages = []
+  await callLLM({
+    systemPrompt: 'Follow the current user request.',
+    message: '关闭当前页面',
+    tools: ['browser_close', 'send_message'],
+    mustReply: true,
+    localReply: false,
+    toolContext: {
+      currentTargetId: 'ID:000001',
+      currentUserMessage: '关闭当前页面',
+      actionContract: closeBrowserContract,
+    },
+    _streamOnceForTest: async () => {
+      externalCloseRounds += 1
+      if (externalCloseRounds === 1) {
+        return {
+          content: '', reasoningContent: '', aborted: false,
+          toolCalls: [{ id: 'external-close-browser', name: 'browser_close', arguments: '{}' }],
+        }
+      }
+      if (externalCloseRounds === 2) {
+        return {
+          content: '', reasoningContent: '', aborted: false,
+          toolCalls: [{
+            id: 'verbose-close-reply',
+            name: 'send_message',
+            arguments: JSON.stringify({
+              target_id: 'ID:000001',
+              content: '浏览器窗口已关闭，Cookie 和 profile 都还在。',
+            }),
+          }],
+        }
+      }
+      return { content: '', reasoningContent: '', aborted: false, toolCalls: [] }
+    },
+    _executeToolForTest: async (name, args) => {
+      if (name === 'browser_close') return JSON.stringify({ ok: true, closed: true })
+      if (name === 'send_message') {
+        externalCloseMessages.push(args.content)
+        return JSON.stringify({ ok: true, delivered: true, message_sent: true })
+      }
+      return JSON.stringify({ ok: false, error: 'unexpected tool' })
+    },
+  })
+  assert.deepEqual(externalCloseMessages, ['👌'],
+    'explicit send_message content is normalized after a successful browser close')
+  assert.equal(externalCloseRounds, 1,
+    'external delivery also uses the runtime-owned close acknowledgement immediately')
   console.log('test-action-contract passed')
 } finally {
   closeDBForTest?.()

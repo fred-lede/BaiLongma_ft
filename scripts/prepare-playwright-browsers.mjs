@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import os from 'node:os'
@@ -67,6 +67,16 @@ export function resolveTargets(args = process.argv.slice(2), hostPlatform = proc
       hostOverride: arch === 'arm64' ? 'mac15-arm64' : 'mac15',
     }))
   }
+  if (platform === 'linux') {
+    const requested = archs.length ? archs : ['x64']
+    if (requested.some((arch) => arch !== 'x64')) throw new Error('Linux Playwright packaging currently supports x64 only')
+    return requested.map((arch) => ({
+      platform,
+      arch,
+      builderKey: `linux-${arch}`,
+      hostOverride: 'ubuntu24.04-x64',
+    }))
+  }
   throw new Error(`Playwright browser staging is not configured for ${platform}`)
 }
 
@@ -86,6 +96,28 @@ export function installTarget(target, runtime = resolveMcpRuntime()) {
   })
   if (result.error) throw result.error
   if (result.status !== 0) throw new Error(`Playwright Chromium install failed for ${target.builderKey} (exit ${result.status})`)
+}
+
+export function hasStagedBrowser(target, root = stagingRoot) {
+  const destination = path.join(root, target.builderKey)
+  if (!existsSync(destination)) return false
+  let revisions = []
+  try {
+    revisions = readdirSync(destination, { withFileTypes: true })
+      .filter(entry => entry.isDirectory() && /^chromium-\d+$/.test(entry.name))
+      .map(entry => entry.name)
+  } catch {
+    return false
+  }
+  const relative = target.platform === 'darwin'
+    ? path.join(`chrome-mac-${target.arch}`, 'Google Chrome for Testing.app', 'Contents', 'MacOS', 'Google Chrome for Testing')
+    : target.platform === 'linux'
+      ? path.join('chrome-linux64', 'chrome')
+      : path.join('chrome-win64', 'chrome.exe')
+  return revisions.some(revision => (
+    existsSync(path.join(destination, revision, 'INSTALLATION_COMPLETE'))
+    && existsSync(path.join(destination, revision, relative))
+  ))
 }
 
 function run(command, args, options = {}) {
@@ -175,7 +207,15 @@ function installWindowsTarget(target, destination, runtime) {
 
 export function main() {
   mkdirSync(stagingRoot, { recursive: true })
-  for (const target of resolveTargets()) installTarget(target)
+  let runtime
+  for (const target of resolveTargets()) {
+    if (hasStagedBrowser(target)) {
+      console.log(`[playwright] reusing staged bundled Chromium for ${target.builderKey}`)
+      continue
+    }
+    runtime ||= resolveMcpRuntime()
+    installTarget(target, runtime)
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {

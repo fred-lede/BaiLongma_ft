@@ -377,8 +377,19 @@ function isAuthenticationError(err) {
 function abortableSleep(ms, signal) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(Object.assign(new Error('Aborted'), { name: 'AbortError' }))
-    const timer = setTimeout(resolve, ms)
-    const onAbort = () => { clearTimeout(timer); reject(Object.assign(new Error('Aborted'), { name: 'AbortError' })) }
+    let settled = false
+    const cleanup = () => signal?.removeEventListener('abort', onAbort)
+    const finish = (callback) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      callback()
+    }
+    const timer = setTimeout(() => finish(resolve), ms)
+    const onAbort = () => finish(() => {
+      clearTimeout(timer)
+      reject(Object.assign(new Error('Aborted'), { name: 'AbortError' }))
+    })
     signal?.addEventListener('abort', onAbort, { once: true })
   })
 }
@@ -1076,6 +1087,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
   let actionClaimNudgeUsed = false
   let actionCompletionNudgeUsed = false
   let actionContractEvidence = null
+  const actionContractSuccessfulTools = new Set()
   // 层 3：本 turn 是否已发过"不确定回退"软检查点（一 turn 一次，见 buildUncertaintyCheckpointNudge）。
   let uncertaintyNudgeUsed = false
   const toolLoopState = createToolLoopState()
@@ -1232,7 +1244,17 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
       // default browser; it cannot identify the application, and the two
       // Bailongma display modes still share one live page/profile.
       if (mustReply && actionContract && actionContractSatisfied && allContent.trim()) {
-        const completionIssue = actionContractCompletionIssue(actionContract, allContent)
+        // Closing a visible browser is self-evident. Keep this acknowledgement
+        // deterministic instead of letting the provider narrate the page,
+        // profile persistence, cookies, or other implementation details.
+        const fixedReply = verifiedActionContractReply(actionContract, actionContractEvidence)
+        if (actionContract.id === 'browser_close' && fixedReply) {
+          allContent = fixedReply
+          break
+        }
+        const completionIssue = actionContractCompletionIssue(actionContract, allContent, {
+          successfulToolNames: actionContractSuccessfulTools,
+        })
         if (completionIssue) {
           if (!actionCompletionNudgeUsed) {
             if (content) messages.push({ role: 'assistant', content })
@@ -1407,6 +1429,15 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
           }
         }
 
+        // An explicit browser close needs only a quiet visual acknowledgement.
+        // Normalize even an over-explanatory provider draft before it reaches
+        // local, voice, or external channels.
+        if (!silentSignalSuppressed && tc.name === 'send_message'
+            && actionContract?.id === 'browser_close' && actionContractSatisfied) {
+          const fixedReply = verifiedActionContractReply(actionContract, actionContractEvidence)
+          if (fixedReply) normalizedArgs.content = fixedReply
+        }
+
         // On external channels send_message is itself a side effect, and used
         // to let a premature “done” message terminate the whole agent loop.
         // Suppress it until the requested action has evidence; after a failed
@@ -1416,7 +1447,9 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
           && !actionContractSatisfied
           && (!actionContractAttempted || containsUnsupportedCompletionClaim(normalizedArgs.content))
         const actionContractCompletionProblem = tc.name === 'send_message' && actionContractSatisfied
-          ? actionContractCompletionIssue(actionContract, normalizedArgs.content)
+          ? actionContractCompletionIssue(actionContract, normalizedArgs.content, {
+              successfulToolNames: actionContractSuccessfulTools,
+            })
           : ''
         if (actionContractCompletionProblem) {
           actionContractSendSuppressed = true
@@ -1501,6 +1534,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
             actionContractAttempted = true
             if (actionContractToolSucceeded(actionContract, tc.name, result)) {
               actionContractSatisfied = true
+              actionContractSuccessfulTools.add(tc.name)
               actionContractEvidence = { name: tc.name, args: normalizedArgs, result }
             }
           }
@@ -1748,6 +1782,16 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
         }
       }
     }
+    // A standalone close command has a runtime-owned acknowledgement. Once the
+    // close succeeds, skip another provider round entirely: this avoids both
+    // latency and any streamed narration before the final emoji is delivered.
+    const fixedActionReply = actionContractSatisfied
+      ? verifiedActionContractReply(actionContract, actionContractEvidence)
+      : ''
+    if (mustReply && actionContract?.id === 'browser_close' && fixedActionReply && !delivered) {
+      allContent = fixedActionReply
+      break
+    }
     if (terminalInternalRound) break
   }
 
@@ -1775,6 +1819,12 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
     // 退回 salvageableReply —— 这正是中断/卡死时把"已生成但没发出"的答案救回来的关键。
     let fallbackContent = stripProtocolMarkersForDelivery(allContent.trim() ? allContent : salvageableReply)
     const fallbackTarget = toolContext?.currentTargetId
+    // Preserve the close acknowledgement even if the provider is interrupted
+    // after the browser tool succeeds and delivery falls back to the runtime.
+    if (actionContract?.id === 'browser_close' && actionContractSatisfied) {
+      const fixedReply = verifiedActionContractReply(actionContract, actionContractEvidence)
+      if (fixedReply) fallbackContent = fixedReply
+    }
     // 播放收尾一致性：视频流程里模型常不调 send_message 而是留 body 走兜底（音乐则习惯调
     // send_message 被 isMediaCloser 替换）。这里对兜底 body 做同样处理——本 turn 播放过媒体、
     // 且 body 正是一句播放确认时换成单个表情，确保"播放中"之类文字不会原样发出/被语音念。

@@ -1,7 +1,15 @@
 'use strict'
 
 const BROWSER_EMBED_PARTITION = 'persist:bailongma-browser'
+const TRUSTED_GOOGLE_OAUTH_HOSTS = new Set(['accounts.google.com'])
 const configuredSessions = new WeakMap()
+const WINDOWS_CARD_SCROLLBAR_CSS = `
+  ::-webkit-scrollbar {
+    display: none !important;
+    width: 0 !important;
+    height: 0 !important;
+  }
+`
 
 function isAllowedWebUrl(value) {
   if (typeof value !== 'string' || !value.trim()) return false
@@ -18,6 +26,19 @@ function normalizeWebUrl(value) {
     throw new TypeError('browser embed URL must use http:// or https://')
   }
   return new URL(value).href
+}
+
+// Google Sign-In opens a real popup and uses window.opener/postMessage to
+// return its result to the X page. Replacing that popup with the current page
+// breaks the OAuth hand-off and leaves both navigations aborted. Keep this
+// exception deliberately narrow: every other target=_blank stays single-page.
+function isTrustedGoogleOauthPopupUrl(value) {
+  try {
+    const url = new URL(String(value || ''))
+    return url.protocol === 'https:' && TRUSTED_GOOGLE_OAUTH_HOSTS.has(url.hostname.toLowerCase())
+  } catch {
+    return false
+  }
 }
 
 function finiteNonNegative(value, label) {
@@ -143,12 +164,14 @@ function blockUnsafeNavigation(event, legacyUrl) {
   // A newly-created WebContentsView starts without a committed renderer. An
   // explicit about:blank navigation is the minimal bootstrap needed before a
   // CDP client can reliably attach. Keep every other non-web scheme blocked.
-  if (url && url !== 'about:blank' && !isAllowedWebUrl(url)) event.preventDefault()
+  const isBootstrap = typeof url === 'string' && url.startsWith('about:blank')
+  if (url && !isBootstrap && !isAllowedWebUrl(url)) event.preventDefault()
 }
 
 function createBrowserEmbedHost({
   WebContentsView,
   View,
+  BrowserWindow,
   BaseWindow,
   getPartition = () => BROWSER_EMBED_PARTITION,
   isAppQuitting = () => false,
@@ -157,6 +180,7 @@ function createBrowserEmbedHost({
   nativeRequestGuard = false,
   onDiagnosticInput = () => false,
   logger = console,
+  platform = process.platform,
   transitionDurationMs = 480,
   waitForTransition = ms => new Promise(resolve => setTimeout(resolve, ms)),
 } = {}) {
@@ -177,6 +201,9 @@ function createBrowserEmbedHost({
   let transitionSequence = 0
   let windowOpenSequence = 0
   let pendingWindowOpenNavigation = null
+  let scrollbarDocumentRevision = 0
+  let cardScrollbarCssKey = null
+  let cardScrollbarInsert = null
   const state = {
     available: true,
     attached: false,
@@ -206,6 +233,68 @@ function createBrowserEmbedHost({
   function setViewVisibility(visible) {
     browserView?.setVisible(Boolean(visible))
     inputShield?.setVisible(Boolean(visible && !state.interactive))
+  }
+
+  function invalidateCardScrollbarStyle() {
+    scrollbarDocumentRevision += 1
+    // Electron discards inserted CSS with the old document during a main-frame
+    // navigation, so its removal key is no longer useful for the new page.
+    cardScrollbarCssKey = null
+  }
+
+  async function syncCardScrollbarStyle() {
+    const contents = browserView?.webContents
+    if (!contents || contents.isDestroyed()) return
+    if (
+      typeof contents.insertCSS !== 'function'
+      || typeof contents.removeInsertedCSS !== 'function'
+    ) return
+
+    const shouldUseCompactScrollbar = platform === 'win32' && state.mode === 'card'
+    if (!shouldUseCompactScrollbar) {
+      const key = cardScrollbarCssKey
+      cardScrollbarCssKey = null
+      if (key) {
+        try { await contents.removeInsertedCSS(key) } catch {}
+      }
+      // An insert that is already in flight checks the current mode when it
+      // resolves and removes itself before this promise completes.
+      if (cardScrollbarInsert) await cardScrollbarInsert.promise
+      return
+    }
+
+    const revision = scrollbarDocumentRevision
+    if (cardScrollbarCssKey || cardScrollbarInsert?.revision === revision) {
+      if (cardScrollbarInsert?.revision === revision) await cardScrollbarInsert.promise
+      return
+    }
+
+    const pending = {
+      revision,
+      promise: null,
+    }
+    pending.promise = contents.insertCSS(WINDOWS_CARD_SCROLLBAR_CSS, {
+      cssOrigin: 'user',
+    }).then(async key => {
+      const stillCurrent = (
+        !contents.isDestroyed()
+        && browserView?.webContents === contents
+        && platform === 'win32'
+        && state.mode === 'card'
+        && scrollbarDocumentRevision === revision
+      )
+      if (stillCurrent) {
+        cardScrollbarCssKey = key
+        return
+      }
+      try { await contents.removeInsertedCSS(key) } catch {}
+    }).catch(error => {
+      logger.warn?.('[browser-embed] unable to style compact scrollbar:', error?.message || error)
+    }).finally(() => {
+      if (cardScrollbarInsert === pending) cardScrollbarInsert = null
+    })
+    cardScrollbarInsert = pending
+    await pending.promise
   }
 
   function applyExternalBounds() {
@@ -288,6 +377,42 @@ function createBrowserEmbedHost({
     contents.setWindowOpenHandler(details => {
       const rawUrl = String(details?.url || '')
       const sequence = ++windowOpenSequence
+      if (isTrustedGoogleOauthPopupUrl(rawUrl)) {
+        const normalized = normalizeWebUrl(rawUrl)
+        // This window is intentionally user-operated. It uses the same durable
+        // partition as the X page, while Playwright remains attached only to
+        // the original page so passwords, MFA, and consent cannot be automated.
+        pendingWindowOpenNavigation = {
+          sequence,
+          consumed: false,
+          navigation: Promise.resolve({
+            ok: true,
+            kind: 'google_oauth_popup',
+            sequence,
+            requestedUrl: normalized,
+            finalUrl: normalized,
+          }),
+        }
+        return {
+          action: 'allow',
+          overrideBrowserWindowOptions: {
+            show: true,
+            width: 520,
+            height: 720,
+            autoHideMenuBar: true,
+            webPreferences: {
+              partition: browserViewPartition || String(getPartition() || BROWSER_EMBED_PARTITION),
+              sandbox: true,
+              nodeIntegration: false,
+              contextIsolation: true,
+              webSecurity: true,
+              allowRunningInsecureContent: false,
+              webviewTag: false,
+              plugins: false,
+            },
+          },
+        }
+      }
       const navigation = Promise.resolve().then(async () => {
         const normalized = normalizeWebUrl(rawUrl)
         const allowedUrl = await assertNavigationAllowed(normalized)
@@ -305,14 +430,20 @@ function createBrowserEmbedHost({
           error: error?.message || String(error),
         }
       })
-      // Deny the popup unconditionally: a validated target is taken over by
-      // this one managed WebContents instead of creating a second tab/window.
+      // Non-OAuth popups stay denied: a validated target is taken over by this
+      // one managed WebContents instead of creating a second tab/window.
       pendingWindowOpenNavigation = { sequence, consumed: false, navigation }
       return { action: 'deny' }
     })
     contents.on('will-frame-navigate', blockUnsafeNavigation)
     contents.on('will-navigate', blockUnsafeNavigation)
     contents.on('will-redirect', blockUnsafeNavigation)
+    contents.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => {
+      if (isMainFrame !== false && isInPlace !== true) invalidateCardScrollbarStyle()
+    })
+    contents.on('did-finish-load', () => {
+      void syncCardScrollbarStyle()
+    })
     contents.on('before-input-event', (event, input) => {
       if (onDiagnosticInput(input, contents) === true) {
         event.preventDefault()
@@ -419,6 +550,8 @@ function createBrowserEmbedHost({
       inputShield = null
       rendererReadyPromise = null
       requestedUrl = null
+      invalidateCardScrollbarStyle()
+      cardScrollbarInsert = null
       state.bounds = null
       state.url = null
       state.loading = false
@@ -446,7 +579,9 @@ function createBrowserEmbedHost({
     }
     if (contents.getURL()) return
     if (!rendererReadyPromise) {
-      rendererReadyPromise = contents.loadURL('about:blank').catch(error => {
+      // A unique fragment lets the MCP client distinguish this managed page
+      // from Bailongma's own renderer and other hidden Electron windows.
+      rendererReadyPromise = contents.loadURL(`about:blank#bailongma-browser-${contents.id}`).catch(error => {
         state.loading = false
         state.error = {
           code: 0,
@@ -500,10 +635,16 @@ function createBrowserEmbedHost({
 
   function ensureExternalWindow() {
     if (externalWindow && !externalWindow.isDestroyed()) return externalWindow
-    if (typeof BaseWindow !== 'function') {
+    // BrowserWindow provides a normal platform window with a draggable native
+    // title bar and the standard close/minimize/zoom controls. BaseWindow is
+    // retained as a test/older-Electron fallback, but it is not used by the
+    // production main process because its bare content surface gave users no
+    // discoverable way to move or dismiss the large browser.
+    const ExternalWindow = typeof BrowserWindow === 'function' ? BrowserWindow : BaseWindow
+    if (typeof ExternalWindow !== 'function') {
       throw new Error('large embedded browser window is unavailable')
     }
-    externalWindow = new BaseWindow({
+    externalWindow = new ExternalWindow({
       width: 1280,
       height: 840,
       minWidth: 480,
@@ -511,6 +652,23 @@ function createBrowserEmbedHost({
       show: false,
       title: 'Bailongma Browser',
       backgroundColor: '#000000',
+      frame: true,
+      titleBarStyle: 'default',
+      closable: true,
+      minimizable: true,
+      maximizable: true,
+      movable: true,
+      resizable: true,
+      fullscreenable: true,
+      autoHideMenuBar: true,
+      ...(typeof BrowserWindow === 'function' ? {
+        webPreferences: {
+          sandbox: true,
+          contextIsolation: true,
+          nodeIntegration: false,
+          webviewTag: false,
+        },
+      } : {}),
     })
     const hostWindow = externalWindow
     externalRestingContentBounds = hostWindow.getContentBounds()
@@ -531,7 +689,15 @@ function createBrowserEmbedHost({
     hostWindow.on('close', event => {
       if (isAppQuitting()) return
       event.preventDefault()
-      closePage()
+      // The red window button dismisses only the large presentation. Keep the
+      // managed WebContentsView alive so a later card/window action preserves
+      // URL, history, cookies, title and webContents id.
+      transitionSequence += 1
+      state.transitioning = false
+      state.transitionTarget = null
+      state.visible = false
+      setViewVisibility(false)
+      hostWindow.hide()
     })
     hostWindow.on('closed', () => {
       if (currentParentWindow === hostWindow) {
@@ -543,7 +709,7 @@ function createBrowserEmbedHost({
     return hostWindow
   }
 
-  function applyCardLayout(targetWindow, { bounds, radius, visible, interactive }) {
+  async function applyCardLayout(targetWindow, { bounds, radius, visible, interactive }) {
     if (externalWindow && !externalWindow.isDestroyed()) externalWindow.hide()
     attachTo(targetWindow)
     state.mode = 'card'
@@ -552,6 +718,7 @@ function createBrowserEmbedHost({
     state.radius = Math.min(radius, bounds.width / 2, bounds.height / 2)
     state.zoomFactor = bounds.width > 0 ? Math.min(1, bounds.width / 1280) : 1
     state.visible = visible && bounds.width > 0 && bounds.height > 0
+    await syncCardScrollbarStyle()
     browserView.setBounds(bounds)
     browserView.setBorderRadius(state.radius)
     browserView.webContents.setZoomFactor(state.zoomFactor)
@@ -590,6 +757,7 @@ function createBrowserEmbedHost({
     state.transitioning = shouldAnimate
     state.transitionTarget = shouldAnimate ? 'window' : null
     browserView.webContents.setZoomFactor(1)
+    await syncCardScrollbarStyle()
 
     if (shouldAnimate && startBounds) setExternalContentBounds(windowHost, startBounds, false)
     attachTo(windowHost)
@@ -644,7 +812,7 @@ function createBrowserEmbedHost({
     }
 
     if (token !== transitionSequence) return snapshot()
-    applyCardLayout(targetWindow, { bounds, radius, visible, interactive })
+    await applyCardLayout(targetWindow, { bounds, radius, visible, interactive })
     state.transitioning = false
     state.transitionTarget = null
     return snapshot()
@@ -708,6 +876,7 @@ function createBrowserEmbedHost({
       }
     }
 
+    await syncCardScrollbarStyle()
     return snapshot()
   }
 
@@ -766,6 +935,7 @@ function createBrowserEmbedHost({
       webContentsId: contents.id,
       partition: browserViewPartition || String(getPartition() || BROWSER_EMBED_PARTITION),
       url: isAllowedWebUrl(contents.getURL()) ? contents.getURL() : state.url,
+      debugUrl: contents.getURL(),
       mode: state.mode,
       visible: state.visible,
       nativeNetworkGuard: browserViewNativeRequestGuard,
@@ -806,5 +976,6 @@ module.exports = {
   configureIsolatedSession,
   createBrowserEmbedHost,
   isAllowedWebUrl,
+  isTrustedGoogleOauthPopupUrl,
   normalizeBounds,
 }

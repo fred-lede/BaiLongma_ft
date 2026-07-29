@@ -40,11 +40,18 @@ const versionResult = spawnSync(process.execPath, [mcpRuntime.mcpCli, '--version
 assert.equal(versionResult.status, 0, versionResult.stderr)
 assert.equal(versionResult.stdout.trim(), `Version ${mcpRuntime.mcpPackage.version}`)
 
-assert.deepEqual(pkg.build.extraResources, [{
-  from: 'build/playwright-browsers/${os}-${arch}',
-  to: 'playwright-browsers',
-  filter: ['**/*'],
-}])
+assert.deepEqual(pkg.build.extraResources, [
+  {
+    from: 'build/playwright-browsers/${os}-${arch}',
+    to: 'playwright-browsers',
+    filter: ['**/*'],
+  },
+  {
+    from: 'build/node-runtime/${os}-${arch}',
+    to: 'node-runtime',
+    filter: ['**/*'],
+  },
+])
 for (const name of ['build', 'build:win', 'publish']) {
   const script = pkg.scripts[name]
   assert.ok(script.indexOf('prebuild-clean.mjs') < script.indexOf('prepare-playwright-browsers.mjs'), `${name} must clean before staging`)
@@ -52,17 +59,20 @@ for (const name of ['build', 'build:win', 'publish']) {
 }
 assert.ok(macBuildSource.indexOf('prebuild-clean.mjs') < macBuildSource.indexOf('prepare-playwright-browsers.mjs'))
 assert.ok(macBuildSource.indexOf('prepare-playwright-browsers.mjs') < macBuildSource.indexOf('electron-builder'))
-assert.ok(mainSource.indexOf('configurePackagedPlaywright') < mainSource.indexOf('await import(pathToFileURL(BACKEND_ENTRY)'))
+assert.match(mainSource, /createBrowserEmbedHost/)
+assert.match(mainSource, /remote-debugging-port/)
 assert.match(gitignore, /^build\/playwright-browsers\/$/m)
 
 assert.deepEqual(resolveTargets([], 'win32').map(target => target.builderKey), ['win-x64'])
 assert.deepEqual(resolveTargets([], 'darwin').map(target => target.builderKey), ['mac-x64', 'mac-arm64'])
+assert.deepEqual(resolveTargets([], 'linux').map(target => target.builderKey), ['linux-x64'])
 assert.throws(() => resolveTargets(['--arch=arm64'], 'win32'), /Windows Playwright packaging currently supports x64 only/)
-assert.throws(() => resolveTargets([], 'linux'), /not configured for linux/)
+assert.throws(() => resolveTargets(['--arch=arm64'], 'linux'), /Linux Playwright packaging currently supports x64 only/)
 
 const descriptors = [
   ...resolveTargets([], 'darwin'),
   ...resolveTargets([], 'win32'),
+  ...resolveTargets([], 'linux'),
 ].map(target => ({
   target,
   descriptor: browserDescriptor(
@@ -81,8 +91,10 @@ for (const { target, descriptor } of descriptors) {
 assert.match(descriptors.find(({ target }) => target.builderKey === 'mac-x64').descriptor.executablePath(), /chrome-mac-x64/)
 assert.match(descriptors.find(({ target }) => target.builderKey === 'mac-arm64').descriptor.executablePath(), /chrome-mac-arm64/)
 assert.match(descriptors.find(({ target }) => target.builderKey === 'win-x64').descriptor.executablePath(), /chrome-win64[/\\]chrome\.exe$/)
+assert.match(descriptors.find(({ target }) => target.builderKey === 'linux-x64').descriptor.executablePath(), /chrome-linux64[/\\]chrome$/)
 
 assert.equal(packagedRuntime.packagedHostPlatform('darwin', 'arm64'), 'mac15-arm64')
+assert.equal(packagedRuntime.packagedHostPlatform('linux', 'x64'), 'ubuntu24.04-x64')
 const env = {}
 assert.equal(packagedRuntime.configurePackagedPlaywright({
   isPackaged: true,

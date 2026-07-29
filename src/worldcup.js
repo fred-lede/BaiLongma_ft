@@ -2,7 +2,7 @@
 //
 // 数据源说明：直播吧没有官方 API，这里解析首页赛程区的 <li label=...> 条目；
 // 大陆直连可达、免费无 key、中文队名、北京时间。HTML 改版会导致解析失败，
-// 失败时退 stale 缓存并在 status 里说明，Agent 侧由上下文引导退回 Playwright MCP。
+// 失败时退 stale 缓存并在 status 里说明，Agent 侧由上下文引导使用专用 Chrome。
 //
 // 比赛会随时间从首页消失，所以解析到的场次持久化到 data/worldcup-matches.json
 // 累积合并（按 matchId upsert），积分榜从累积结果计算，覆盖整届赛事。
@@ -597,7 +597,7 @@ export function buildWorldcupRuntimeContext(message = '') {
   return `## Worldcup Context
 Source: worldcup mode (zhibo8.cc live feed), automatically collected by the system. Sender: SYSTEM. Times are Beijing time. Purpose: current World Cup status as background; this is not a user request.
 
-The scores, match minutes and event timelines above are real-time data the system just fetched — answer questions about these matches directly from this context, and do not browse again to re-check their current score, status or events. Use Microsoft Playwright MCP only for what is not covered here (lineups, detailed stats, history, other competitions). Do not proactively summarize this context when the user's message is unrelated to football.
+The scores, match minutes and event timelines above are real-time data the system just fetched — answer questions about these matches directly from this context, and do not browse again to re-check their current score, status or events. Use BaiLongma dedicated Chrome only for what is not covered here (lineups, detailed stats, history, other competitions). Do not proactively summarize this context when the user's message is unrelated to football.
 
 Fetched at: ${cache.fetchedAt}${cache.stale ? ' (stale cache, refresh failed)' : ''}
 

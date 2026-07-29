@@ -1,7 +1,6 @@
 import { createHotspotPanel } from './hotspot-panel.js';
 import { createWorldcupPanel } from './worldcup-panel.js';
 import { createTyphoonPanel } from './typhoon-panel.js';
-import { createPersonCardPanel } from './person-card-panel.js';
 import { createDocPanel } from './doc-panel.js';
 
 const createAppTitlebar = () => `
@@ -166,25 +165,27 @@ const createSecondaryPanel = () => `
       </div>
       <div class="browser-preview" id="browser-preview" data-state="idle" aria-label="Agent 正在操作浏览器" hidden>
         <div class="browser-preview-viewport" id="browser-preview-native-slot">
-          <img class="browser-preview-image" id="browser-preview-image" alt="Agent 正在操作的网页缩略画面" draggable="false">
+          <img class="browser-preview-image" id="browser-preview-image" alt="Agent 正在操作的实时网页" draggable="false">
         </div>
       </div>
     </section>
 
     <section class="l2-module cognition-module" aria-labelledby="cognition-title">
-      <div class="l2-module-head compact cognition-head">
-        <div>
-          <div class="l2-module-kicker">LIVE COGNITION</div>
-          <h2 class="l2-module-title" id="cognition-title">思考与工具</h2>
+      <div class="cognition-surface" id="cognition-surface">
+        <div class="l2-module-head compact cognition-head">
+          <div>
+            <div class="l2-module-kicker">LIVE COGNITION</div>
+            <h2 class="l2-module-title" id="cognition-title">思考与工具</h2>
+          </div>
+          <div class="cognition-state-group">
+            <span class="l3-state" id="l3-state" data-state="idle">L3 待命</span>
+            <span class="cognition-state" id="cognition-state" data-state="idle">空闲</span>
+          </div>
         </div>
-        <div class="cognition-state-group">
-          <span class="l3-state" id="l3-state" data-state="idle">L3 待命</span>
-          <span class="cognition-state" id="cognition-state" data-state="idle">空闲</span>
-        </div>
-      </div>
-      <div class="stream cognition-stream">
-        <div class="stream-inner" id="si-l2">
-          <div class="cognition-empty" id="cognition-empty">心跳触发后，这里会实时显示思考与工具调用</div>
+        <div class="stream cognition-stream">
+          <div class="stream-inner" id="si-l2">
+            <div class="cognition-empty" id="cognition-empty">心跳触发后，这里会实时显示思考与工具调用</div>
+          </div>
         </div>
       </div>
     </section>
@@ -957,7 +958,7 @@ const createSettingsModal = () => `
             <div class="settings-section-label">工具黑名单</div>
             <p class="settings-hint">勾选后该工具将被拒绝执行，对话中 Agent 调用时会收到"已被安全策略禁用"错误。</p>
             <div class="settings-row"><label class="settings-label"><input type="checkbox" class="security-blocked-tool" value="exec_command"> exec_command &nbsp;<span style="color:var(--ink2);font-size:12px;">（执行 shell 命令）</span></label></div>
-            <div class="settings-row"><label class="settings-label"><input type="checkbox" class="security-blocked-tool" value="playwright_browser"> Playwright MCP &nbsp;<span style="color:var(--ink2);font-size:12px;">（全部网页搜索、读取与浏览器操作）</span></label></div>
+            <div class="settings-row"><label class="settings-label"><input type="checkbox" class="security-blocked-tool" value="chrome_devtools_browser"> 白龙马内置浏览器 &nbsp;<span style="color:var(--ink2);font-size:12px;">（Chrome DevTools MCP 的全部网页搜索、读取与浏览器操作）</span></label></div>
             <div class="settings-row"><label class="settings-label"><input type="checkbox" class="security-blocked-tool" value="ui_set"> ui_set &nbsp;<span style="color:var(--ink2);font-size:12px;">（投影声明式界面 surface）</span></label></div>
           </div>
           <div class="settings-section settings-section-action">
@@ -1245,7 +1246,6 @@ export function createBrainUiMarkup() {
     createHotspotPanel(),
     createWorldcupPanel(),
     createTyphoonPanel(),
-    createPersonCardPanel(),
     createDocPanel(),
   ].join("\n\n");
 

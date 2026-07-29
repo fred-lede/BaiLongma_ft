@@ -11,7 +11,7 @@ import { remindersSchemas } from './schemas/reminders.js'
 import { agentsSchemas } from './schemas/agents.js'
 import { systemSchemas } from './schemas/system.js'
 import { apiCapabilitySchemas } from './schemas/api-capabilities.js'
-import { BUILTIN_PLAYWRIGHT_ALLOWED_TOOLS } from '../mcp/playwright-server.js'
+import { BUILTIN_BROWSER_ALLOWED_TOOLS } from '../mcp/chrome-devtools-server.js'
 
 export const BUILTIN_SCHEMA_GROUPS = Object.freeze([
   ['comms', commsSchemas],
@@ -29,7 +29,7 @@ export const BUILTIN_SCHEMA_GROUPS = Object.freeze([
   ['api-capabilities', apiCapabilitySchemas],
 ])
 
-// Reserve retired aliases and built-in Playwright remote names so installed
+// Reserve retired aliases and built-in browser names so installed
 // tools cannot hijack them. Retired aliases remain absent from both the
 // model-facing schema and the executor.
 export const LEGACY_TOOL_ALIASES = Object.freeze([
@@ -38,7 +38,7 @@ export const LEGACY_TOOL_ALIASES = Object.freeze([
   'fetch_url',
   'browser_read',
   'schedule_reminder',
-  ...BUILTIN_PLAYWRIGHT_ALLOWED_TOOLS,
+  ...BUILTIN_BROWSER_ALLOWED_TOOLS,
 ])
 
 export function buildBuiltinToolSchemas(groups = BUILTIN_SCHEMA_GROUPS) {

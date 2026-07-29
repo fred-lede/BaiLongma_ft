@@ -362,7 +362,40 @@ try {
   await page.waitForFunction(() => window.d3 && document.querySelector('#agent-brand-name')?.textContent.includes('SmokeLongma'))
   await page.waitForSelector('#heartbeat-state[data-state="alive"]')
   await page.waitForFunction(() => document.querySelector('#heartbeat-state-label')?.textContent === '20 分钟')
+
+  await page.evaluate(() => {
+    window.__pttSmoke = { start: 0, end: 0 }
+    window.bailongmaVoice.pttStart = () => { window.__pttSmoke.start += 1 }
+    window.bailongmaVoice.pttEnd = () => { window.__pttSmoke.end += 1 }
+  })
   await page.focus('#msg-input')
+  await page.keyboard.down('Space')
+  const heldPttState = await page.evaluate(() => ({
+    ...window.__pttSmoke,
+    activeClass: document.body.classList.contains('ptt-active'),
+    value: document.querySelector('#msg-input')?.value,
+  }))
+  if (heldPttState.start !== 1 || heldPttState.end !== 0 || !heldPttState.activeClass || heldPttState.value !== '') {
+    throw new Error(`empty focused message input did not start PTT: ${JSON.stringify(heldPttState)}`)
+  }
+  await page.keyboard.up('Space')
+  const releasedPttState = await page.evaluate(() => ({
+    ...window.__pttSmoke,
+    activeClass: document.body.classList.contains('ptt-active'),
+  }))
+  if (releasedPttState.start !== 1 || releasedPttState.end !== 1 || releasedPttState.activeClass) {
+    throw new Error(`PTT did not release cleanly: ${JSON.stringify(releasedPttState)}`)
+  }
+  await page.fill('#msg-input', '正常输入')
+  await page.keyboard.press('Space')
+  const typedSpaceState = await page.evaluate(() => ({
+    ...window.__pttSmoke,
+    value: document.querySelector('#msg-input')?.value,
+  }))
+  if (typedSpaceState.start !== 1 || typedSpaceState.end !== 1 || typedSpaceState.value !== '正常输入 ') {
+    throw new Error(`Space in a non-empty message input did not remain text: ${JSON.stringify(typedSpaceState)}`)
+  }
+  await page.fill('#msg-input', '')
   await page.click('#chat-pin-button')
   await page.mouse.move(0, 0)
   await page.waitForTimeout(180)
@@ -471,6 +504,8 @@ try {
       cards: Array.from(document.querySelectorAll('#panel-l2 .l2-module')).map(element => {
         const visibleSurface = element.matches('.action-log-module')
           ? element.querySelector('.action-log-surface')
+          : element.matches('.cognition-module')
+            ? element.querySelector('.cognition-surface')
           : element
         const style = getComputedStyle(visibleSurface)
         return {
@@ -654,7 +689,20 @@ try {
   await nativePage.waitForFunction(() => (
     document.querySelector('.action-log-module')?.dataset.browserPhase === 'browser'
   ))
-  await nativePage.waitForTimeout(70)
+  await nativePage.waitForFunction(() => {
+    const moduleRect = document.querySelector('.action-log-module')?.getBoundingClientRect()
+    const actionRect = document.querySelector('.action-log-surface')?.getBoundingClientRect()
+    const browserRect = document.querySelector('#browser-preview')?.getBoundingClientRect()
+    const nativeXs = (window.__browserEmbedCalls || [])
+      .filter(call => call.method === 'update' && call.payload?.mode === 'card')
+      .map(call => call.payload.bounds?.x)
+      .filter(Number.isFinite)
+    return Boolean(moduleRect && actionRect && browserRect)
+      && actionRect.left < moduleRect.left
+      && browserRect.left > moduleRect.left
+      && nativeXs.length >= 2
+      && nativeXs.at(-1) < nativeXs[0]
+  }, null, { timeout: 1000 })
   const browserEntranceMotion = await nativePage.evaluate(() => {
     const moduleRect = document.querySelector('.action-log-module')?.getBoundingClientRect()
     const actionRect = document.querySelector('.action-log-surface')?.getBoundingClientRect()
@@ -743,7 +791,7 @@ try {
     || nativeBrowserPreview.renderer !== 'native'
     || nativeBrowserPreview.actionLogHidden !== true
     || nativeBrowserPreview.imageSrc
-    || nativeBrowserPreview.latest?.interactive !== false
+    || nativeBrowserPreview.latest?.interactive !== true
     || nativeBrowserPreview.latest?.url !== 'https://example.com/docs'
     || nativeBrowserPreview.slotBoxShadow !== 'none'
     || nativeBrowserPreview.slotBackground !== nativeBrowserPreview.bezelColor
@@ -1144,7 +1192,13 @@ try {
     && !document.querySelector('.action-log-module')?.dataset.browserPhase
     && !document.querySelector('#action-log')?.hidden
   ))
-  await nativePage.waitForTimeout(70)
+  await nativePage.waitForFunction(() => {
+    const xs = (window.__browserEmbedCalls || [])
+      .filter(call => call.method === 'update' && call.payload?.mode === 'card')
+      .map(call => call.payload.bounds?.x)
+      .filter(Number.isFinite)
+    return xs.length >= 2 && xs.at(-1) > xs.at(-2)
+  })
   const browserExitMotion = await nativePage.evaluate(() => {
     const moduleRect = document.querySelector('.action-log-module')?.getBoundingClientRect()
     const actionRect = document.querySelector('.action-log-surface')?.getBoundingClientRect()
@@ -1258,12 +1312,53 @@ try {
     && document.querySelector('#si-l2')?.textContent.includes('读取文件'))
   await page.fill('#msg-input', '马云是谁')
   await page.click('#send-btn')
+  await page.waitForTimeout(1300)
+  const regexTriggeredCard = await page.evaluate(() =>
+    Boolean(document.querySelector('#person-card-panel'))
+    || document.querySelector('.cognition-module')?.dataset.personPhase === 'person')
+  if (regexTriggeredCard) throw new Error('raw chat text opened person card without an agent intent event')
+
+  server.emitSse({
+    type: 'person_card_mode',
+    data: {
+      action: 'show',
+      active: true,
+      card: {
+        name: '马云',
+        title: '企业家',
+        summary: '中国企业家，阿里巴巴集团主要创始人之一。',
+        knownFor: ['阿里巴巴'],
+        tags: ['企业家'],
+        image: 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 640 360%22%3E%3Crect width=%22640%22 height=%22360%22 fill=%22%23112332%22/%3E%3Ccircle cx=%22320%22 cy=%22130%22 r=%2260%22 fill=%22%2382d2ff%22/%3E%3Crect x=%22205%22 y=%22210%22 width=%22230%22 height=%2280%22 rx=%2240%22 fill=%22%2382d2ff%22/%3E%3C/svg%3E',
+        source: 'agent_tool',
+        updatedAt: new Date().toISOString(),
+      },
+    },
+    ts: new Date().toISOString(),
+  })
   await page.waitForTimeout(300)
-  const appearedTooFast = await page.evaluate(() => document.body.classList.contains('person-card-mode'))
-  if (appearedTooFast) throw new Error('person card appeared before the intended reveal delay')
-  await page.waitForFunction(() => document.body.classList.contains('person-card-mode') && document.querySelector('#pc-name')?.textContent.includes('马云'))
-  const enteringSeen = await page.evaluate(() => document.querySelector('#person-card-panel')?.classList.contains('pc-entering'))
-  if (!enteringSeen) throw new Error('person card did not use the entering glitch state')
+  const appearedBeforeIntentDelay = await page.evaluate(() => Boolean(document.querySelector('#person-card-panel')))
+  if (appearedBeforeIntentDelay) throw new Error('person card appeared before the intended reveal delay')
+  await page.waitForFunction(() =>
+    document.querySelector('.cognition-module')?.dataset.personPhase === 'person'
+    && document.querySelector('#pc-name')?.textContent.includes('马云'))
+  const enteringState = await page.evaluate(() => {
+    const module = document.querySelector('.cognition-module')
+    const panel = document.querySelector('#person-card-panel')
+    return {
+      insideCognitionModule: panel?.parentElement === module,
+      phase: module?.dataset.personPhase || '',
+      transitionDuration: panel ? getComputedStyle(panel).transitionDuration : '',
+      legacyBodyMode: document.body.classList.contains('person-card-mode'),
+    }
+  })
+  if (!enteringState.insideCognitionModule || enteringState.phase !== 'person') {
+    throw new Error('person card did not enter as the cognition module replacement surface')
+  }
+  if (!enteringState.transitionDuration.includes('0.48s')) {
+    throw new Error(`person card did not reuse the compact-browser transition duration: ${enteringState.transitionDuration}`)
+  }
+  if (enteringState.legacyBodyMode) throw new Error('person card still activated the legacy fixed overlay mode')
   server.emitSse({
     type: 'message',
     data: {
@@ -1273,25 +1368,49 @@ try {
     ts: new Date().toISOString(),
   })
   await page.waitForFunction(() => document.querySelector('#pc-summary')?.textContent.includes('阿里巴巴集团创始人'))
+  await page.waitForFunction(() => document.querySelector('#cognition-surface')?.getAttribute('aria-hidden') === 'true')
 
-  const snapshot = await page.evaluate(() => ({
-    d3: Boolean(window.d3),
-    nodes: document.querySelectorAll('#graph circle').length,
-    links: document.querySelectorAll('#graph line').length,
-    sceneStage: Boolean(document.getElementById('stage')),
-    heartbeatCount: document.querySelector('#heartbeat-count')?.textContent || '',
-    actionLog: document.querySelector('#action-log')?.textContent || '',
-    l1History: document.querySelector('#si-l1')?.textContent || '',
-    l3History: document.querySelector('#si-l2')?.textContent || '',
-    l3State: document.querySelector('#l3-state')?.textContent || '',
-    cognitionState: document.querySelector('#cognition-state')?.textContent || '',
-    personCard: document.querySelector('#pc-name')?.textContent || '',
-    personSummary: document.querySelector('#pc-summary')?.textContent || '',
-    personKnownFor: [...document.querySelectorAll('#pc-known-list li')].map(li => li.textContent).join(' / '),
-    personImage: !document.querySelector('#pc-hero-img')?.hidden,
-    closeHidden: getComputedStyle(document.querySelector('#pc-exit-btn')).opacity === '0',
-    brand: document.querySelector('#agent-brand-name')?.textContent || '',
-  }))
+  const snapshot = await page.evaluate(() => {
+    const module = document.querySelector('.cognition-module')
+    const panel = document.querySelector('#person-card-panel')
+    const cognitionSurface = document.querySelector('#cognition-surface')
+    const moduleRect = module?.getBoundingClientRect()
+    const panelRect = panel?.getBoundingClientRect()
+    const cognitionRect = cognitionSurface?.getBoundingClientRect()
+    const cognitionStyle = cognitionSurface ? getComputedStyle(cognitionSurface) : null
+    return {
+      d3: Boolean(window.d3),
+      nodes: document.querySelectorAll('#graph circle').length,
+      links: document.querySelectorAll('#graph line').length,
+      sceneStage: Boolean(document.getElementById('stage')),
+      heartbeatCount: document.querySelector('#heartbeat-count')?.textContent || '',
+      actionLog: document.querySelector('#action-log')?.textContent || '',
+      l1History: document.querySelector('#si-l1')?.textContent || '',
+      l3History: document.querySelector('#si-l2')?.textContent || '',
+      l3State: document.querySelector('#l3-state')?.textContent || '',
+      cognitionState: document.querySelector('#cognition-state')?.textContent || '',
+      personCard: document.querySelector('#pc-name')?.textContent || '',
+      personSummary: document.querySelector('#pc-summary')?.textContent || '',
+      personKnownFor: [...document.querySelectorAll('#pc-known-list li')].map(li => li.textContent).join(' / '),
+      personImage: !document.querySelector('#pc-hero-img')?.hidden,
+      closeVisible: Number(getComputedStyle(document.querySelector('#pc-exit-btn')).opacity) > 0.5,
+      personInsideCognition: panel?.parentElement === module,
+      personFillsCognition: Boolean(moduleRect && panelRect)
+        && Math.abs(moduleRect.left - panelRect.left) <= 1
+        && Math.abs(moduleRect.right - panelRect.right) <= 1
+        && Math.abs(moduleRect.top - panelRect.top) <= 1
+        && Math.abs(moduleRect.bottom - panelRect.bottom) <= 1,
+      cognitionSurfaceHidden: cognitionSurface?.getAttribute('aria-hidden') === 'true'
+        && Number(cognitionStyle?.opacity) === 0
+        && cognitionRect?.right <= moduleRect?.left + 1,
+      personCardMetrics: {
+        scrollHeight: document.querySelector('.pc-card')?.scrollHeight || 0,
+        clientHeight: document.querySelector('.pc-card')?.clientHeight || 0,
+      },
+      personHeroCompact: document.querySelector('#pc-hero')?.getBoundingClientRect().height < 140,
+      brand: document.querySelector('#agent-brand-name')?.textContent || '',
+    }
+  })
 
   if (!snapshot.d3) throw new Error('d3 global missing')
   if (snapshot.nodes < 2) throw new Error(`expected at least 2 graph nodes, saw ${snapshot.nodes}`)
@@ -1308,19 +1427,51 @@ try {
   if (!snapshot.personSummary.includes('阿里巴巴集团创始人')) throw new Error('person card did not absorb assistant summary')
   if (!snapshot.personKnownFor.includes('淘宝')) throw new Error('person card did not absorb assistant known-for items')
   if (!snapshot.personImage) throw new Error('person card hero image was not visible')
-  if (!snapshot.closeHidden) throw new Error('person card close button should be hidden until hover')
-  await page.hover('.pc-card')
-  await page.waitForFunction(() => Number(getComputedStyle(document.querySelector('#pc-exit-btn')).opacity) > 0.5)
+  if (!snapshot.closeVisible) throw new Error('person card close button was not persistently visible')
+  if (!snapshot.personInsideCognition) throw new Error('person card escaped the cognition module')
+  if (!snapshot.personFillsCognition) throw new Error('person card did not fill the entire cognition module')
+  if (!snapshot.cognitionSurfaceHidden) throw new Error('cognition title/status surface stayed visible behind the person card')
+  if (snapshot.personCardMetrics.scrollHeight > snapshot.personCardMetrics.clientHeight + 2) {
+    throw new Error(`person card overflowed its normal cognition viewport: ${JSON.stringify(snapshot.personCardMetrics)}`)
+  }
+  if (!snapshot.personHeroCompact) throw new Error('person card retained the oversized landscape hero')
+  if (process.env.BRAIN_UI_PERSON_SCREENSHOT) {
+    const screenshotPath = path.resolve(process.env.BRAIN_UI_PERSON_SCREENSHOT)
+    fs.mkdirSync(path.dirname(screenshotPath), { recursive: true })
+    await page.screenshot({ path: screenshotPath, fullPage: true })
+  }
+
+  const summaryBeforeNameOnlyReply = snapshot.personSummary
+  server.emitSse({
+    type: 'message_received',
+    data: { input: '只复述马云，不要介绍人物' },
+    ts: new Date().toISOString(),
+  })
+  server.emitSse({
+    type: 'message',
+    data: { from: 'consciousness', content: '马云。' },
+    ts: new Date().toISOString(),
+  })
+  await page.waitForTimeout(120)
+  const summaryAfterNameOnlyReply = await page.locator('#pc-summary').textContent()
+  if (summaryAfterNameOnlyReply !== summaryBeforeNameOnlyReply) {
+    throw new Error(`name-only assistant reply polluted person summary: ${summaryAfterNameOnlyReply}`)
+  }
+
   await page.click('#pc-exit-btn')
-  const leavingSeen = await page.waitForFunction(() => document.querySelector('#person-card-panel')?.classList.contains('pc-leaving'), null, { timeout: 1000 })
-  if (!leavingSeen) throw new Error('person card did not use the leaving glitch state')
-  await page.waitForFunction(() => !document.body.classList.contains('person-card-mode') && !document.querySelector('#person-card-panel')?.classList.contains('pc-visible'))
+  const leavingSeen = await page.waitForFunction(() =>
+    !document.querySelector('.cognition-module')?.dataset.personPhase
+    && Boolean(document.querySelector('#person-card-panel')), null, { timeout: 1000 })
+  if (!leavingSeen) throw new Error('person card did not start the compact-browser-style exit transition')
+  await page.waitForFunction(() =>
+    !document.querySelector('#person-card-panel')
+    && document.querySelector('#cognition-surface')?.getAttribute('aria-hidden') === 'false')
   await page.fill('#msg-input', '帮我写一个项目介绍')
   await page.click('#send-btn')
   await page.waitForTimeout(1300)
   const falsePersonCard = await page.evaluate(() =>
-    document.body.classList.contains('person-card-mode')
-    || document.querySelector('#person-card-panel')?.classList.contains('pc-visible'))
+    Boolean(document.querySelector('#person-card-panel'))
+    || document.querySelector('.cognition-module')?.dataset.personPhase === 'person')
   if (falsePersonCard) throw new Error('person card opened for a non-person introduction request')
 
   server.emitSse({ type: 'message_received', data: { input: 'action log limit smoke' }, ts: new Date().toISOString() })

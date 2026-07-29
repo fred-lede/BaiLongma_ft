@@ -38,7 +38,11 @@ run('node', [
   '--platform=darwin',
   ...archs.map((arch) => `--arch=${arch}`),
 ]);
-
+run('node', [
+  'scripts/prepare-node-runtime.mjs',
+  '--platform=darwin',
+  ...archs.map((arch) => `--arch=${arch}`),
+]);
 for (const arch of archs) {
   console.log(`[build:mac] building native macOS speech helper for ${arch}`);
   run('node', ['scripts/build-macos-speech.mjs', arch, '--required']);
@@ -55,6 +59,6 @@ for (const arch of archs) {
     arch,
   ]);
 
-  console.log(`[build:mac] packaging ${arch} DMG`);
-  run('node', ['./node_modules/electron-builder/cli.js', '--mac', 'dmg', `--${arch}`]);
+  console.log(`[build:mac] packaging ${arch} DMG and update ZIP`);
+  run('node', ['./node_modules/electron-builder/cli.js', '--mac', 'dmg', 'zip', `--${arch}`]);
 }

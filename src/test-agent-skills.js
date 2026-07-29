@@ -27,8 +27,18 @@ assert.ok(agentSkill, 'expected bundled Agent Skills helper skill')
 assert.equal(agentSkill.name, 'Agent Skills')
 assert.ok(agentSkill.description.includes('Bailongma Agent Skills'))
 
+const humanWebSearchSkill = skills.find(s => s.id === 'human-web-search')
+assert.ok(humanWebSearchSkill, 'expected bundled human-style web search skill')
+assert.equal(humanWebSearchSkill.name, '拟人化网页搜索')
+assert.ok(humanWebSearchSkill.description.includes('百度首页'))
+
 const matched = selectSkillsForMessage('帮我创建一个 Agent Skills 的 SKILL.md')
 assert.ok(matched.active.some(s => s.name === 'Agent Skills'), 'expected Agent Skills to activate')
+
+const searchMatched = selectSkillsForMessage('请上网搜索最新的 Playwright 文档')
+assert.ok(searchMatched.active.some(s => s.id === 'human-web-search'), 'expected human-style web search skill to activate')
+const searchContext = formatSkillsForContext(searchMatched)
+assert.ok(searchContext.includes('<skill id="human-web-search"'), 'expected human-style web search instructions in context')
 
 const catalog = selectSkillsForMessage('有哪些技能可以用')
 assert.equal(catalog.catalogRequested, true)

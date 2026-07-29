@@ -3,12 +3,13 @@ import { searchAdditionalMemories, formatMemoriesForPrompt } from './injector.js
 
 const WEB_KEYWORDS = /最新|实时|今天|昨天|明天|news|price|股价|天气|汇率|价格/i
 
-const ROUND3_SEARCH_PROMPT = `You are an information-retrieval assistant. All web access must use the Microsoft Playwright MCP browser tools. Navigate to a search-engine query URL and inspect the automatic accessibility snapshot attached to the navigation result. Open a useful result and inspect the fresh snapshot attached to that action. Do not routinely call browser_snapshot; use browser_find for targeted lookup or browser_snapshot only when output is missing/stale after passive page changes. Do not use shell HTTP clients. Do not explain or summarize.`
-const PLAYWRIGHT_SEARCH_TOOLS = [
+const ROUND3_SEARCH_PROMPT = `You are an information-retrieval assistant. All web access must use BaiLongma dedicated Google Chrome through Chrome DevTools MCP. For a discovery search, navigate to https://www.baidu.com, inspect the automatic accessibility snapshot for the search field, use browser_type to enter the full query, then use browser_click on the visible search button. Never navigate directly to a keyword search URL. Open a useful result and inspect the fresh snapshot attached to that action. Do not routinely call browser_snapshot; use browser_find for targeted lookup or browser_snapshot only when output is missing/stale after passive page changes. Do not use shell HTTP clients. Do not explain or summarize.`
+const CHROME_SEARCH_TOOLS = [
   'browser_navigate',
   'browser_snapshot',
   'browser_find',
   'browser_click',
+  'browser_type',
   'browser_tabs',
 ]
 
@@ -101,7 +102,7 @@ export async function runMemoryRefreshLoop({ originalQuery, baseMemories, system
     if (signal?.aborted) break
     try {
       const needsWeb = WEB_KEYWORDS.test(item)
-      const toolNames = needsWeb ? PLAYWRIGHT_SEARCH_TOOLS : ['search_memory']
+      const toolNames = needsWeb ? CHROME_SEARCH_TOOLS : ['search_memory']
       const res3 = await callLLM({
         systemPrompt: ROUND3_SEARCH_PROMPT,
         message: `请搜索：${item}`,

@@ -1,5 +1,6 @@
 import fs from 'fs'
 import crypto from 'crypto'
+import path from 'path'
 import { BaseProvider } from './base.js'
 import { config } from '../config.js'
 import { persistChatMediaBuffer } from '../chat-media.js'
@@ -13,7 +14,7 @@ export class ComfyUIImageProvider extends BaseProvider {
     super({
       name: 'comfyui-image',
       apiKey: '',
-      baseURL: (config.comfyuiBaseURL || DEFAULT_BASE_URL).replace(/\/+$/, ''),
+      baseURL: DEFAULT_BASE_URL,
     })
   }
 
@@ -29,6 +30,7 @@ export class ComfyUIImageProvider extends BaseProvider {
   async #image({ prompt, aspect_ratio = '1:1', n = 1 }) {
     if (!prompt?.trim()) throw new Error('ComfyUI Image: prompt is required')
     const count = Math.min(Math.max(Math.floor(Number(n) || 1), 1), 4)
+    const baseURL = (config.comfyuiBaseURL || DEFAULT_BASE_URL).replace(/\/+$/, '')
 
     const headers = { 'Content-Type': 'application/json' }
     if (config.comfyuiToken) headers['Authorization'] = `Bearer ${config.comfyuiToken}`
@@ -42,21 +44,21 @@ export class ComfyUIImageProvider extends BaseProvider {
           n: count,
         })
 
-    const submitResp = await this.#postJson(`${this.baseURL}/prompt`, {
+    const submitResp = await this.#postJson(`${baseURL}/prompt`, {
       prompt: workflow,
       client_id: crypto.randomUUID(),
     }, headers)
     const promptId = submitResp?.prompt_id
     if (!promptId) throw new Error('ComfyUI Image: /prompt response missing prompt_id')
 
-    const outputs = await this.#pollHistory(promptId, headers)
+    const outputs = await this.#pollHistory(promptId, headers, baseURL)
     const images = Object.values(outputs).flatMap(nodeOut =>
       Array.isArray(nodeOut?.images) ? nodeOut.images : [],
     )
 
     const urls = []
     for (const img of images) {
-      const stored = await this.#fetchImage(img, headers)
+      const stored = await this.#fetchImage(img, headers, baseURL)
       if (stored) urls.push(stored.url)
     }
 
@@ -83,7 +85,7 @@ export class ComfyUIImageProvider extends BaseProvider {
         signal: AbortSignal.timeout(60000),
       })
     } catch (err) {
-      throw new Error(`ComfyUI 无法连接 (${this.baseURL})`)
+      throw new Error(`ComfyUI 无法连接 (${this.baseURL})${err?.message ? `: ${err.message}` : ''}`)
     }
     if (!res.ok) {
       const text = await res.text().catch(() => '')
@@ -92,38 +94,67 @@ export class ComfyUIImageProvider extends BaseProvider {
     return res.json()
   }
 
-  async #pollHistory(promptId, headers, timeoutMs = 120000) {
+  async #pollHistory(promptId, headers, baseURL, timeoutMs = 120000) {
     const deadline = Date.now() + timeoutMs
-    const url = `${this.baseURL}/history/${encodeURIComponent(promptId)}`
+    const url = `${baseURL}/history/${encodeURIComponent(promptId)}`
     while (Date.now() < deadline) {
+      let json = null
       try {
         const res = await fetch(url, { headers, signal: AbortSignal.timeout(10000) })
-        if (res.ok) {
-          const json = await res.json()
-          const outputs = json?.[promptId]?.outputs
-          if (outputs && Object.keys(outputs).length > 0) return outputs
-        }
+        if (res.ok) json = await res.json()
       } catch (err) {
         console.warn(`[comfyui] history poll error: ${err.message}`)
+      }
+      if (json) {
+        const entry = json?.[promptId]
+        const statusStr = entry?.status?.status_str
+        if (statusStr === 'error') {
+          const msg = extractComfyErrorMessage(entry?.status?.messages)
+          throw new Error(`ComfyUI Image: generation failed${msg ? `: ${msg}` : ''}`)
+        }
+        const outputs = entry?.outputs
+        if (outputs && Object.keys(outputs).length > 0) return outputs
       }
       await new Promise(resolve => setTimeout(resolve, 1000))
     }
     throw new Error(`ComfyUI Image: generation timed out after ${Math.round(timeoutMs / 1000)}s`)
   }
 
-  async #fetchImage(img, headers) {
+  async #fetchImage(img, headers, baseURL) {
     const params = new URLSearchParams({
       filename: img.filename || '',
       subfolder: img.subfolder || '',
       type: img.type || 'output',
     })
-    const url = `${this.baseURL}/view?${params.toString()}`
-    const res = await fetch(url, { headers, signal: AbortSignal.timeout(60000) })
+    const url = `${baseURL}/view?${params.toString()}`
+    let res
+    try {
+      res = await fetch(url, { headers, signal: AbortSignal.timeout(60000) })
+    } catch (err) {
+      console.warn(`[comfyui] view fetch error: ${err.message}`)
+      return null
+    }
     if (!res.ok) {
       console.warn(`[comfyui] view fetch failed: ${res.status}`)
       return null
     }
     const buffer = Buffer.from(await res.arrayBuffer())
-    return persistChatMediaBuffer(buffer, { ext: '.png', mime: 'image/png' })
+    const ext = (img.filename && path.extname(img.filename)) || '.png'
+    const mime = ext === '.jpg' ? 'image/jpeg'
+      : ext === '.webp' ? 'image/webp'
+      : ext === '.gif' ? 'image/gif'
+      : 'image/png'
+    return persistChatMediaBuffer(buffer, { ext, mime })
   }
+}
+
+function extractComfyErrorMessage(messages = []) {
+  const parts = []
+  for (const msg of messages) {
+    if (Array.isArray(msg) && typeof msg[1] === 'string') {
+      const text = msg[1].split('\n')[0].trim()
+      if (text) parts.push(text)
+    }
+  }
+  return parts.join(' | ').slice(0, 500)
 }

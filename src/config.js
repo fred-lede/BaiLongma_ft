@@ -1057,6 +1057,11 @@ export const config = {
   // 不是 runtime 按难度替模型决定开关 reasoning（那条路 index.js 已注释外掉）。
   thinking: false,
   imageGenModel: '',
+  imageEngine: '',
+  comfyuiBaseURL: 'http://122.116.209.1:8188',
+  comfyuiCheckpoint: '',
+  comfyuiWorkflowPath: '',
+  comfyuiToken: '',
   contextWindow: {
     chatMessageLimit: DEFAULT_CONTEXT_MESSAGE_LIMIT,
     toolCallLimit: DEFAULT_CONTEXT_TOOL_LIMIT,
@@ -1092,6 +1097,21 @@ if (parsedConfig) {
   }
   if (typeof parsedConfig.imageGenModel === 'string') {
     config.imageGenModel = parsedConfig.imageGenModel
+  }
+  if (typeof parsedConfig.imageEngine === 'string') {
+    config.imageEngine = parsedConfig.imageEngine
+  }
+  if (typeof parsedConfig.comfyuiBaseURL === 'string') {
+    config.comfyuiBaseURL = parsedConfig.comfyuiBaseURL
+  }
+  if (typeof parsedConfig.comfyuiCheckpoint === 'string') {
+    config.comfyuiCheckpoint = parsedConfig.comfyuiCheckpoint
+  }
+  if (typeof parsedConfig.comfyuiWorkflowPath === 'string') {
+    config.comfyuiWorkflowPath = parsedConfig.comfyuiWorkflowPath
+  }
+  if (typeof parsedConfig.comfyuiToken === 'string') {
+    config.comfyuiToken = parsedConfig.comfyuiToken
   }
   if (parsedConfig.contextWindow && typeof parsedConfig.contextWindow === 'object') {
     const chatMessageLimit = Number(parsedConfig.contextWindow.chatMessageLimit)
@@ -1419,15 +1439,38 @@ export function switchProviderConfig({ provider, model } = {}) {
   }
 }
 
-export async function saveLLMSettings({ provider = AUTO_PROVIDER, apiKey, model, baseURL, imageGenModel } = {}) {
+export async function saveLLMSettings({
+  provider = AUTO_PROVIDER,
+  apiKey,
+  model,
+  baseURL,
+  imageGenModel,
+  imageEngine,
+  comfyuiBaseURL,
+  comfyuiCheckpoint,
+  comfyuiWorkflowPath,
+  comfyuiToken,
+} = {}) {
   const p = String(provider || AUTO_PROVIDER).toLowerCase()
   const trimmedKey = String(apiKey || '').trim()
 
-  if (imageGenModel) {
+  const imageFields = {
+    imageGenModel,
+    imageEngine,
+    comfyuiBaseURL,
+    comfyuiCheckpoint,
+    comfyuiWorkflowPath,
+    comfyuiToken,
+  }
+  const hasImageFields = Object.values(imageFields).some(v => v !== undefined)
+  if (hasImageFields) {
     const existing = readExistingStoredConfig()
-    existing.imageGenModel = imageGenModel
+    for (const [key, val] of Object.entries(imageFields)) {
+      const trimmed = String(val ?? '').trim()
+      existing[key] = trimmed
+      config[key] = trimmed
+    }
     writeStoredConfig(existing)
-    config.imageGenModel = imageGenModel
   }
 
   if (p === 'custom') {

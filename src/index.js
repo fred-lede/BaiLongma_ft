@@ -30,6 +30,7 @@ import { getAdaptiveTickInterval, getQuotaStatus, setRateLimited, isRateLimited,
 import { registerProvider } from './providers/registry.js'
 import { MinimaxProvider } from './providers/minimax.js'
 import { AetherMeshImageProvider } from './providers/aethermesh-image.js'
+import { ComfyUIImageProvider } from './providers/comfyui-image.js'
 import { isRunning, setScheduler } from './control.js'
 import { getCustomIntervalMs, consumeTick as consumeTickerTick, getStatus as getTickerStatus } from './ticker.js'
 import { seedSandboxOnce, seedMusicOnce, rescueDataFromInstallDir } from './paths.js'
@@ -235,6 +236,7 @@ function registerAetherMeshImageIfAvailable() {
 }
 registerAetherMeshImageIfAvailable()
 registerMinimaxIfAvailable()
+registerProvider(new ComfyUIImageProvider())
 
 if (config.needsActivation) {
   console.log('[LLM] Not activated — waiting for user to enter API key on the activation page')

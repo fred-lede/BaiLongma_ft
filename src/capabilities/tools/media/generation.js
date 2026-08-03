@@ -3,6 +3,7 @@ import path from 'path'
 import { nowTimestamp } from '../../../time.js'
 import { emitEvent } from '../../../events.js'
 import { callCapability } from '../../../providers/registry.js'
+import { config } from '../../../config.js'
 import { isDailyLimitReached } from '../../../quota.js'
 import { SANDBOX_ROOT } from '../../sandbox.js'
 
@@ -52,7 +53,7 @@ export async function execGenerateImage({ prompt, aspect_ratio = '1:1', n = 1 })
   const ratio = validRatios.has(aspect_ratio) ? aspect_ratio : '1:1'
   const count = Math.min(Math.max(Math.floor(n) || 1, 1), 4)
 
-  const result = await callCapability('image', { prompt, aspect_ratio: ratio, n: count })
+  const result = await callCapability('image', { prompt, aspect_ratio: ratio, n: count }, config.imageEngine)
 
   emitEvent('image_created', { urls: result.urls, prompt: prompt.slice(0, 60) })
   console.log(`[image] 已生成 ${result.urls.length} 张图片`)

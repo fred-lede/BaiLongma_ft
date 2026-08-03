@@ -25,16 +25,22 @@ export function replaceProvider(provider) {
   }
 }
 
-// 获取支持某能力的第一个可用 provider
-export function getProvider(capability) {
-  const p = providers.find(p => p.canDo(capability))
+// 获取支持某能力的第一个可用 provider（可指定引擎名前缀，如 comfyui / aethermesh / minimax）
+export function getProvider(capability, engine = '') {
+  const candidates = providers.filter(p => p.canDo(capability))
+  const engineName = String(engine || '').trim().toLowerCase()
+  if (engineName) {
+    const match = candidates.find(p => p.name.toLowerCase().startsWith(engineName))
+    if (match) return match
+  }
+  const p = candidates[0]
   if (!p) throw new Error(`没有可用的 Provider 支持能力: "${capability}"`)
   return p
 }
 
-// 调用某能力（自动路由）
-export async function callCapability(capability, params) {
-  const provider = getProvider(capability)
+// 调用某能力（自动路由，可指定引擎）
+export async function callCapability(capability, params, engine = '') {
+  const provider = getProvider(capability, engine)
   return provider.call(capability, params)
 }
 

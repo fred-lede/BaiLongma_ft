@@ -4645,6 +4645,7 @@ function initTTSSettings() {
       if (comfyuiWorkflowIn) comfyuiWorkflowIn.value = llm.comfyuiWorkflowPath || "";
       if (comfyuiTokenInput) comfyuiTokenInput.value = llm.comfyuiToken || "";
       syncImageEngineUI();
+      setComfyuiTokenVisible(false);
       if (thinkingToggle) thinkingToggle.checked = llm.thinking === true;
       const contextWindow = llm.contextWindow || {};
       const chatMessageLimit = Number(contextWindow.chatMessageLimit) || 20;
@@ -5769,7 +5770,7 @@ function initTTSSettings() {
       const imageGenModel = document.getElementById("settings-imagegen-model")?.value?.trim();
       if (imageGenModel !== undefined) body.imageGenModel = imageGenModel;
       const imageEngine = imageEngineSelect?.value || "";
-      if (imageEngine) body.imageEngine = imageEngine;
+      body.imageEngine = imageEngine;
       if (comfyuiBaseURLInput) body.comfyuiBaseURL = comfyuiBaseURLInput.value.trim();
       if (comfyuiCheckpointIn) body.comfyuiCheckpoint = comfyuiCheckpointIn.value.trim();
       if (comfyuiWorkflowIn) body.comfyuiWorkflowPath = comfyuiWorkflowIn.value.trim();

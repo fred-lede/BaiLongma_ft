@@ -341,8 +341,38 @@ const createSettingsModal = () => `
               </div>
             </div>
             <div class="settings-row">
-              <label class="settings-label" for="settings-imagegen-model">文生圖模型</label>
+              <label class="settings-label" for="settings-image-engine">生圖引擎</label>
+              <select class="settings-select" id="settings-image-engine">
+                <option value="">自動</option>
+                <option value="comfyui">ComfyUI</option>
+                <option value="aethermesh">AetherMesh</option>
+                <option value="minimax">MiniMax</option>
+              </select>
+            </div>
+            <div class="settings-row" id="settings-imagegen-model-row">
+              <label class="settings-label" for="settings-imagegen-model">文生圖模型（AetherMesh）</label>
               <input class="settings-input" id="settings-imagegen-model" type="text" placeholder="如 x/z-image-turbo:bf16" autocomplete="off" spellcheck="false">
+            </div>
+            <div id="settings-comfyui-section" style="display:none;">
+              <div class="settings-row">
+                <label class="settings-label" for="settings-comfyui-baseurl">ComfyUI Base URL</label>
+                <input class="settings-input" id="settings-comfyui-baseurl" type="text" placeholder="如 http://122.116.209.1:8188" autocomplete="off" spellcheck="false">
+              </div>
+              <div class="settings-row">
+                <label class="settings-label" for="settings-comfyui-checkpoint">Checkpoint 檔名</label>
+                <input class="settings-input" id="settings-comfyui-checkpoint" type="text" placeholder="如 sd_xl_base_1.0.safetensors" autocomplete="off" spellcheck="false">
+              </div>
+              <div class="settings-row">
+                <label class="settings-label" for="settings-comfyui-workflow-path">自訂 Workflow JSON 路徑</label>
+                <input class="settings-input" id="settings-comfyui-workflow-path" type="text" placeholder="可選：API-format workflow 檔的絕對路徑" autocomplete="off" spellcheck="false">
+              </div>
+              <div class="settings-row">
+                <label class="settings-label" for="settings-comfyui-token">Token（可選）</label>
+                <div class="settings-secret-wrap">
+                  <input class="settings-input" id="settings-comfyui-token" type="password" placeholder="配合 --api-auth 使用" autocomplete="new-password">
+                  <button class="settings-secret-toggle" id="settings-comfyui-token-toggle" type="button" aria-label="顯示 Token" title="顯示/隱藏 Token">👁</button>
+                </div>
+              </div>
             </div>
             <div class="settings-row">
               <label class="settings-label" for="settings-llm-key">API Key</label>

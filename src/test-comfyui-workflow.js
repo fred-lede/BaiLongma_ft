@@ -64,6 +64,9 @@ function assert(cond, label) {
   assert(wf3['5'].inputs.batch_size === 4, 'n clamped to max 4')
   const wf4 = buildComfyWorkflow({ prompt: 'x', n: 0 })
   assert(wf4['5'].inputs.batch_size === 1, 'n clamped to min 1')
+
+  const wf5 = buildComfyWorkflow({ prompt: 'x', seed: 0 })
+  assert(wf5['3'].inputs.seed === 0, 'seed 0 is honored as a fixed seed')
 }
 
 // ====== 3) injectPromptIntoWorkflow ======
@@ -96,6 +99,23 @@ function assert(cond, label) {
     lowerThrew = true
   }
   assert(!lowerThrew && lowerTitle['1'].inputs.text === 'b', 'title match is case-insensitive')
+
+  const negAndPrompt = {
+    '1': { class_type: 'CLIPTextEncode', inputs: { text: 'neg', clip: ['9', 1] }, _meta: { title: 'NegativePrompt' } },
+    '2': { class_type: 'CLIPTextEncode', inputs: { text: 'old', clip: ['9', 1] }, _meta: { title: 'PROMPT' } },
+  }
+  injectPromptIntoWorkflow(negAndPrompt, 'pos')
+  assert(negAndPrompt['1'].inputs.text === 'neg', 'NegativePrompt node not treated as PROMPT')
+  assert(negAndPrompt['2'].inputs.text === 'pos', 'exact PROMPT node filled')
+
+  const onlyNeg = { '1': { class_type: 'CLIPTextEncode', inputs: { text: 'neg' }, _meta: { title: 'NegativePrompt' } } }
+  let negThrew = false
+  try {
+    injectPromptIntoWorkflow(onlyNeg, 'x')
+  } catch (err) {
+    negThrew = /PROMPT/.test(err.message)
+  }
+  assert(negThrew, 'throws when only NegativePrompt node exists')
 }
 
 if (failed) {

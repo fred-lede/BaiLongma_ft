@@ -15,7 +15,8 @@ export const ASPECT_TO_LATENT = {
 
 // 把 aspect ratio 轉成 latent 尺寸；未知值回退 1:1。
 export function aspectRatioToLatentSize(aspectRatio = '1:1') {
-  return ASPECT_TO_LATENT[aspectRatio] || ASPECT_TO_LATENT['1:1']
+  const entry = ASPECT_TO_LATENT[aspectRatio] || ASPECT_TO_LATENT['1:1']
+  return { width: entry.width, height: entry.height }
 }
 
 /**
@@ -88,7 +89,7 @@ export function buildComfyWorkflow({
 export function injectPromptIntoWorkflow(workflow, prompt = '') {
   for (const node of Object.values(workflow)) {
     const title = String(node?._meta?.title || '')
-    if (node?.class_type === 'CLIPTextEncode' && /PROMPT/i.test(title)) {
+    if (node?.class_type === 'CLIPTextEncode' && /^PROMPT$/i.test(title)) {
       node.inputs = { ...(node.inputs || {}), text: String(prompt || '') }
       return workflow
     }

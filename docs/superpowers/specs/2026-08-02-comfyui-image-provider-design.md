@@ -53,8 +53,9 @@ stays dedicated to the AetherMesh server.
 
 1. If `comfyuiWorkflowPath` is set and readable:
    - Load the JSON (ComfyUI "API format" — node graph keyed by node id).
-   - Find the `CLIPTextEncode` node whose title contains `PROMPT` (case
-     insensitive). Fill its `inputs.text` with the prompt.
+   - Find the `CLIPTextEncode` node whose title is exactly `PROMPT` (case
+     insensitive exact match — avoids mis-filling a `NegativePrompt` node).
+     Fill its `inputs.text` with the prompt.
    - Error if no such node exists, or the JSON is invalid.
 2. Otherwise use the built-in template:
 

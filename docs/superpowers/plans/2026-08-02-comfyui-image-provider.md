@@ -233,7 +233,7 @@ export function buildComfyWorkflow({
 export function injectPromptIntoWorkflow(workflow, prompt = '') {
   for (const node of Object.values(workflow)) {
     const title = String(node?._meta?.title || '')
-    if (node?.class_type === 'CLIPTextEncode' && /PROMPT/i.test(title)) {
+    if (node?.class_type === 'CLIPTextEncode' && /^PROMPT$/i.test(title)) {
       node.inputs = { ...(node.inputs || {}), text: String(prompt || '') }
       return workflow
     }

@@ -45,6 +45,7 @@
     "test:db-schema-module": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$env:ELECTRON_RUN_AS_NODE='1'; .\\node_modules\\.bin\\electron.cmd .\\src\\test-db-schema-module.js\"",
     "test:voice-continuous": "node ./src/test-voice-continuous.js",
     "test:voice-ptt": "node ./src/test-voice-ptt.js",
+    "test:comfyui-workflow": "node ./src/test-comfyui-workflow.js",
     "test:voice-reply-routing": "node ./src/test-voice-reply-routing.js",
     "test:macos-speech-permissions": "node ./src/test-macos-speech-permissions.js",
     "test:websocket-security": "node ./src/test-websocket-security.js",

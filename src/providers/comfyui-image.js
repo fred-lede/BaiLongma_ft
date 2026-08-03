@@ -44,7 +44,7 @@ export class ComfyUIImageProvider extends BaseProvider {
           n: count,
         })
 
-    const submitResp = await this.#postJson(`${baseURL}/prompt`, {
+    const submitResp = await this.#postJson(baseURL, '/prompt', {
       prompt: workflow,
       client_id: crypto.randomUUID(),
     }, headers)
@@ -75,17 +75,17 @@ export class ComfyUIImageProvider extends BaseProvider {
     }
   }
 
-  async #postJson(url, body, headers) {
+  async #postJson(baseURL, path, body, headers) {
     let res
     try {
-      res = await fetch(url, {
+      res = await fetch(`${baseURL}${path}`, {
         method: 'POST',
         headers,
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(60000),
       })
     } catch (err) {
-      throw new Error(`ComfyUI 无法连接 (${this.baseURL})${err?.message ? `: ${err.message}` : ''}`)
+      throw new Error(`ComfyUI 无法连接 (${baseURL})${err?.message ? `: ${err.message}` : ''}`)
     }
     if (!res.ok) {
       const text = await res.text().catch(() => '')

@@ -33,7 +33,12 @@ export class ComfyUIImageProvider extends BaseProvider {
     const baseURL = (config.comfyuiBaseURL || DEFAULT_BASE_URL).replace(/\/+$/, '')
 
     const headers = { 'Content-Type': 'application/json' }
-    if (config.comfyuiToken) headers['Authorization'] = `Bearer ${config.comfyuiToken}`
+    if (config.comfyuiToken) {
+      const token = config.comfyuiToken.trim()
+      headers['Authorization'] = token.includes(':')
+        ? `Basic ${Buffer.from(token).toString('base64')}`
+        : `Bearer ${token}`
+    }
 
     const workflow = config.comfyuiWorkflowPath
       ? injectPromptIntoWorkflow(this.#readWorkflowFile(), prompt.trim())
@@ -151,9 +156,15 @@ export class ComfyUIImageProvider extends BaseProvider {
 function extractComfyErrorMessage(messages = []) {
   const parts = []
   for (const msg of messages) {
-    if (Array.isArray(msg) && typeof msg[1] === 'string') {
-      const text = msg[1].split('\n')[0].trim()
+    if (!Array.isArray(msg) || msg.length < 2) continue
+    const payload = msg[1]
+    if (typeof payload === 'string') {
+      const text = payload.split('\n')[0].trim()
       if (text) parts.push(text)
+    } else if (payload && typeof payload === 'object') {
+      const type = typeof payload.exception_type === 'string' ? payload.exception_type : ''
+      const text = typeof payload.exception_message === 'string' ? payload.exception_message : ''
+      if (type || text) parts.push(`${type}${type && text ? ': ' : ''}${text}`.trim())
     }
   }
   return parts.join(' | ').slice(0, 500)

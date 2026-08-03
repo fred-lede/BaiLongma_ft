@@ -4564,9 +4564,9 @@ function initTTSSettings() {
 
   function syncImageEngineUI() {
     const engine = imageEngineSelect?.value || "";
-    const isComfyui = engine === "comfyui";
-    if (comfyuiSection) comfyuiSection.style.display = isComfyui ? "" : "none";
-    if (imageGenModelRow) imageGenModelRow.style.display = isComfyui ? "none" : "";
+    const showComfyui = engine === "comfyui" || engine === "";
+    if (comfyuiSection) comfyuiSection.style.display = showComfyui ? "" : "none";
+    if (imageGenModelRow) imageGenModelRow.style.display = engine === "comfyui" ? "none" : "";
   }
 
   function getProviderConfigForUI(provider, llm = cachedLlm) {

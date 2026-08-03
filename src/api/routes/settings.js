@@ -122,7 +122,8 @@ export async function handleSettingsRoutes(req, res, url, { requireLocalOrToken,
   if (req.method === 'POST' && url.pathname === '/settings/model') {
     try {
       const { provider, apiKey, model, baseURL, imageGenModel, imageEngine, comfyuiBaseURL, comfyuiCheckpoint, comfyuiWorkflowPath, comfyuiToken } = await readJsonBody(req)
-      const result = provider || apiKey || baseURL || imageGenModel || imageEngine || comfyuiBaseURL || comfyuiCheckpoint || comfyuiWorkflowPath || comfyuiToken
+      const hasLlmFields = [provider, apiKey, baseURL, imageGenModel, imageEngine, comfyuiBaseURL, comfyuiCheckpoint, comfyuiWorkflowPath, comfyuiToken].some(v => v !== undefined)
+      const result = hasLlmFields
         ? await saveLLMSettings({ provider, apiKey, model, baseURL, imageGenModel, imageEngine, comfyuiBaseURL, comfyuiCheckpoint, comfyuiWorkflowPath, comfyuiToken })
         : switchModel(model)
       emitEvent('model_switched', result)

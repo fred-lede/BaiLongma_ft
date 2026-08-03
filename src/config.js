@@ -1466,6 +1466,7 @@ export async function saveLLMSettings({
   if (hasImageFields) {
     const existing = readExistingStoredConfig()
     for (const [key, val] of Object.entries(imageFields)) {
+      if (val === undefined) continue
       const trimmed = String(val ?? '').trim()
       existing[key] = trimmed
       config[key] = trimmed

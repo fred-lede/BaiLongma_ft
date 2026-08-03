@@ -5,7 +5,7 @@ import { BaseProvider } from './base.js'
 import { config } from '../config.js'
 import { persistChatMediaBuffer } from '../chat-media.js'
 import { recordDailyUsage } from '../quota.js'
-import { buildComfyWorkflow, injectPromptIntoWorkflow } from './comfyui-workflow.js'
+import { buildComfyWorkflow, buildFluxWorkflow, injectPromptIntoWorkflow } from './comfyui-workflow.js'
 
 const DEFAULT_BASE_URL = 'http://122.116.209.1:8188'
 
@@ -42,12 +42,14 @@ export class ComfyUIImageProvider extends BaseProvider {
 
     const workflow = config.comfyuiWorkflowPath
       ? injectPromptIntoWorkflow(this.#readWorkflowFile(), prompt.trim())
-      : buildComfyWorkflow({
-          checkpoint: config.comfyuiCheckpoint,
-          prompt: prompt.trim(),
-          aspect_ratio,
-          n: count,
-        })
+      : config.comfyuiCheckpoint
+        ? buildComfyWorkflow({
+            checkpoint: config.comfyuiCheckpoint,
+            prompt: prompt.trim(),
+            aspect_ratio,
+            n: count,
+          })
+        : await this.#autoWorkflow(prompt.trim(), aspect_ratio, count, baseURL, headers)
 
     const submitResp = await this.#postJson(baseURL, '/prompt', {
       prompt: workflow,
@@ -78,6 +80,46 @@ export class ComfyUIImageProvider extends BaseProvider {
     } catch (err) {
       throw new Error(`ComfyUI Image: cannot read workflow file: ${err.message}`)
     }
+  }
+
+  // 沒有 comfyuiCheckpoint 時的內建模板選擇：有 FLUX 三件套就用 FLUX，
+  // 否則退 SD（空 checkpoint 會讓 /prompt 丟明確驗證錯誤）。
+  async #autoWorkflow(prompt, aspect_ratio, count, baseURL, headers) {
+    const flux = await this.#detectFluxModels(baseURL, headers)
+    if (flux) {
+      return buildFluxWorkflow({
+        unet: flux.unet,
+        t5: flux.t5,
+        clipL: flux.clipL,
+        vae: flux.vae,
+        prompt,
+        aspect_ratio,
+        n: count,
+      })
+    }
+    return buildComfyWorkflow({ checkpoint: '', prompt, aspect_ratio, n: count })
+  }
+
+  #fluxModelsCache = null
+
+  // 查 object_info（快取 60s）找 FLUX 三件套檔名；缺任一就回 null。
+  async #detectFluxModels(baseURL, headers) {
+    const now = Date.now()
+    if (this.#fluxModelsCache && now - this.#fluxModelsCache.ts < 60000) {
+      return this.#fluxModelsCache.models
+    }
+    const info = {}
+    for (const node of ['UNETLoader', 'CLIPLoader', 'VAELoader']) {
+      try {
+        const res = await fetch(`${baseURL}/object_info/${node}`, { headers, signal: AbortSignal.timeout(10000) })
+        if (res.ok) info[node] = await res.json()
+      } catch (err) {
+        console.warn(`[comfyui] object_info ${node} error: ${err.message}`)
+      }
+    }
+    const models = pickFluxModels(info)
+    this.#fluxModelsCache = { ts: now, models }
+    return models
   }
 
   async #postJson(baseURL, path, body, headers) {
@@ -151,6 +193,18 @@ export class ComfyUIImageProvider extends BaseProvider {
       : 'image/png'
     return persistChatMediaBuffer(buffer, { ext, mime })
   }
+}
+
+function pickFluxModels(info) {
+  const unets = info.UNETLoader?.UNETLoader?.input?.required?.unet_name?.[0] || []
+  const clips = info.CLIPLoader?.CLIPLoader?.input?.required?.clip_name?.[0] || []
+  const vaes = info.VAELoader?.VAELoader?.input?.required?.vae_name?.[0] || []
+  const unet = unets.find(f => /flux/i.test(f))
+  const t5 = clips.find(f => /t5/i.test(f))
+  const clipL = clips.find(f => /clip_l/i.test(f))
+  const vae = vaes.find(f => /flux/i.test(f))
+  if (!unet || !t5 || !clipL || !vae) return null
+  return { unet, t5, clipL, vae }
 }
 
 function extractComfyErrorMessage(messages = []) {

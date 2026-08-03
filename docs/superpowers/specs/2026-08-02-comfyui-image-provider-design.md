@@ -20,12 +20,15 @@ stays dedicated to the AetherMesh server.
 - ComfyUI connection is configurable via base URL (works for localhost and
   remote). Default `http://122.116.209.1:8188`.
 - ComfyUI workflow support:
-  - Built-in generic text-to-image template using `CheckpointLoaderSimple`
-    (checkpoint filename from settings), with aspect-ratio → latent size
-    conversion.
+  - Built-in generic text-to-image template that auto-selects between SD
+    (`CheckpointLoaderSimple`, checkpoint from settings) and FLUX.1
+    (`UNETLoader` + `DualCLIPLoader` + `VAELoader`, filenames auto-detected via
+    `object_info`), with aspect-ratio → latent size conversion.
   - Optional custom workflow JSON: a `PROMPT`-titled `CLIPTextEncode` node is
     filled with the generated prompt; all other nodes are left untouched.
-- Remote access token support (ComfyUI `--api-auth`).
+- Remote access token support (optional; see "ComfyUI Side Setup" — stock
+  ComfyUI has no `--api-auth`, so the token is used when a reverse-proxy HTTP
+  Basic layer or a custom-node auth layer is present).
 - GPU pinning is a ComfyUI launch-time concern, not a BaiLongma setting. The
   launch command is documented here.
 
@@ -57,14 +60,22 @@ stays dedicated to the AetherMesh server.
      insensitive exact match — avoids mis-filling a `NegativePrompt` node).
      Fill its `inputs.text` with the prompt.
    - Error if no such node exists, or the JSON is invalid.
-2. Otherwise use the built-in template:
+2. Otherwise use the built-in template. Template selection:
+   - If `comfyuiCheckpoint` is set → SD template (explicit user choice).
+   - Else query `GET {baseURL}/object_info` for `UNETLoader` / `CLIPLoader` /
+     `VAELoader` (cached 60s). If a FLUX trio is present (a `flux`-named unet,
+     a `t5`-named clip, a `clip_l`-named clip, a `flux`-named vae) → FLUX
+     template. Else → SD template (empty checkpoint → `/prompt` returns a clear
+     validation error).
+
+**SD template** (`buildComfyWorkflow`, `CheckpointLoaderSimple`):
 
 ```
 CheckpointLoaderSimple ──> CLIPTextEncode(positive, text=prompt) ─┐
 CheckpointLoaderSimple ──> CLIPTextEncode(negative, text="")     ─┤
 EmptyLatentImage(w,h by aspect_ratio) ────────────────────────────┤
                                                                   ▼
-                                                        KSampler ─> VAEDecode ─> SaveImage
+                                                         KSampler ─> VAEDecode ─> SaveImage
 ```
 
 - Checkpoint filename from `comfyuiCheckpoint`.
@@ -82,14 +93,36 @@ EmptyLatentImage(w,h by aspect_ratio) ──────────────
 - Seed: fixed `random()` seed so each call varies; steps 28; cfg 7.0; sampler
   `euler`; scheduler `normal`; denoise 1.0.
 
+**FLUX template** (`buildFluxWorkflow`, for machines with FLUX.1 models and no
+SD checkpoint). Node graph mirrors the official ComfyUI "FLUX.1 Schnell"
+template (no `FluxGuidance`):
+
+```
+UNETLoader(flux1-schnell, weight_dtype=default) ────────────┐
+DualCLIPLoader(t5xxl, clip_l, type=flux) ──> CLIPTextEncode(positive, text=prompt) ─┐
+                                                                                     ▼
+                                           BasicGuider(model, conditioning) ──> SamplerCustomAdvanced
+RandomNoise(noise_seed) ────────────────────────────────────────────────────> /noise
+KSamplerSelect(euler) ──────────────────────────────────────────────────────> /sampler
+BasicScheduler(model, simple, steps 4, denoise 1) ──────────────────────────> /sigmas
+EmptyLatentImage(w,h by aspect_ratio) ───────────────────────────────────────> /latent_image
+VAELoader(flux_ae) ─────────────────────────────────────────────────────────> VAEDecode ─> SaveImage
+```
+
+- Filenames picked from `object_info` (any `flux` unet / `t5` clip / `clip_l`
+  clip / `flux` vae), so schnell and dev both work.
+- FLUX.1-schnell defaults: `KSamplerSelect` euler, `BasicScheduler` scheduler
+  `simple`, steps 4, denoise 1.0 (the distilled model needs only 4 steps; no
+  CFG / FluxGuidance).
+
 #### HTTP flow (ComfyUI REST API)
 
 1. `POST {baseURL}/prompt`
    - Headers: `Content-Type: application/json`. If `comfyuiToken` is set, send
-     `Authorization: Bearer <token>`. (ComfyUI's exact auth scheme varies by
-     version; if `--api-auth user:pass` is used, the header may instead need to
-     be `Authorization: Basic base64(user:pass)`. Verify during implementation
-     and match the running ComfyUI version.)
+     `Authorization: Basic base64(user:pass)` when the token contains `:` (for a
+     reverse-proxy HTTP Basic layer), otherwise `Authorization: Bearer <token>`
+     (for a custom-node/comfy-api auth layer). If empty, no `Authorization`
+     header (trusted LAN; stock ComfyUI has no built-in auth).
    - Body: `{ prompt: <api-format workflow>, client_id: <uuid> }`.
    - Response: `{ prompt_id }`.
 2. Poll `GET {baseURL}/history/{prompt_id}` every 1s, up to 120s.
@@ -157,14 +190,27 @@ Run on the Windows PC (GPU 1 = RTX 4070 Ti Super):
 
 ```bash
 nvidia-smi -L                  # confirm 4070 is device 1
-python main.py --listen 0.0.0.0 --port 8188 --cuda-device 1 --api-auth comfy:secret
+set CUDA_DEVICE_ORDER=PCI_BUS_ID   # keep torch device ids aligned with nvidia-smi
+python main.py --listen 0.0.0.0 --port 8188 --cuda-device 1
 ```
 
 - `--listen 0.0.0.0` exposes it to the LAN so the Mac can reach it.
 - `--cuda-device 1` pins ComfyUI to the 4070; the 5090 stays free for AetherMesh.
-- `--api-auth <user:pass>` protects remote access. The token field in BaiLongma
-  maps to the `Authorization` header; whether ComfyUI expects `Bearer` or HTTP
-  Basic is version-dependent and is verified during implementation.
+  Note: torch's default device ordering is `FASTEST_FIRST` (nvidia-smi uses
+  `PCI_BUS_ID`), so a multi-GPU box may need `CUDA_DEVICE_ORDER=PCI_BUS_ID` set
+  before launch to make `--cuda-device` indices match `nvidia-smi`. Verify by
+  checking the "Device: cuda:X <GPU name>" line in the startup log.
+- Stock ComfyUI has **no** `--api-auth` CLI flag (it errors with
+  `unrecognized arguments`); the `--api-auth` / `--auth` / API-key flags come
+  from community custom nodes and the ComfyUI Desktop app, not upstream
+  `main.py`. This fork relies on a trusted LAN:
+  - No auth (default): leave the BaiLongma Token field empty; the provider omits
+    the `Authorization` header.
+  - Optional HTTP Basic via a reverse proxy (Caddy/nginx) in front of port 8188;
+    then the BaiLongma Token = `user:pass` and the provider sends
+    `Authorization: Basic base64(user:pass)` (already implemented).
+  - Optional `Authorization: Bearer <token>` if a custom-node/comfy-api auth layer
+    is installed.
 - Optional: install ComfyUI as a Windows service / use `--dont-print-server` for
   headless operation.
 

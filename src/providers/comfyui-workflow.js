@@ -82,6 +82,89 @@ export function buildComfyWorkflow({
 }
 
 /**
+ * 建內建 FLUX.1（schnell/dev）文生圖 workflow（API format），用於沒有
+ * SD checkpoint、但有 flux 三件套（unet + t5xxl + clip_l + vae）的機器。
+ * 節點架構對齊 ComfyUI 官方 FLUX.1 Schnell 模板（SamplerCustomAdvanced +
+ * BasicGuider + BasicScheduler，無 FluxGuidance）。
+ *   unet:  UNETLoader 的 unet_name（如 flux1-schnell.safetensors）
+ *   t5:    t5xxl 的 clip_name（如 t5xxl_fp8_e4m3fn.safetensors）
+ *   clipL: CLIP-L 的 clip_name（如 clip_l.safetensors）
+ *   vae:   VAELoader 的 vae_name（如 flux_ae.safetensors）
+ *   其餘參數同 buildComfyWorkflow。
+ */
+export function buildFluxWorkflow({
+  unet = '',
+  t5 = '',
+  clipL = '',
+  vae = '',
+  prompt = '',
+  aspect_ratio = '1:1',
+  n = 1,
+  seed = null,
+} = {}) {
+  const { width, height } = aspectRatioToLatentSize(aspect_ratio)
+  const batch = Math.min(Math.max(Math.floor(Number(n) || 1), 1), 4)
+  const randomSeed = seed == null ? Math.floor(Math.random() * 0x7fffffff) : Number(seed)
+
+  return {
+    '12': {
+      class_type: 'UNETLoader',
+      inputs: { unet_name: unet, weight_dtype: 'default' },
+    },
+    '11': {
+      class_type: 'DualCLIPLoader',
+      inputs: { clip_name1: t5, clip_name2: clipL, type: 'flux' },
+    },
+    '10': {
+      class_type: 'VAELoader',
+      inputs: { vae_name: vae },
+    },
+    '6': {
+      class_type: 'CLIPTextEncode',
+      inputs: { text: String(prompt || ''), clip: ['11', 0] },
+    },
+    '22': {
+      class_type: 'BasicGuider',
+      inputs: { model: ['12', 0], conditioning: ['6', 0] },
+    },
+    '25': {
+      class_type: 'RandomNoise',
+      inputs: { noise_seed: randomSeed },
+    },
+    '16': {
+      class_type: 'KSamplerSelect',
+      inputs: { sampler_name: 'euler' },
+    },
+    '17': {
+      class_type: 'BasicScheduler',
+      inputs: { scheduler: 'simple', steps: 4, denoise: 1.0, model: ['12', 0] },
+    },
+    '5': {
+      class_type: 'EmptyLatentImage',
+      inputs: { width, height, batch_size: batch },
+    },
+    '13': {
+      class_type: 'SamplerCustomAdvanced',
+      inputs: {
+        noise: ['25', 0],
+        guider: ['22', 0],
+        sampler: ['16', 0],
+        sigmas: ['17', 0],
+        latent_image: ['5', 0],
+      },
+    },
+    '8': {
+      class_type: 'VAEDecode',
+      inputs: { samples: ['13', 0], vae: ['10', 0] },
+    },
+    '9': {
+      class_type: 'SaveImage',
+      inputs: { images: ['8', 0], filename_prefix: 'bailongma' },
+    },
+  }
+}
+
+/**
  * 把 prompt 注入使用者自訂 workflow（API format）中標題含 PROMPT 的
  * CLIPTextEncode 節點。找不到該節點就 throw（明確錯誤，不猜測）。
  * 原地修改並回傳同一份 workflow。

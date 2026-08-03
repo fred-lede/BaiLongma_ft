@@ -57,6 +57,14 @@ CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --config.mac.identity=""
 - **TELEGRAM 和 TUI 不在 voice channels**——但有語音訊息時透過 `voiceReplyChats` Set + `voiceModes` Map 控制回覆是否走 TTS。
 - TUI 語音 turn 結束的 `speak: true` 標記：`src/index.js:384` 的 `deliverFallbackReply` 只在 `isVoiceChannel(channel)` 時設。
 
+### ComfyUI（生圖引擎）
+
+- **Stock ComfyUI 沒有 `--api-auth`**（`unrecognized arguments` 錯誤）；那是社群 custom node / Desktop app 的旗標。保護方式：信任 LAN 裸跑（Token 留空）或 reverse proxy 掛 HTTP Basic（Token 填 `user:pass`，provider 發 `Authorization: Basic base64`）。
+- **無 SD checkpoint 的機器走 FLUX 模板**：`src/providers/comfyui-image.js` 模板選擇 = 自訂 workflow 檔 → `comfyuiCheckpoint`（SD）→ cached `object_info` 偵測 FLUX 三件套（`buildFluxWorkflow`，自動挑 flux unet/t5 clip/clip_l/vae 檔名，schnell/dev 通用）→ SD 空 checkpoint（明確驗證錯誤）。
+- **多 GPU 啟動**：`set CUDA_DEVICE_ORDER=PCI_BUS_ID` + `--cuda-device 1`（torch 預設 `FASTEST_FIRST` 排序跟 nvidia-smi 相反）。PC 上 GPU 0 = RTX 5090（AetherMesh）、GPU 1 = 4070 Ti Super（ComfyUI）。驗證：log 的 `Device: cuda:X <GPU name>`。
+- Windows 防火牆要放行 8188 inbound 才能從 Mac 連：`netsh advfirewall firewall add rule name="ComfyUI 8188" dir=in action=allow protocol=TCP localport=8188`。
+- FLUX.1-schnell 模板參數：`SamplerCustomAdvanced` + `BasicGuider` + `BasicScheduler`(simple/4/1) + `KSamplerSelect`(euler) + `RandomNoise`，**無 FluxGuidance**（對齊官方模板，見 `buildFluxWorkflow`）。
+
 ## 禁制事項
 
 - **不 commit 未驗證的修改**——must 先 `node --check <file>` 或視情況 `npm run <test-script>`。

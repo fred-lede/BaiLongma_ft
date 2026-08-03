@@ -32,6 +32,7 @@ Create `src/test-comfyui-workflow.js`:
 import {
   aspectRatioToLatentSize,
   buildComfyWorkflow,
+  buildFluxWorkflow,
   injectPromptIntoWorkflow,
 } from './providers/comfyui-workflow.js'
 
@@ -450,6 +451,15 @@ git commit -m "feat: route image generation by selected engine"
 
 ### Task 4: ComfyUIImageProvider
 
+> Runtime note (2026-08-02, smoke test): the target PC has **no SD checkpoint** —
+> it ships FLUX.1-schnell (`flux1-schnell.safetensors`, `clip_l.safetensors`,
+> `t5xxl_fp8_e4m3fn.safetensors`, `flux_ae.safetensors`). So the built-in
+> template selection is: custom workflow file → explicit `comfyuiCheckpoint`
+> (SD) → auto-detect FLUX trio via cached `object_info` (→ `buildFluxWorkflow`)
+> → else SD with empty checkpoint (clear validation error). `pickFluxModels()`
+> matches any `flux` unet, `t5` clip, `clip_l` clip, `flux` vae so schnell/dev
+> both work. Verified end-to-end on the PC (21s, 1024x1024 PNG).
+
 **Files:**
 - Create: `src/providers/comfyui-image.js`
 
@@ -464,7 +474,7 @@ import { BaseProvider } from './base.js'
 import { config } from '../config.js'
 import { persistChatMediaBuffer } from '../chat-media.js'
 import { recordDailyUsage } from '../quota.js'
-import { buildComfyWorkflow, injectPromptIntoWorkflow } from './comfyui-workflow.js'
+import { buildComfyWorkflow, buildFluxWorkflow, injectPromptIntoWorkflow } from './comfyui-workflow.js'
 
 const DEFAULT_BASE_URL = 'http://122.116.209.1:8188'
 
@@ -495,12 +505,14 @@ export class ComfyUIImageProvider extends BaseProvider {
 
     const workflow = config.comfyuiWorkflowPath
       ? injectPromptIntoWorkflow(this.#readWorkflowFile(), prompt.trim())
-      : buildComfyWorkflow({
-          checkpoint: config.comfyuiCheckpoint,
-          prompt: prompt.trim(),
-          aspect_ratio,
-          n: count,
-        })
+      : config.comfyuiCheckpoint
+        ? buildComfyWorkflow({
+            checkpoint: config.comfyuiCheckpoint,
+            prompt: prompt.trim(),
+            aspect_ratio,
+            n: count,
+          })
+        : await this.#autoWorkflow(prompt.trim(), aspect_ratio, count, baseURL, headers)
 
     const submitResp = await this.#postJson(`${this.baseURL}/prompt`, {
       prompt: workflow,
@@ -678,7 +690,7 @@ In `src/ui/brain-ui/app-shell.js`, replace lines 343-346:
               <div class="settings-row">
                 <label class="settings-label" for="settings-comfyui-token">Token（可選）</label>
                 <div class="settings-secret-wrap">
-                  <input class="settings-input" id="settings-comfyui-token" type="password" placeholder="配合 --api-auth 使用" autocomplete="new-password">
+                  <input class="settings-input" id="settings-comfyui-token" type="password" placeholder="可選：代理 Basic（user:pass）或 Bearer token" autocomplete="new-password">
                   <button class="settings-secret-toggle" id="settings-comfyui-token-toggle" type="button" aria-label="顯示 Token" title="顯示/隱藏 Token">👁</button>
                 </div>
               </div>

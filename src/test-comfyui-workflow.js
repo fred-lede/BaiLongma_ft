@@ -5,6 +5,7 @@
 import {
   aspectRatioToLatentSize,
   buildComfyWorkflow,
+  buildFluxWorkflow,
   injectPromptIntoWorkflow,
 } from './providers/comfyui-workflow.js'
 
@@ -69,7 +70,57 @@ function assert(cond, label) {
   assert(wf5['3'].inputs.seed === 0, 'seed 0 is honored as a fixed seed')
 }
 
-// ====== 3) injectPromptIntoWorkflow ======
+// ====== 3) buildFluxWorkflow ======
+{
+  const wf = buildFluxWorkflow({
+    unet: 'flux1-schnell.safetensors',
+    t5: 't5xxl_fp8_e4m3fn.safetensors',
+    clipL: 'clip_l.safetensors',
+    vae: 'flux_ae.safetensors',
+    prompt: 'a cat',
+    aspect_ratio: '4:3',
+    n: 2,
+    seed: 7,
+  })
+
+  assert(wf['12'].class_type === 'UNETLoader', 'node 12 is UNETLoader')
+  assert(wf['12'].inputs.unet_name === 'flux1-schnell.safetensors', 'flux unet wired')
+  assert(wf['11'].class_type === 'DualCLIPLoader', 'node 11 is DualCLIPLoader')
+  assert(wf['11'].inputs.clip_name1 === 't5xxl_fp8_e4m3fn.safetensors' && wf['11'].inputs.clip_name2 === 'clip_l.safetensors', 'flux clips wired (t5 + clip_l)')
+  assert(wf['11'].inputs.type === 'flux', 'DualCLIPLoader type is flux')
+  assert(wf['10'].class_type === 'VAELoader' && wf['10'].inputs.vae_name === 'flux_ae.safetensors', 'flux vae wired')
+  assert(wf['6'].class_type === 'CLIPTextEncode' && wf['6'].inputs.text === 'a cat', 'flux positive prompt injected')
+  assert(JSON.stringify(wf['6'].inputs.clip) === JSON.stringify(['11', 0]), 'positive CLIP reads DualCLIPLoader')
+  assert(wf['22'].class_type === 'BasicGuider', 'node 22 is BasicGuider')
+  assert(JSON.stringify(wf['22'].inputs.model) === JSON.stringify(['12', 0]) && JSON.stringify(wf['22'].inputs.conditioning) === JSON.stringify(['6', 0]), 'BasicGuider reads UNETLoader + positive CLIP')
+  assert(wf['25'].class_type === 'RandomNoise' && wf['25'].inputs.noise_seed === 7, 'node 25 is RandomNoise with fixed seed')
+  assert(wf['16'].class_type === 'KSamplerSelect' && wf['16'].inputs.sampler_name === 'euler', 'KSamplerSelect sampler is euler')
+  assert(wf['17'].class_type === 'BasicScheduler', 'node 17 is BasicScheduler')
+  assert(wf['17'].inputs.scheduler === 'simple' && wf['17'].inputs.steps === 4 && wf['17'].inputs.denoise === 1.0, 'BasicScheduler simple/4/denoise 1')
+  assert(JSON.stringify(wf['17'].inputs.model) === JSON.stringify(['12', 0]), 'BasicScheduler reads UNETLoader')
+  assert(wf['5'].class_type === 'EmptyLatentImage', 'node 5 is EmptyLatentImage')
+  assert(wf['5'].inputs.width === 1152 && wf['5'].inputs.height === 864, 'flux latent size follows aspect ratio')
+  assert(wf['5'].inputs.batch_size === 2, 'flux batch size follows n')
+  assert(wf['13'].class_type === 'SamplerCustomAdvanced', 'node 13 is SamplerCustomAdvanced')
+  assert(JSON.stringify(wf['13'].inputs.noise) === JSON.stringify(['25', 0]), 'sampler.noise -> RandomNoise[0]')
+  assert(JSON.stringify(wf['13'].inputs.guider) === JSON.stringify(['22', 0]), 'sampler.guider -> BasicGuider[0]')
+  assert(JSON.stringify(wf['13'].inputs.sampler) === JSON.stringify(['16', 0]), 'sampler.sampler -> KSamplerSelect[0]')
+  assert(JSON.stringify(wf['13'].inputs.sigmas) === JSON.stringify(['17', 0]), 'sampler.sigmas -> BasicScheduler[0]')
+  assert(JSON.stringify(wf['13'].inputs.latent_image) === JSON.stringify(['5', 0]), 'sampler.latent_image -> EmptyLatentImage[0]')
+  assert(wf['8'].class_type === 'VAEDecode' && JSON.stringify(wf['8'].inputs.samples) === JSON.stringify(['13', 0]), 'VAEDecode reads SamplerCustomAdvanced')
+  assert(JSON.stringify(wf['8'].inputs.vae) === JSON.stringify(['10', 0]), 'VAEDecode reads VAELoader')
+  assert(wf['9'].class_type === 'SaveImage' && JSON.stringify(wf['9'].inputs.images) === JSON.stringify(['8', 0]), 'SaveImage reads VAEDecode')
+  assert(wf['9'].inputs.filename_prefix === 'bailongma', 'flux SaveImage prefix is bailongma')
+
+  const wf2 = buildFluxWorkflow({ prompt: 'x' })
+  assert(typeof wf2['25'].inputs.noise_seed === 'number' && wf2['25'].inputs.noise_seed >= 0, 'flux seed randomizes when not given')
+  const wf3 = buildFluxWorkflow({ prompt: 'x', n: 99 })
+  assert(wf3['5'].inputs.batch_size === 4, 'flux n clamped to max 4')
+  const wf4 = buildFluxWorkflow({ prompt: 'x', n: 0 })
+  assert(wf4['5'].inputs.batch_size === 1, 'flux n clamped to min 1')
+}
+
+// ====== 4) injectPromptIntoWorkflow ======
 {
   const custom = {
     '1': { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: 'x.safetensors' } },

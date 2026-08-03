@@ -369,7 +369,7 @@ const createSettingsModal = () => `
               <div class="settings-row">
                 <label class="settings-label" for="settings-comfyui-token">Token（可選）</label>
                 <div class="settings-secret-wrap">
-                  <input class="settings-input" id="settings-comfyui-token" type="password" placeholder="配合 --api-auth 使用" autocomplete="new-password">
+                  <input class="settings-input" id="settings-comfyui-token" type="password" placeholder="可選：代理 Basic（user:pass）或 Bearer token" autocomplete="new-password">
                   <button class="settings-secret-toggle" id="settings-comfyui-token-toggle" type="button" aria-label="顯示 Token" title="顯示/隱藏 Token">👁</button>
                 </div>
               </div>

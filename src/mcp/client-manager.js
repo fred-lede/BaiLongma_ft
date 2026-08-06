@@ -8,6 +8,8 @@ import { config } from '../config.js'
 import { createMergedAbortSignal } from '../capabilities/abort-utils.js'
 import { assertWebUrlAllowed } from '../capabilities/tools/web/url-policy.js'
 import { getRuntimeMcpServers } from './config.js'
+import { paths } from '../paths.js'
+import { persistChatMediaBuffer } from '../chat-media.js'
 import {
   BUILTIN_BROWSER_ALLOWED_TOOLS,
   BUILTIN_CHROME_DEVTOOLS_ID,
@@ -424,6 +426,27 @@ function compactContentItem(item = {}) {
     }
   }
   if (item.type === 'image' || item.type === 'audio') {
+    // Persist binary image/audio data to mediaDir so the LLM receives a usable URL
+    // instead of a placeholder note. Enables MCP image tools (e.g. dalle.text2im)
+    // to deliver images through Telegram and the TUI.
+    try {
+      const extMap = { image: 'png', audio: 'wav' }
+      const ext = extMap[item.type] || 'bin'
+      const mime = item.mimeType || `image/${ext}`
+      let buf
+      if (typeof item.data === 'string') {
+        const base64 = item.data.replace(/^data:[^;]+;base64,/, '').replace(/\s+/g, '')
+        buf = Buffer.from(base64, 'base64')
+      } else if (item.data && typeof item.data.byteLength === 'number') {
+        buf = Buffer.from(item.data)
+      }
+      if (buf && buf.length > 0) {
+        const stored = persistChatMediaBuffer(buf, { ext: `.${ext}`, mime })
+        return { type: 'text', text: stored.url }
+      }
+    } catch (err) {
+      console.warn(`[mcp] persist MCP image failed: ${err?.message || err}`)
+    }
     return {
       type: item.type,
       mimeType: item.mimeType,

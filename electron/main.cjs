@@ -1538,6 +1538,15 @@ function setupAutoUpdater() {
 }
 
 ipcMain.handle('app:get-version', () => app.getVersion())
+ipcMain.handle('clipboard:write-image', async (_event, dataUrl) => {
+  try {
+    const buf = Buffer.from(dataUrl.replace(/^data:image\/[a-z]+;base64,/, ''), 'base64')
+    clipboard.writeImage(nativeImage.createFromBuffer(buf))
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) }
+  }
+})
 ipcMain.handle('startup:get-progress', () => cloneStartupProgressState())
 ipcMain.handle('window:is-full-screen', (event) => {
   const targetWindow = BrowserWindow.fromWebContents(event.sender)

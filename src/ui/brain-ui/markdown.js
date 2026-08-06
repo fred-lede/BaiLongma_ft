@@ -231,6 +231,19 @@ document.addEventListener('click', (e) => {
   copyBtn.addEventListener('click', async (ev) => {
     ev.stopPropagation();
     try {
+      if (window.bailongma?.clipboard?.writeImage) {
+        const res = await fetch(src);
+        const blob = await res.blob();
+        const dataUrl = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ''));
+          reader.onerror = () => reject(reader.error || new Error('read failed'));
+          reader.readAsDataURL(blob);
+        });
+        const ok = await window.bailongma.clipboard.writeImage(dataUrl);
+        if (ok === true) { copyBtn.textContent = '已複製'; setTimeout(() => { copyBtn.textContent = '複製'; }, 1500); return; }
+        // IPC 失敗時 fallback 到 ClipboardItem API
+      }
       const res = await fetch(src);
       const blob = await res.blob();
       await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);

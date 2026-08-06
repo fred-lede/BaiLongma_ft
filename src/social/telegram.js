@@ -484,8 +484,11 @@ export async function sendTelegramMessage(chatId, content) {
   const filename = imgMatch ? imgMatch[1]
     : (bareMatch ? bareMatch[2] : null)
 
+  console.log(`[telegram] sendTelegramMessage chatId=${chatId} filename=${filename} content=${stripped.slice(0, 200)}`)
+
   if (filename) {
     const filePath = path.join(paths.mediaDir, path.basename(filename))
+    console.log(`[telegram] sendPhoto: filename=${filename}, filePath=${filePath}, exists=${fs.existsSync(filePath)}`)
     if (fs.existsSync(filePath)) {
       // 移除截獲的 markdown 或裸路徑片段，剩餘文字作為 caption
       const caption = imgMatch

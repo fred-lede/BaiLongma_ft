@@ -207,9 +207,46 @@ document.addEventListener('click', (e) => {
   const imgFull = document.createElement('img');
   imgFull.src = src;
   imgFull.style.cssText = 'max-width:95vw;max-height:95vh;object-fit:contain;border-radius:6px;box-shadow:0 4px 32px rgba(0,0,0,0.5);';
-  overlay.appendChild(imgFull);
 
-  overlay.addEventListener('click', () => overlay.remove());
+  // 工具列：下載 + 複製（避免依賴右鍵，手機/觸控裝置也能用）
+  const toolbar = document.createElement('div');
+  toolbar.className = 'img-lightbox-toolbar';
+  toolbar.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);display:flex;gap:10px;z-index:100000;';
+  const btnBase = 'padding:8px 16px;border-radius:8px;border:1px solid rgba(255,255,255,0.25);background:rgba(0,0,0,0.6);color:#fff;font-size:13px;cursor:pointer;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);transition:background .15s;';
+  const downloadBtn = document.createElement('button');
+  downloadBtn.textContent = '下載';
+  downloadBtn.style.cssText = btnBase;
+  downloadBtn.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    const a = document.createElement('a');
+    a.href = src;
+    a.download = src.split('/').pop().split('?')[0] || 'image.png';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  });
+  const copyBtn = document.createElement('button');
+  copyBtn.textContent = '複製';
+  copyBtn.style.cssText = btnBase;
+  copyBtn.addEventListener('click', async (ev) => {
+    ev.stopPropagation();
+    try {
+      const res = await fetch(src);
+      const blob = await res.blob();
+      await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
+      copyBtn.textContent = '已複製';
+      setTimeout(() => { copyBtn.textContent = '複製'; }, 1500);
+    } catch {
+      copyBtn.textContent = '失敗';
+      setTimeout(() => { copyBtn.textContent = '複製'; }, 1500);
+    }
+  });
+  toolbar.appendChild(downloadBtn);
+  toolbar.appendChild(copyBtn);
+  overlay.appendChild(imgFull);
+  overlay.appendChild(toolbar);
+
+  overlay.addEventListener('click', (ev) => { if (ev.target === overlay) overlay.remove(); });
   overlay.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') overlay.remove(); });
 
   document.body.appendChild(overlay);

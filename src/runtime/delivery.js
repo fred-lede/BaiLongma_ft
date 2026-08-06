@@ -332,12 +332,13 @@ export async function deliverMessage({ target_id, content = '', channel = 'AUTO'
     recordOutboundFailure({ toId: resolvedId, channel: requestedChannel, externalTargetId: '', content: outboundContent, reason: delivery.error })
     return makeDeliveryFailure({ targetId: resolvedId, channel: requestedChannel, error: 'delivery_route_unavailable', reason: delivery.error })
   }
-  if (media && (delivery.isLocal || !delivery.externalTargetId || !/^wechat:clawbot:/i.test(delivery.externalTargetId))) {
+  if (media && (delivery.isLocal || !delivery.externalTargetId)) {
     const resolvedTarget = delivery.externalTargetId || (delivery.isLocal ? 'TUI' : 'unknown')
-    return `错误：媒体消息当前仅支持微信 ClawBot（wechat:clawbot:*），当前解析目标为 ${resolvedTarget}`
+    return `错误：媒体消息当前仅支持微信 ClawBot（wechat:clawbot:*）与 Telegram，但解析目标为 ${resolvedTarget}`
   }
-  if (media && !delivery.externalTargetId) {
-    return `错误：媒体消息当前仅支持微信 ClawBot（wechat:clawbot:*）和 Telegram，但未找到外部目标 ID`
+  if (media && !/^wechat:clawbot:/i.test(delivery.externalTargetId) && delivery.deliveryChannel?.toUpperCase() !== 'TELEGRAM') {
+    const resolvedTarget = delivery.externalTargetId || 'unknown'
+    return `错误：媒体消息当前仅支持微信 ClawBot（wechat:clawbot:*）与 Telegram，但解析目标为 ${resolvedTarget}`
   }
   // 媒体发送支持：Telegram 已在 sendTelegramMessage 中通过 markdown 图片 URL 提取处理（见 telegram.js sendTelegramMessage 实现）
   // WeChat ClawBot 也已支持。无需额外 externalTargetId 平台检查。

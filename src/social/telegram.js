@@ -484,7 +484,6 @@ export async function sendTelegramMessage(chatId, content) {
   const filename = imgMatch ? imgMatch[1]
     : (bareMatch ? bareMatch[2] : null)
 
-  console.log(`[telegram] sendTelegramMessage chatId=${chatId} filename=${filename} content=${stripped.slice(0, 200)}`)
 
   if (filename) {
     const filePath = path.join(paths.mediaDir, path.basename(filename))

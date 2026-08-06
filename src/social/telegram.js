@@ -506,6 +506,37 @@ export async function sendTelegramMessage(chatId, content) {
       }
       return { ok: true, platform: 'telegram', message_id: res.data?.result?.message_id || null }
     }
+    // 檔案不存在 → 降級為純文字
+    const caption = imgMatch
+      ? stripped.replace(/!\[.*?\]\(.*?\)/g, '').trim() || '（图片）'
+      : stripped.replace(/\/media\/chat\/[^\s)]+/g, '').trim() || '（图片）'
+    return sendTelegramMessage(chatId, caption)
+  }
+
+  // 沒有本地圖片；檢查內容是否有遠端圖片 URL（如 MCP dall-e / browser 工具回傳的 https://...png）
+  const remoteImgMatch = stripped.match(/https?:\/\/[^\s)]+\.(png|jpg|jpeg|webp|gif)(\?[^\s)]*)?/i)
+  if (remoteImgMatch) {
+    try {
+      const imgUrl = remoteImgMatch[0]
+      const res = await fetch(imgUrl, { signal: AbortSignal.timeout(30_000) })
+      if (res.ok) {
+        const buf = Buffer.from(await res.arrayBuffer())
+        const ext = (imgUrl.match(/\.(png|jpg|jpeg|webp|gif)$/i) || ['.png'])[0].slice(1).toLowerCase()
+        const fd = new FormData()
+        fd.append('chat_id', String(chatId))
+        fd.append('photo', buf, { filename: `remote.${ext}` })
+        const caption = stripped.replace(imgUrl, '').trim()
+        if (caption) fd.append('caption', caption)
+        const sendRes = await multipartRequest(`https://api.telegram.org/bot${token}/sendPhoto`, fd)
+        if (sendRes.ok) {
+          return { ok: true, platform: 'telegram', message_id: sendRes.data?.result?.message_id || null }
+        }
+      }
+    } catch (err) {
+      console.warn(`[telegram] 遠端圖片下載失敗: ${err?.message || err}`)
+    }
+    // 遠端圖片失敗 → 退回純文字
+    return sendTelegramMessage(chatId, stripped.replace(remoteImgMatch[0], '').trim() || stripped)
   }
 
   // Decide whether to reply with voice based on per-chat mode

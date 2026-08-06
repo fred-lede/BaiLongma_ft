@@ -231,21 +231,31 @@ document.addEventListener('click', (e) => {
   copyBtn.addEventListener('click', async (ev) => {
     ev.stopPropagation();
     try {
-      if (window.bailongma?.clipboard?.writeImage) {
+      // data URL 直接拆出 base64 內容，避免 fetch 在部分環境失敗
+      let dataUrl = src;
+      if (/^data:image\//i.test(src)) {
+        dataUrl = src;
+      } else {
         const res = await fetch(src);
         const blob = await res.blob();
-        const dataUrl = await new Promise((resolve, reject) => {
+        dataUrl = await new Promise((resolve, reject) => {
           const reader = new FileReader();
           reader.onload = () => resolve(String(reader.result || ''));
           reader.onerror = () => reject(reader.error || new Error('read failed'));
           reader.readAsDataURL(blob);
         });
+      }
+      if (window.bailongma?.clipboard?.writeImage) {
         const ok = await window.bailongma.clipboard.writeImage(dataUrl);
         if (ok === true) { copyBtn.textContent = '已複製'; setTimeout(() => { copyBtn.textContent = '複製'; }, 1500); return; }
         // IPC 失敗時 fallback 到 ClipboardItem API
       }
-      const res = await fetch(src);
-      const blob = await res.blob();
+      const blob = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(new Blob([reader.result], { type: dataUrl.match(/^data:([^;,]+)/i)[1] || 'image/png' }));
+        reader.onerror = () => reject(reader.error || new Error('read failed'));
+        reader.readAsArrayBuffer(dataUrl);
+      });
       await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
       copyBtn.textContent = '已複製';
       setTimeout(() => { copyBtn.textContent = '複製'; }, 1500);

@@ -93,6 +93,7 @@ export async function handleSettingsRoutes(req, res, url, { requireLocalOrToken,
         comfyuiCheckpoint: config.comfyuiCheckpoint || '',
         comfyuiWorkflowPath: config.comfyuiWorkflowPath || '',
         comfyuiToken: config.comfyuiToken || '',
+        comfyuiResolution: config.comfyuiResolution || '',
       },
       providers: getProviderSummaries(),
       minimax: {
@@ -121,10 +122,10 @@ export async function handleSettingsRoutes(req, res, url, { requireLocalOrToken,
 
   if (req.method === 'POST' && url.pathname === '/settings/model') {
     try {
-      const { provider, apiKey, model, baseURL, imageGenModel, imageEngine, comfyuiBaseURL, comfyuiCheckpoint, comfyuiWorkflowPath, comfyuiToken } = await readJsonBody(req)
-      const hasLlmFields = [provider, apiKey, baseURL, imageGenModel, imageEngine, comfyuiBaseURL, comfyuiCheckpoint, comfyuiWorkflowPath, comfyuiToken].some(v => v !== undefined)
+      const { provider, apiKey, model, baseURL, imageGenModel, imageEngine, comfyuiBaseURL, comfyuiCheckpoint, comfyuiWorkflowPath, comfyuiToken, comfyuiResolution } = await readJsonBody(req)
+      const hasLlmFields = [provider, apiKey, baseURL, imageGenModel, imageEngine, comfyuiBaseURL, comfyuiCheckpoint, comfyuiWorkflowPath, comfyuiToken, comfyuiResolution].some(v => v !== undefined)
       const result = hasLlmFields
-        ? await saveLLMSettings({ provider, apiKey, model, baseURL, imageGenModel, imageEngine, comfyuiBaseURL, comfyuiCheckpoint, comfyuiWorkflowPath, comfyuiToken })
+        ? await saveLLMSettings({ provider, apiKey, model, baseURL, imageGenModel, imageEngine, comfyuiBaseURL, comfyuiCheckpoint, comfyuiWorkflowPath, comfyuiToken, comfyuiResolution })
         : switchModel(model)
       emitEvent('model_switched', result)
       jsonResponse(res, 200, { ok: true, ...result })

@@ -4369,8 +4369,9 @@ function initTTSSettings() {
   const comfyuiBaseURLInput  = document.getElementById("settings-comfyui-baseurl");
   const comfyuiCheckpointIn  = document.getElementById("settings-comfyui-checkpoint");
   const comfyuiWorkflowIn    = document.getElementById("settings-comfyui-workflow-path");
-  const comfyuiTokenInput    = document.getElementById("settings-comfyui-token");
-  const comfyuiTokenToggle   = document.getElementById("settings-comfyui-token-toggle");
+   const comfyuiTokenInput    = document.getElementById("settings-comfyui-token");
+   const comfyuiTokenToggle   = document.getElementById("settings-comfyui-token-toggle");
+   const comfyuiResolutionIn  = document.getElementById("settings-comfyui-resolution");
   const saveLlmBtn      = document.getElementById("settings-save-llm");
   const llmFeedback     = document.getElementById("settings-llm-feedback");
   const agentNameInput  = document.getElementById("settings-agent-name");
@@ -4643,8 +4644,9 @@ function initTTSSettings() {
       if (comfyuiBaseURLInput) comfyuiBaseURLInput.value = llm.comfyuiBaseURL || "";
       if (comfyuiCheckpointIn) comfyuiCheckpointIn.value = llm.comfyuiCheckpoint || "";
       if (comfyuiWorkflowIn) comfyuiWorkflowIn.value = llm.comfyuiWorkflowPath || "";
-      if (comfyuiTokenInput) comfyuiTokenInput.value = llm.comfyuiToken || "";
-      syncImageEngineUI();
+       if (comfyuiTokenInput) comfyuiTokenInput.value = llm.comfyuiToken || "";
+       if (comfyuiResolutionIn) comfyuiResolutionIn.value = llm.comfyuiResolution || "1024";
+       syncImageEngineUI();
       setComfyuiTokenVisible(false);
       if (thinkingToggle) thinkingToggle.checked = llm.thinking === true;
       const contextWindow = llm.contextWindow || {};
@@ -5774,7 +5776,8 @@ function initTTSSettings() {
       if (comfyuiBaseURLInput) body.comfyuiBaseURL = comfyuiBaseURLInput.value.trim();
       if (comfyuiCheckpointIn) body.comfyuiCheckpoint = comfyuiCheckpointIn.value.trim();
       if (comfyuiWorkflowIn) body.comfyuiWorkflowPath = comfyuiWorkflowIn.value.trim();
-      if (comfyuiTokenInput) body.comfyuiToken = comfyuiTokenInput.value.trim();
+       if (comfyuiTokenInput) body.comfyuiToken = comfyuiTokenInput.value.trim();
+       if (comfyuiResolutionIn) body.comfyuiResolution = comfyuiResolutionIn.value.trim();
 
       const res = await fetch(`${API}/settings/model`, {
         method: "POST",

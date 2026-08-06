@@ -366,13 +366,21 @@ const createSettingsModal = () => `
                 <label class="settings-label" for="settings-comfyui-workflow-path">自訂 Workflow JSON 路徑</label>
                 <input class="settings-input" id="settings-comfyui-workflow-path" type="text" placeholder="可選：API-format workflow 檔的絕對路徑" autocomplete="off" spellcheck="false">
               </div>
-              <div class="settings-row">
-                <label class="settings-label" for="settings-comfyui-token">Token（可選）</label>
-                <div class="settings-secret-wrap">
-                  <input class="settings-input" id="settings-comfyui-token" type="password" placeholder="可選：代理 Basic（user:pass）或 Bearer token" autocomplete="new-password">
-                  <button class="settings-secret-toggle" id="settings-comfyui-token-toggle" type="button" aria-label="顯示 Token" title="顯示/隱藏 Token">👁</button>
-                </div>
-              </div>
+               <div class="settings-row">
+                 <label class="settings-label" for="settings-comfyui-token">Token（可選）</label>
+                 <div class="settings-secret-wrap">
+                   <input class="settings-input" id="settings-comfyui-token" type="password" placeholder="可選：代理 Basic（user:pass）或 Bearer token" autocomplete="new-password">
+                   <button class="settings-secret-toggle" id="settings-comfyui-token-toggle" type="button" aria-label="顯示 Token" title="顯示/隱藏 Token">👁</button>
+                 </div>
+               </div>
+               <div class="settings-row">
+                 <label class="settings-label" for="settings-comfyui-resolution">輸出解析度（1:1 基準）</label>
+                 <select class="settings-input" id="settings-comfyui-resolution">
+                   <option value="1024">1024（預設，FLUX 標準）</option>
+                   <option value="1536">1536（高解析）</option>
+                   <option value="2048">2048（超高解析，較慢）</option>
+                 </select>
+               </div>
             </div>
             <div class="settings-row">
               <label class="settings-label" for="settings-llm-key">API Key</label>

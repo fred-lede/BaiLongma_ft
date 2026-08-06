@@ -1058,10 +1058,11 @@ export const config = {
   thinking: false,
   imageGenModel: '',
   imageEngine: '',
-  comfyuiBaseURL: 'http://122.116.209.1:8188',
-  comfyuiCheckpoint: '',
-  comfyuiWorkflowPath: '',
-  comfyuiToken: '',
+   comfyuiBaseURL: 'http://122.116.209.1:8188',
+   comfyuiCheckpoint: '',
+   comfyuiWorkflowPath: '',
+   comfyuiToken: '',
+   comfyuiResolution: '1024',
   contextWindow: {
     chatMessageLimit: DEFAULT_CONTEXT_MESSAGE_LIMIT,
     toolCallLimit: DEFAULT_CONTEXT_TOOL_LIMIT,
@@ -1112,6 +1113,9 @@ if (parsedConfig) {
   }
   if (typeof parsedConfig.comfyuiToken === 'string') {
     config.comfyuiToken = parsedConfig.comfyuiToken
+  }
+  if (typeof parsedConfig.comfyuiResolution === 'string') {
+    config.comfyuiResolution = parsedConfig.comfyuiResolution
   }
   if (parsedConfig.contextWindow && typeof parsedConfig.contextWindow === 'object') {
     const chatMessageLimit = Number(parsedConfig.contextWindow.chatMessageLimit)
@@ -1450,6 +1454,7 @@ export async function saveLLMSettings({
   comfyuiCheckpoint,
   comfyuiWorkflowPath,
   comfyuiToken,
+  comfyuiResolution,
 } = {}) {
   const p = String(provider || AUTO_PROVIDER).toLowerCase()
   const trimmedKey = String(apiKey || '').trim()
@@ -1461,6 +1466,7 @@ export async function saveLLMSettings({
     comfyuiCheckpoint,
     comfyuiWorkflowPath,
     comfyuiToken,
+    comfyuiResolution,
   }
   const hasImageFields = Object.values(imageFields).some(v => v !== undefined)
   if (hasImageFields) {

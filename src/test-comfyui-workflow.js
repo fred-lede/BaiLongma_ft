@@ -118,6 +118,16 @@ function assert(cond, label) {
   assert(wf3['5'].inputs.batch_size === 4, 'flux n clamped to max 4')
   const wf4 = buildFluxWorkflow({ prompt: 'x', n: 0 })
   assert(wf4['5'].inputs.batch_size === 1, 'flux n clamped to min 1')
+
+  // resolution 縮放測試
+  const wf1536 = buildFluxWorkflow({ prompt: 'x', resolution: 1536 })
+  assert(wf1536['5'].inputs.width === 1536 && wf1536['5'].inputs.height === 1536, '1536 resolution -> 1536x1536 for 1:1')
+  const wf1536_16_9 = buildFluxWorkflow({ prompt: 'x', aspect_ratio: '16:9', resolution: 1536 })
+  assert(wf1536_16_9['5'].inputs.width === 2048 && wf1536_16_9['5'].inputs.height === 1152, '1536 resolution -> 2048x1152 for 16:9 (rounded to 64 multiple)')
+  const wf2048_4_3 = buildFluxWorkflow({ prompt: 'x', aspect_ratio: '4:3', resolution: 2048 })
+  assert(wf2048_4_3['5'].inputs.width === 2304 && wf2048_4_3['5'].inputs.height === 1728, '2048 resolution -> 2304x1728 for 4:3')
+  const wf1152_9_16 = buildFluxWorkflow({ prompt: 'x', aspect_ratio: '9:16', resolution: 1152 })
+  assert(wf1152_9_16['5'].inputs.width === 896 && wf1152_9_16['5'].inputs.height === 1536, '1152 resolution -> 896x1536 for 9:16')
 }
 
 // ====== 4) injectPromptIntoWorkflow ======

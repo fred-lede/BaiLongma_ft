@@ -14,9 +14,17 @@ export const ASPECT_TO_LATENT = {
 }
 
 // 把 aspect ratio 轉成 latent 尺寸；未知值回退 1:1。
-export function aspectRatioToLatentSize(aspectRatio = '1:1') {
+// resolution 為基準尺寸（1:1 時的邊長），預設 1024（FLUX 標準）。
+// 結果取整到 64 的倍數，確保 latent → pixel 對齊無餘數。
+export function aspectRatioToLatentSize(aspectRatio = '1:1', resolution = 1024) {
+  const base = Number(resolution) || 1024
   const entry = ASPECT_TO_LATENT[aspectRatio] || ASPECT_TO_LATENT['1:1']
-  return { width: entry.width, height: entry.height }
+  // 原始尺寸已是 FLUX 標準倍數（8x VAE），只有縮放時才需取整
+  if (base === 1024) return { width: entry.width, height: entry.height }
+  const scale = base / 1024
+  const width = Math.round(entry.width * scale / 64) * 64
+  const height = Math.round(entry.height * scale / 64) * 64
+  return { width, height }
 }
 
 /**
@@ -90,6 +98,7 @@ export function buildComfyWorkflow({
  *   t5:    t5xxl 的 clip_name（如 t5xxl_fp8_e4m3fn.safetensors）
  *   clipL: CLIP-L 的 clip_name（如 clip_l.safetensors）
  *   vae:   VAELoader 的 vae_name（如 flux_ae.safetensors）
+ *   resolution: 基準尺寸（1024/1536/2048），預設 1024；比例按 FLUX 慣例縮放
  *   其餘參數同 buildComfyWorkflow。
  */
 export function buildFluxWorkflow({
@@ -101,8 +110,9 @@ export function buildFluxWorkflow({
   aspect_ratio = '1:1',
   n = 1,
   seed = null,
+  resolution = 1024,
 } = {}) {
-  const { width, height } = aspectRatioToLatentSize(aspect_ratio)
+  const { width, height } = aspectRatioToLatentSize(aspect_ratio, resolution)
   const batch = Math.min(Math.max(Math.floor(Number(n) || 1), 1), 4)
   const randomSeed = seed == null ? Math.floor(Math.random() * 0x7fffffff) : Number(seed)
 

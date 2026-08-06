@@ -95,6 +95,7 @@ export class ComfyUIImageProvider extends BaseProvider {
         prompt,
         aspect_ratio,
         n: count,
+        resolution: Number(config.comfyuiResolution) || 1024,
       })
     }
     return buildComfyWorkflow({ checkpoint: '', prompt, aspect_ratio, n: count })

@@ -89,6 +89,7 @@ export function persistChatMediaBuffer(buffer, { ext = '.png', mime = '', origin
   const hash = crypto.createHash('sha256').update(buf).digest('hex')
   const storedName = `${hash}${cleanExt}`
   const storedPath = path.join(paths.mediaDir, storedName)
+  console.log(`[chat-media] persist: storedPath=${storedPath}, exists=${fs.existsSync(storedPath)}, size=${buf.length}`)
   if (!fs.existsSync(storedPath)) fs.writeFileSync(storedPath, buf)
   return {
     url: `/media/chat/${storedName}`,

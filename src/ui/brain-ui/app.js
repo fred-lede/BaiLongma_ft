@@ -2787,6 +2787,7 @@ function handle({ type, data = {}, ts = null }) {
           const img = document.createElement("img");
           // 图片路径是相对根目录的，不是相对于 /api/ 的
           img.src = url.startsWith('/') ? url : '/' + url;
+          img.className = 'msg-image';
           img.style.cssText = "max-width: 100%; max-height: 400px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);";
           img.alt = "Generated image";
           messageDiv.appendChild(img);
